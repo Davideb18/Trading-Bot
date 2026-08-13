@@ -1,11 +1,13 @@
 {
     "strategy": "NostalgiaForInfinityX7",
-    "max_open_trades": 6,
+    "max_open_trades": 12,
     "stake_currency": "USDT",
     "stake_amount": "unlimited",
     "tradable_balance_ratio": 0.99,
     "fiat_display_currency": "USD",
     "timeframe": "5m",
+    "trading_mode": "futures",
+    "margin_mode": "isolated",
     "dry_run": true,
     "dry_run_wallet": 1000,
     "cancel_open_orders_on_exit": false,
@@ -29,7 +31,7 @@
     },
     "entry_pricing": {
         "price_side": "other",
-        "use_order_book": false,
+        "use_order_book": true,
         "order_book_top": 1,
         "price_last_balance": 0,
         "check_depth_of_market": {
@@ -39,7 +41,7 @@
     },
     "exit_pricing": {
         "price_side": "other",
-        "use_order_book": false,
+        "use_order_book": true,
         "order_book_top": 1,
         "price_last_balance": 0
     },
@@ -103,11 +105,6 @@
             "min_rate_of_change": 0.03,
             "max_rate_of_change": 0.95,
             "refresh_period": 1800
-        },
-        {
-            "method": "VolumePairList",
-            "number_assets": 100,
-            "sort_key": "quoteVolume"
         }
     ],
     "telegram": {
