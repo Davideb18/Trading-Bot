@@ -113,5 +113,10 @@ target/
 !config_examples/config_full.example.json
 !config_examples/config_kraken.example.json
 !config_examples/config_freqai.example.json
+!user_data/strategies/
+!user_data/strategies/NostalgiaForInfinityX7.py
+!user_data/strategies/HighFreqScalper.py
+!user_data/config.example.json
+!user_data/backtest_config.json
 
 docker-compose-*.yml
