@@ -1,113 +1,932 @@
+#!/usr/bin/env python3
+"""
+Zero-Burn LLM Risk Manager — Phase 4
+=====================================
+
+External supervisor script that monitors Freqtrade via REST API
+and uses AI + Sentiment analysis to detect Black Swan events.
+
+Architecture:
+    ┌────────────────┐   JWT Auth    ┌──────────────┐
+    │  Risk Manager  │◄────────────► │  Freqtrade   │
+    │  (this script) │               │  REST API    │
+    └───────┬────────┘               └──────────────┘
+            │
+            ├── Gemini 2.5 Flash (primary sentiment)
+            └── Fear & Greed Index  (deterministic fallback)
+
+Usage:
+    export FREQTRADE_USERNAME="freqtrade"
+    export FREQTRADE_PASSWORD="SuperSecurePassword"
+    export GEMINI_API_KEY="your_gemini_api_key"
+    python scripts/llm_risk_manager.py
+"""
+
 import os
+import sys
 import time
-import requests
+import json
+import signal
 import logging
+import requests
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Optional, Tuple
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("LLM_Risk_Manager")
+# ==================================================================================
+# Logging Setup
+# ==================================================================================
 
-# --- Configuration ---
-FREQTRADE_API_URL = "http://127.0.0.1:8080/api/v1"
-FREQTRADE_JWT_TOKEN = os.getenv("FREQTRADE_JWT_TOKEN", "supersecretjwtkeysupersecretjwtkeysupersecretjwtkey")
+LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+# Ensure log directory exists
+LOG_DIR = Path(__file__).resolve().parent.parent / "user_data" / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format=LOG_FORMAT,
+    datefmt=LOG_DATE_FORMAT,
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(LOG_DIR / "risk_manager.log", mode="a"),
+    ],
+)
+logger = logging.getLogger("ZeroBurn.RiskManager")
+
+# ==================================================================================
+# Configuration (all overridable via environment variables)
+# ==================================================================================
+
+FREQTRADE_API_URL = os.getenv("FREQTRADE_API_URL", "http://127.0.0.1:8080/api/v1")
+FREQTRADE_USERNAME = os.getenv("FREQTRADE_USERNAME", "freqtrade")
+FREQTRADE_PASSWORD = os.getenv("FREQTRADE_PASSWORD", "SuperSecurePassword")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
-# Risk Limits
-GLOBAL_HARD_STOPLOSS_PERCENT = 0.05 # Max 5% drawdown globally before nuclear option
+# Risk Thresholds
+GLOBAL_HARD_STOPLOSS_PERCENT = float(os.getenv("GLOBAL_HARD_STOPLOSS_PERCENT", "0.05"))
 
-class RiskManager:
-    def __init__(self):
-        self.headers = {
-            "Authorization": f"Bearer {FREQTRADE_JWT_TOKEN}",
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-        }
-        self.initial_balance = None
-        self.nuclear_triggered = False
+# Timing
+CHECK_INTERVAL_SECONDS = int(os.getenv("CHECK_INTERVAL_SECONDS", "60"))
+LLM_CHECK_INTERVAL_CYCLES = int(os.getenv("LLM_CHECK_INTERVAL_CYCLES", "5"))
 
-    def get_account_balance(self):
-        """Fetches the current wallet balance from Freqtrade."""
-        try:
-            response = requests.get(f"{FREQTRADE_API_URL}/balance", headers=self.headers, timeout=5)
-            if response.status_code == 200:
+# LLM Settings
+LLM_TIMEOUT_MS = int(os.getenv("LLM_TIMEOUT_MS", "15000"))
+LLM_MAX_CONSECUTIVE_FAILURES = int(os.getenv("LLM_MAX_CONSECUTIVE_FAILURES", "3"))
+LLM_CIRCUIT_BREAKER_COOLDOWN_SECONDS = int(
+    os.getenv("LLM_CIRCUIT_BREAKER_COOLDOWN_SECONDS", "1800")
+)
+
+# State persistence file
+STATE_FILE = Path(__file__).resolve().parent / "risk_manager_state.json"
+
+
+# ==================================================================================
+# Freqtrade API Client
+# ==================================================================================
+
+
+class FreqtradeAPIClient:
+    """
+    Handles authenticated communication with the Freqtrade REST API.
+
+    Implements the correct JWT authentication flow:
+      1. Login with HTTP Basic Auth -> receive access_token + refresh_token
+      2. Use access_token as Bearer token for API calls
+      3. Auto-refresh access_token before expiry (15 min lifetime)
+      4. Fall back to full re-login if refresh fails
+    """
+
+    ACCESS_TOKEN_LIFETIME = timedelta(minutes=15)
+    TOKEN_REFRESH_MARGIN = timedelta(minutes=2)
+    MAX_RETRIES = 3
+    RETRY_BACKOFF_BASE = 2  # seconds
+
+    def __init__(self, base_url: str, username: str, password: str):
+        self.base_url = base_url.rstrip("/")
+        self.username = username
+        self.password = password
+        self.access_token: Optional[str] = None
+        self.refresh_token: Optional[str] = None
+        self.token_expiry: Optional[datetime] = None
+        self.session = requests.Session()
+        self.session.headers.update(
+            {
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            }
+        )
+
+    # ----- Authentication -----
+
+    def login(self) -> bool:
+        """Authenticate with Freqtrade API using HTTP Basic Auth."""
+        for attempt in range(1, self.MAX_RETRIES + 1):
+            try:
+                response = self.session.post(
+                    f"{self.base_url}/token/login",
+                    auth=(self.username, self.password),
+                    timeout=10,
+                )
+                response.raise_for_status()
                 data = response.json()
-                total_balance = data.get("total", 0.0)
-                
-                # Set initial balance on first successful run
-                if self.initial_balance is None and total_balance > 0:
-                    self.initial_balance = total_balance
-                    logger.info(f"Initial balance locked at: {self.initial_balance} USDT")
-                    
-                return total_balance
-            return None
-        except Exception as e:
-            logger.error(f"Failed to fetch balance: {e}")
-            return None
+                self.access_token = data["access_token"]
+                self.refresh_token = data["refresh_token"]
+                self.token_expiry = (
+                    datetime.now(timezone.utc)
+                    + self.ACCESS_TOKEN_LIFETIME
+                    - self.TOKEN_REFRESH_MARGIN
+                )
+                logger.info("✅ Successfully authenticated with Freqtrade API")
+                return True
 
-    def trigger_nuclear_option(self, reason):
-        """Emergency stop: Force exit all trades and stop buying."""
-        if self.nuclear_triggered:
-            return
-            
-        logger.critical(f"☢️ NUCLEAR OPTION TRIGGERED! Reason: {reason}")
-        self.nuclear_triggered = True
-        
+            except requests.exceptions.ConnectionError as e:
+                logger.warning(
+                    f"Login attempt {attempt}/{self.MAX_RETRIES} — "
+                    f"connection error: {e}"
+                )
+            except requests.exceptions.HTTPError as e:
+                logger.error(
+                    f"Login attempt {attempt}/{self.MAX_RETRIES} — HTTP error: {e}"
+                )
+                if e.response is not None and e.response.status_code == 401:
+                    logger.critical(
+                        "❌ Invalid credentials for Freqtrade API! "
+                        "Check FREQTRADE_USERNAME and FREQTRADE_PASSWORD."
+                    )
+                    return False  # Don't retry on bad credentials
+            except Exception as e:
+                logger.error(
+                    f"Login attempt {attempt}/{self.MAX_RETRIES} — "
+                    f"unexpected error: {e}"
+                )
+
+            if attempt < self.MAX_RETRIES:
+                backoff = self.RETRY_BACKOFF_BASE**attempt
+                logger.info(f"Retrying login in {backoff}s...")
+                time.sleep(backoff)
+
+        logger.critical(
+            "❌ Failed to authenticate with Freqtrade API after all retries"
+        )
+        return False
+
+    def _refresh_access_token(self) -> bool:
+        """Refresh the access token using the refresh token."""
         try:
-            # 1. Stop new buys immediately
-            requests.post(f"{FREQTRADE_API_URL}/stopbuy", headers=self.headers, timeout=5)
-            logger.info("Bot buying halted.")
-            
-            # 2. Force exit all open trades
-            # Fetch all open trades first
-            status_res = requests.get(f"{FREQTRADE_API_URL}/status", headers=self.headers, timeout=5)
-            if status_res.status_code == 200:
-                trades = status_res.json()
-                for trade in trades:
-                    trade_id = trade.get('trade_id')
-                    logger.warning(f"Force exiting trade ID: {trade_id}")
-                    requests.post(f"{FREQTRADE_API_URL}/forceexit", headers=self.headers, json={"tradeid": trade_id}, timeout=5)
-            
-            logger.critical("All funds moved to safety. Risk Manager entering hibernation.")
+            response = self.session.post(
+                f"{self.base_url}/token/refresh",
+                headers={"Authorization": f"Bearer {self.refresh_token}"},
+                timeout=10,
+            )
+            response.raise_for_status()
+            data = response.json()
+            self.access_token = data["access_token"]
+            self.token_expiry = (
+                datetime.now(timezone.utc)
+                + self.ACCESS_TOKEN_LIFETIME
+                - self.TOKEN_REFRESH_MARGIN
+            )
+            logger.info("🔄 Access token refreshed successfully")
+            return True
         except Exception as e:
-            logger.error(f"Failed to execute nuclear option: {e}")
+            logger.warning(f"Token refresh failed ({e}), attempting full re-login...")
+            return self.login()
 
-    def analyze_market_regime(self):
+    def _ensure_authenticated(self) -> bool:
+        """Ensure we have a valid, non-expired access token."""
+        if self.access_token is None:
+            return self.login()
+        if self.token_expiry and datetime.now(timezone.utc) >= self.token_expiry:
+            return self._refresh_access_token()
+        return True
+
+    # ----- Generic Request -----
+
+    def _request(
+        self, method: str, endpoint: str, retries: int = 2, **kwargs
+    ) -> Optional[dict | list]:
         """
-        Uses LLM / Sentiment API to determine the current market regime.
-        Returns: 'bull' (normal), 'bear' (reduce risk), or 'panic' (nuclear)
+        Make an authenticated request to the Freqtrade API.
+        Handles token expiry and 401 responses with automatic re-auth.
         """
-        # Placeholder: Here you would call Gemini API with recent news headlines.
-        # For safety default, we assume normal market unless overridden.
-        regime = "bull" 
+        kwargs.setdefault("timeout", 10)
+
+        for attempt in range(retries + 1):
+            if not self._ensure_authenticated():
+                return None
+
+            try:
+                # Build headers with current token
+                headers = kwargs.pop("headers", {})
+                headers["Authorization"] = f"Bearer {self.access_token}"
+
+                response = self.session.request(
+                    method,
+                    f"{self.base_url}{endpoint}",
+                    headers=headers,
+                    **kwargs,
+                )
+
+                # If 401, force re-login and retry
+                if response.status_code == 401 and attempt < retries:
+                    logger.warning(
+                        f"Got 401 on {method} {endpoint}, re-authenticating..."
+                    )
+                    self.access_token = None
+                    continue
+
+                response.raise_for_status()
+                return response.json()
+
+            except requests.exceptions.HTTPError as e:
+                logger.error(f"API request failed: {method} {endpoint} → {e}")
+                if attempt < retries:
+                    time.sleep(1)
+                    continue
+                return None
+            except requests.exceptions.ConnectionError as e:
+                logger.error(f"Connection error to Freqtrade API: {e}")
+                return None
+            except requests.exceptions.Timeout as e:
+                logger.error(f"Timeout on {method} {endpoint}: {e}")
+                if attempt < retries:
+                    time.sleep(1)
+                    continue
+                return None
+            except Exception as e:
+                logger.error(f"Unexpected API error on {method} {endpoint}: {e}")
+                return None
+
+        return None
+
+    def get(self, endpoint: str, **kwargs) -> Optional[dict | list]:
+        """Authenticated GET request."""
+        return self._request("GET", endpoint, **kwargs)
+
+    def post(self, endpoint: str, **kwargs) -> Optional[dict | list]:
+        """Authenticated POST request."""
+        return self._request("POST", endpoint, **kwargs)
+
+    # ----- High-Level Operations -----
+
+    def get_balance(self) -> Optional[float]:
+        """Get total account balance from Freqtrade."""
+        data = self.get("/balance")
+        if data and isinstance(data, dict):
+            return data.get("total", 0.0)
+        return None
+
+    def get_open_trades(self) -> Optional[list]:
+        """Get list of currently open trades."""
+        data = self.get("/status")
+        if isinstance(data, list):
+            return data
+        return None
+
+    def stop_buying(self) -> bool:
+        """Halt all new entry signals."""
+        result = self.post("/stopbuy")
+        return result is not None
+
+    def force_exit(self, trade_id: int) -> bool:
+        """Force exit a specific trade at market price."""
+        result = self.post("/forceexit", json={"tradeid": str(trade_id)})
+        return result is not None
+
+
+# ==================================================================================
+# Sentiment Analyzer (Gemini + Fear & Greed Index)
+# ==================================================================================
+
+GEMINI_SYSTEM_PROMPT = """\
+You are a cryptocurrency macro-risk sentinel for an automated trading system \
+managing institutional capital. Your decisions directly control whether the \
+system liquidates all positions.
+
+YOUR SOLE JOB is to classify the CURRENT market regime into ONE of three categories:
+
+1. **BULL** — Normal or positive conditions. No intervention needed.
+2. **BEAR** — Elevated risk or nervous market. The system should reduce exposure.
+3. **PANIC** — Extreme systemic threat detected (Black Swan). The system must \
+IMMEDIATELY liquidate ALL positions and halt trading.
+
+═══ PANIC CRITERIA (trigger ONLY for genuine catastrophic events) ═══
+
+PANIC should be triggered for:
+• Major exchange collapse or insolvency (FTX/Mt.Gox-level event)
+• Government ban on cryptocurrency trading in a G7/G20 country
+• Critical smart contract exploit draining billions from DeFi
+• Nuclear/military conflict directly impacting global financial markets
+• Stablecoin de-peg of USDT/USDC below $0.95
+• Central bank emergency actions causing market-wide circuit breakers
+
+PANIC should NOT be triggered for:
+• Normal 10-30% market corrections (these are routine in crypto)
+• FUD about regulations that haven't been enacted yet
+• Individual altcoin crashes (unless top-5 by market cap)
+• Social media rumors without official confirmation
+• Gradual bear market declines over weeks/months
+• Exchange temporary outages or maintenance
+
+═══ OUTPUT FORMAT ═══
+
+Respond with ONLY a valid JSON object. No markdown, no explanation, no preamble:
+{"regime": "BULL", "confidence": 0.85, "reason": "brief one-line explanation"}
+
+The "regime" field must be exactly one of: BULL, BEAR, PANIC (uppercase).
+The "confidence" field must be a float between 0.0 and 1.0.
+"""
+
+
+class SentimentAnalyzer:
+    """
+    Analyzes market sentiment using a layered approach:
+
+      1. Fear & Greed Index (always fetched first — fast, deterministic)
+      2. Gemini LLM (primary analysis — nuanced, context-aware)
+      3. Fallback logic if LLM is unavailable
+
+    Circuit breaker: after N consecutive LLM failures, automatically
+    falls back to FGI-only mode for a configurable cooldown period.
+    """
+
+    FGI_API_URL = "https://api.alternative.me/fng/"
+
+    def __init__(self, gemini_api_key: str):
+        self.gemini_api_key = gemini_api_key
+        self.gemini_client = None
+        self.consecutive_llm_failures = 0
+        self.circuit_breaker_until: Optional[datetime] = None
+
+        if gemini_api_key:
+            try:
+                from google import genai
+
+                self.gemini_client = genai.Client(
+                    api_key=gemini_api_key,
+                    http_options={"timeout": LLM_TIMEOUT_MS},
+                )
+                logger.info("✅ Gemini AI client initialized (model: gemini-2.5-flash)")
+            except ImportError:
+                logger.warning(
+                    "⚠️ google-genai library not installed. "
+                    "Run: pip install google-genai"
+                )
+            except Exception as e:
+                logger.error(f"Failed to initialize Gemini client: {e}")
+        else:
+            logger.warning(
+                "⚠️ GEMINI_API_KEY not set. Using FGI-only mode."
+            )
+
+    # ----- Fear & Greed Index -----
+
+    def get_fear_and_greed_index(self) -> Optional[Tuple[int, str]]:
+        """
+        Fetch the current Crypto Fear & Greed Index from alternative.me.
+        Returns: (value 0-100, classification_string) or None on failure.
+        """
+        try:
+            response = requests.get(self.FGI_API_URL, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            if "data" in data and len(data["data"]) > 0:
+                entry = data["data"][0]
+                value = int(entry["value"])
+                classification = entry.get("value_classification", "Unknown")
+                logger.info(f"📊 Fear & Greed Index: {value} ({classification})")
+                return value, classification
+        except requests.exceptions.Timeout:
+            logger.warning("⚠️ Fear & Greed Index API timeout")
+        except Exception as e:
+            logger.error(f"Failed to fetch Fear & Greed Index: {e}")
+        return None
+
+    @staticmethod
+    def _fgi_to_regime(fgi_value: int) -> str:
+        """
+        Convert Fear & Greed Index to market regime (deterministic fallback).
+
+        Thresholds:
+          FGI <= 10  →  panic  (Extreme Fear, potential systemic crisis)
+          FGI <= 25  →  bear   (Fear, elevated risk)
+          FGI >  25  →  bull   (Neutral to Greed, normal operations)
+        """
+        if fgi_value <= 10:
+            return "panic"
+        elif fgi_value <= 25:
+            return "bear"
+        else:
+            return "bull"
+
+    # ----- Circuit Breaker -----
+
+    def _is_circuit_breaker_active(self) -> bool:
+        """Check if the LLM circuit breaker is currently active."""
+        if self.circuit_breaker_until is None:
+            return False
+        if datetime.now(timezone.utc) >= self.circuit_breaker_until:
+            logger.info(
+                "🔄 LLM circuit breaker cooldown expired. "
+                "Re-enabling LLM analysis."
+            )
+            self.circuit_breaker_until = None
+            self.consecutive_llm_failures = 0
+            return False
+        remaining = (self.circuit_breaker_until - datetime.now(timezone.utc)).seconds
+        logger.debug(
+            f"Circuit breaker active, {remaining}s remaining until LLM re-enabled"
+        )
+        return True
+
+    def _trip_circuit_breaker(self):
+        """Activate the circuit breaker after too many LLM failures."""
+        self.circuit_breaker_until = datetime.now(timezone.utc) + timedelta(
+            seconds=LLM_CIRCUIT_BREAKER_COOLDOWN_SECONDS
+        )
+        cooldown_min = LLM_CIRCUIT_BREAKER_COOLDOWN_SECONDS / 60
+        logger.warning(
+            f"⚡ LLM circuit breaker TRIPPED after "
+            f"{self.consecutive_llm_failures} consecutive failures. "
+            f"Falling back to FGI-only mode for {cooldown_min:.0f} minutes."
+        )
+
+    # ----- Gemini LLM -----
+
+    def _query_gemini(self, fgi_value: int, fgi_classification: str) -> Optional[str]:
+        """
+        Query Gemini 2.5 Flash for market regime analysis.
+
+        Returns: regime string ("bull", "bear", "panic") or None on failure.
+        """
+        if not self.gemini_client:
+            return None
+
+        if self._is_circuit_breaker_active():
+            return None
+
+        try:
+            from google.genai import types
+
+            user_prompt = (
+                f"Current Crypto Fear & Greed Index: {fgi_value} "
+                f"({fgi_classification})\n\n"
+                f"Current UTC time: "
+                f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}\n\n"
+                f"Based on the current market data and any knowledge you have "
+                f"of recent events, classify the current market regime."
+            )
+
+            response = self.gemini_client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=user_prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=GEMINI_SYSTEM_PROMPT,
+                    temperature=0.1,
+                    max_output_tokens=256,
+                    response_mime_type="application/json",
+                ),
+            )
+
+            result_text = response.text.strip()
+            result = json.loads(result_text)
+            regime = result.get("regime", "").upper()
+            confidence = float(result.get("confidence", 0.0))
+            reason = result.get("reason", "N/A")
+
+            regime_lower = regime.lower()
+            if regime_lower not in ("bull", "bear", "panic"):
+                logger.warning(
+                    f"Invalid regime from Gemini: '{regime}'. Ignoring response."
+                )
+                raise ValueError(f"Invalid regime: {regime}")
+
+            logger.info(
+                f"🤖 Gemini analysis: regime={regime}, "
+                f"confidence={confidence:.2f}, reason='{reason}'"
+            )
+
+            # Reset failure counter on success
+            self.consecutive_llm_failures = 0
+            return regime_lower
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse Gemini response as JSON: {e}")
+        except ImportError:
+            logger.error("google-genai types module not available")
+        except Exception as e:
+            logger.warning(f"Gemini API call failed: {type(e).__name__}: {e}")
+
+        # Track failure
+        self.consecutive_llm_failures += 1
+        logger.info(
+            f"LLM failure count: {self.consecutive_llm_failures}/"
+            f"{LLM_MAX_CONSECUTIVE_FAILURES}"
+        )
+        if self.consecutive_llm_failures >= LLM_MAX_CONSECUTIVE_FAILURES:
+            self._trip_circuit_breaker()
+
+        return None
+
+    # ----- Main Analysis -----
+
+    def analyze(self) -> str:
+        """
+        Determine the current market regime using the full analysis chain:
+
+          1. Fetch Fear & Greed Index (fast, always available)
+          2. Query Gemini LLM with FGI context (nuanced analysis)
+          3. Fall back to FGI-only if LLM is unavailable
+          4. Default to "bull" (safe default) if everything fails
+
+        Anti-hallucination safety: if Gemini says PANIC but FGI is in
+        greed territory (> 50), the signal is downgraded to BEAR.
+
+        Returns: "bull", "bear", or "panic"
+        """
+        # Step 1: Get Fear & Greed Index
+        fgi_result = self.get_fear_and_greed_index()
+
+        if fgi_result is None:
+            logger.warning(
+                "⚠️ FGI unavailable. Attempting LLM-only analysis..."
+            )
+            # Try Gemini without FGI context
+            gemini_regime = self._query_gemini(50, "Neutral (FGI unavailable)")
+            if gemini_regime is not None:
+                return gemini_regime
+            logger.warning(
+                "⚠️ Both FGI and LLM unavailable. "
+                "Defaulting to 'bull' (safe default — no action taken)."
+            )
+            return "bull"
+
+        fgi_value, fgi_classification = fgi_result
+
+        # Step 2: Try Gemini LLM with FGI context
+        gemini_regime = self._query_gemini(fgi_value, fgi_classification)
+
+        if gemini_regime is not None:
+            # Anti-hallucination guard: if LLM says PANIC but FGI is > 50,
+            # the LLM might be hallucinating. Downgrade to BEAR.
+            if gemini_regime == "panic" and fgi_value > 50:
+                logger.warning(
+                    f"⚠️ ANTI-HALLUCINATION: Gemini says PANIC but "
+                    f"FGI is {fgi_value} (greed territory). "
+                    f"Downgrading to BEAR as safety measure."
+                )
+                return "bear"
+            return gemini_regime
+
+        # Step 3: Fallback to deterministic FGI
+        regime = self._fgi_to_regime(fgi_value)
+        logger.info(
+            f"📊 Using FGI deterministic fallback: "
+            f"FGI={fgi_value} → regime={regime.upper()}"
+        )
         return regime
 
-    def run(self):
-        logger.info("Starting LLM Risk Manager...")
-        while not self.nuclear_triggered:
-            try:
-                # 1. Hard-Stop Check (Mathematical Safety)
-                current_balance = self.get_account_balance()
-                if current_balance and self.initial_balance:
-                    drawdown = (self.initial_balance - current_balance) / self.initial_balance
-                    if drawdown > GLOBAL_HARD_STOPLOSS_PERCENT:
-                        self.trigger_nuclear_option(f"Global Drawdown exceeded {GLOBAL_HARD_STOPLOSS_PERCENT * 100}%!")
-                        continue
 
-                # 2. AI Sentinel Check (Macro Events)
-                regime = self.analyze_market_regime()
-                if regime == "panic":
-                    self.trigger_nuclear_option("LLM detected extreme Black Swan panic event.")
-                    continue
-                elif regime == "bear":
-                    logger.info("Market is nervous. (Here we would dynamically reduce max_open_trades via API if supported).")
+# ==================================================================================
+# Risk Manager (Main Orchestrator)
+# ==================================================================================
+
+
+class RiskManager:
+    """
+    Main orchestrator for the Zero-Burn risk management system.
+
+    Monitors:
+      1. Global portfolio drawdown (hard mathematical stop — EVERY cycle)
+      2. Market regime via AI + sentiment (Black Swan detection — every N cycles)
+
+    Actions:
+      - BULL regime: Normal operations, no intervention.
+      - BEAR regime: Log warning. (Future: dynamically reduce max_open_trades)
+      - PANIC regime: Trigger Nuclear Option.
+      - Drawdown > threshold: Trigger Nuclear Option.
+    """
+
+    def __init__(self):
+        self.api_client = FreqtradeAPIClient(
+            FREQTRADE_API_URL,
+            FREQTRADE_USERNAME,
+            FREQTRADE_PASSWORD,
+        )
+        self.sentiment = SentimentAnalyzer(GEMINI_API_KEY)
+
+        self.initial_balance: Optional[float] = None
+        self.nuclear_triggered = False
+        self.current_regime = "bull"
+        self.cycle_count = 0
+        self._shutdown_requested = False
+
+        # Load persisted state from disk
+        self._load_state()
+
+        # Register signal handlers for graceful shutdown
+        signal.signal(signal.SIGTERM, self._handle_shutdown)
+        signal.signal(signal.SIGINT, self._handle_shutdown)
+
+    # ----- Signal Handlers -----
+
+    def _handle_shutdown(self, signum, frame):
+        """Handle graceful shutdown on SIGTERM / SIGINT."""
+        sig_name = signal.Signals(signum).name
+        logger.info(f"🛑 Received {sig_name}, shutting down gracefully...")
+        self._shutdown_requested = True
+        self._save_state()
+
+    # ----- State Persistence -----
+
+    def _load_state(self):
+        """Load persisted state from disk (survives restarts)."""
+        if STATE_FILE.exists():
+            try:
+                with open(STATE_FILE, "r") as f:
+                    state = json.load(f)
+                self.initial_balance = state.get("initial_balance")
+                self.nuclear_triggered = state.get("nuclear_triggered", False)
+                self.current_regime = state.get("current_regime", "bull")
+                if self.initial_balance:
+                    logger.info(
+                        f"📁 Restored state from disk: "
+                        f"initial_balance={self.initial_balance:.2f} USDT, "
+                        f"nuclear={self.nuclear_triggered}, "
+                        f"regime={self.current_regime}"
+                    )
+                if self.nuclear_triggered:
+                    logger.warning(
+                        "☢️  Nuclear option was previously triggered. "
+                        "Delete risk_manager_state.json to reset."
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to load state file: {e}")
+
+    def _save_state(self):
+        """Persist current state to disk."""
+        state = {
+            "initial_balance": self.initial_balance,
+            "nuclear_triggered": self.nuclear_triggered,
+            "current_regime": self.current_regime,
+            "last_updated": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            with open(STATE_FILE, "w") as f:
+                json.dump(state, f, indent=2)
+        except Exception as e:
+            logger.error(f"Failed to save state: {e}")
+
+    # ----- Nuclear Option -----
+
+    def trigger_nuclear_option(self, reason: str):
+        """
+        EMERGENCY STOP — Last line of defense against catastrophic losses.
+
+        Sequence:
+          1. Halt all new entries (/stopbuy)
+          2. Fetch all open trades (/status)
+          3. Force exit each trade at market price (/forceexit)
+          4. Persist state and enter hibernation
+        """
+        if self.nuclear_triggered:
+            logger.warning("Nuclear option already triggered. Skipping.")
+            return
+
+        logger.critical("")
+        logger.critical("=" * 60)
+        logger.critical("☢️  NUCLEAR OPTION TRIGGERED!")
+        logger.critical(f"   Reason: {reason}")
+        logger.critical("=" * 60)
+        logger.critical("")
+
+        self.nuclear_triggered = True
+        self._save_state()
+
+        # Step 1: Stop all new entries IMMEDIATELY
+        try:
+            if self.api_client.stop_buying():
+                logger.info("🛑 Bot buying HALTED successfully.")
+            else:
+                logger.error(
+                    "⚠️ Failed to halt buying via API! "
+                    "Continuing with force exits..."
+                )
+        except Exception as e:
+            logger.error(f"Error halting buying: {e}")
+
+        # Step 2: Force exit all open positions
+        try:
+            trades = self.api_client.get_open_trades()
+            if trades and len(trades) > 0:
+                logger.info(f"📤 Force exiting {len(trades)} open trade(s)...")
+                exit_successes = 0
+                exit_failures = 0
+                for trade in trades:
+                    trade_id = trade.get("trade_id")
+                    pair = trade.get("pair", "unknown")
+                    profit_pct = trade.get("profit_pct", 0.0)
+                    try:
+                        if self.api_client.force_exit(trade_id):
+                            logger.warning(
+                                f"  ✅ Force exited #{trade_id} "
+                                f"({pair}, P/L: {profit_pct:.2f}%)"
+                            )
+                            exit_successes += 1
+                        else:
+                            logger.error(
+                                f"  ❌ Failed to force exit #{trade_id} ({pair})"
+                            )
+                            exit_failures += 1
+                    except Exception as e:
+                        logger.error(
+                            f"  ❌ Error force exiting #{trade_id}: {e}"
+                        )
+                        exit_failures += 1
+                    # Small delay between exits to avoid rate limits
+                    time.sleep(0.5)
+
+                logger.info(
+                    f"Force exit sweep complete: "
+                    f"{exit_successes} succeeded, {exit_failures} failed"
+                )
+            else:
+                logger.info("No open trades to close.")
+        except Exception as e:
+            logger.error(f"Error during force exit sweep: {e}")
+
+        logger.critical(
+            "☢️  Nuclear option execution complete. "
+            "All funds should now be in USDT. "
+            "Risk Manager entering hibernation."
+        )
+        self._save_state()
+
+    # ----- Drawdown Check -----
+
+    def _check_drawdown(self) -> bool:
+        """
+        Check global portfolio drawdown against the hard stop threshold.
+
+        Returns True if nuclear option was triggered, False otherwise.
+        """
+        current_balance = self.api_client.get_balance()
+
+        if current_balance is None:
+            logger.warning(
+                "⚠️ Could not fetch balance from Freqtrade. "
+                "Skipping drawdown check this cycle."
+            )
+            return False
+
+        # Lock initial balance on first successful read
+        if self.initial_balance is None and current_balance > 0:
+            self.initial_balance = current_balance
+            logger.info(
+                f"🔒 Initial balance locked at: "
+                f"{self.initial_balance:.2f} USDT"
+            )
+            self._save_state()
+
+        if self.initial_balance is None or self.initial_balance <= 0:
+            return False
+
+        drawdown = (self.initial_balance - current_balance) / self.initial_balance
+        drawdown_pct = drawdown * 100
+
+        if drawdown > 0:
+            logger.info(
+                f"💰 Balance: {current_balance:.2f} USDT | "
+                f"Drawdown: {drawdown_pct:.2f}% "
+                f"(threshold: {GLOBAL_HARD_STOPLOSS_PERCENT * 100:.1f}%)"
+            )
+        else:
+            profit_pct = abs(drawdown_pct)
+            logger.info(
+                f"💰 Balance: {current_balance:.2f} USDT | "
+                f"Profit: +{profit_pct:.2f}% from initial"
+            )
+
+        if drawdown > GLOBAL_HARD_STOPLOSS_PERCENT:
+            self.trigger_nuclear_option(
+                f"Global drawdown {drawdown_pct:.2f}% exceeded "
+                f"threshold {GLOBAL_HARD_STOPLOSS_PERCENT * 100:.1f}%!"
+            )
+            return True
+
+        return False
+
+    # ----- Main Loop -----
+
+    def run(self):
+        """
+        Main execution loop.
+
+        Runs indefinitely until:
+          - Nuclear option is triggered
+          - A shutdown signal (SIGTERM/SIGINT) is received
+          - The process is killed externally
+        """
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("🚀 Zero-Burn LLM Risk Manager — Starting")
+        logger.info(f"   Freqtrade API:       {FREQTRADE_API_URL}")
+        logger.info(f"   Drawdown Threshold:  {GLOBAL_HARD_STOPLOSS_PERCENT * 100:.1f}%")
+        logger.info(f"   Check Interval:      {CHECK_INTERVAL_SECONDS}s")
+        logger.info(f"   LLM Check Every:     {LLM_CHECK_INTERVAL_CYCLES} cycles "
+                     f"({LLM_CHECK_INTERVAL_CYCLES * CHECK_INTERVAL_SECONDS}s)")
+        logger.info(f"   Gemini LLM:          "
+                     f"{'Enabled' if self.sentiment.gemini_client else 'Disabled (FGI-only)'}")
+        logger.info(f"   State File:          {STATE_FILE}")
+        logger.info("=" * 60)
+        logger.info("")
+
+        # Abort if nuclear was already triggered in a previous run
+        if self.nuclear_triggered:
+            logger.critical(
+                "☢️  Nuclear option was triggered in a previous session. "
+                "The Risk Manager will NOT restart monitoring."
+            )
+            logger.critical(
+                "   To reset, delete the state file: "
+                f"rm {STATE_FILE}"
+            )
+            return
+
+        # Initial login — abort if we can't authenticate
+        if not self.api_client.login():
+            logger.critical(
+                "❌ Cannot start: failed to authenticate with Freqtrade API. "
+                "Ensure Freqtrade is running and credentials are correct."
+            )
+            sys.exit(1)
+
+        logger.info("🟢 Risk Manager is now active and monitoring.")
+
+        while not self.nuclear_triggered and not self._shutdown_requested:
+            try:
+                self.cycle_count += 1
+                logger.debug(f"--- Cycle #{self.cycle_count} ---")
+
+                # 1. ALWAYS check drawdown (mathematical safety, never skipped)
+                if self._check_drawdown():
+                    break
+
+                # 2. Check market regime periodically (every N cycles)
+                if self.cycle_count % LLM_CHECK_INTERVAL_CYCLES == 0:
+                    regime = self.sentiment.analyze()
+                    previous_regime = self.current_regime
+                    self.current_regime = regime
+                    self._save_state()
+
+                    if regime != previous_regime:
+                        logger.info(
+                            f"📡 Regime change detected: "
+                            f"{previous_regime.upper()} → {regime.upper()}"
+                        )
+
+                    if regime == "panic":
+                        self.trigger_nuclear_option(
+                            "AI Sentinel detected extreme Black Swan / "
+                            "panic event!"
+                        )
+                        break
+                    elif regime == "bear":
+                        logger.warning(
+                            "🐻 Market regime: BEAR — Elevated risk. "
+                            "Monitoring closely."
+                        )
+                    elif regime == "bull":
+                        logger.info("🟢 Market regime: BULL — Normal operations.")
 
                 # Sleep until next check
-                time.sleep(60) # Check every 60 seconds
-                
+                time.sleep(CHECK_INTERVAL_SECONDS)
+
             except Exception as e:
-                logger.error(f"Risk Manager loop error: {e}")
-                time.sleep(60)
+                logger.error(
+                    f"Risk Manager loop error: {e}", exc_info=True
+                )
+                time.sleep(CHECK_INTERVAL_SECONDS)
+
+        # ---- Shutdown ----
+        if self._shutdown_requested:
+            logger.info("🛑 Risk Manager stopped by user signal.")
+        elif self.nuclear_triggered:
+            logger.critical(
+                "☢️  Risk Manager in HIBERNATION mode "
+                "(nuclear triggered)."
+            )
+
+        self._save_state()
+        logger.info("Risk Manager process ended.")
+
+
+# ==================================================================================
+# Entry Point
+# ==================================================================================
 
 if __name__ == "__main__":
-    # manager = RiskManager()
-    # manager.run()
-    pass
+    manager = RiskManager()
+    manager.run()

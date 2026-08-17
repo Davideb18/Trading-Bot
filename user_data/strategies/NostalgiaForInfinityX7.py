@@ -2593,9 +2593,56 @@ class NostalgiaForInfinityX7(IStrategy):
 
     return None
 
-  # Custom Stake Amount
+  # Custom Stake Amount (Phase 5: Live Execution Resilience Wrapper)
   # ---------------------------------------------------------------------------------------------
+  MAX_ABSOLUTE_STAKE_USDT = 2000.0
+  MAX_ORDERBOOK_RATIO = 0.10
+
   def custom_stake_amount(
+    self,
+    pair: str,
+    current_time: datetime,
+    current_rate: float,
+    proposed_stake: float,
+    min_stake: Optional[float],
+    max_stake: float,
+    leverage: float,
+    entry_tag: Optional[str],
+    side: str,
+    **kwargs,
+  ) -> float:
+    # 1. Calcola stake originale della strategia
+    stake = self._nfix7_custom_stake_amount(
+      pair, current_time, current_rate, proposed_stake, min_stake, max_stake,
+      leverage, entry_tag, side, **kwargs
+    )
+    
+    # 2. Hard Cap Assoluto
+    if stake > self.MAX_ABSOLUTE_STAKE_USDT:
+      stake = self.MAX_ABSOLUTE_STAKE_USDT
+        
+    # 3. Dynamic Orderbook Liquidity Check (Protezione Slippage)
+    try:
+      if self.dp:
+        ob = self.dp.orderbook(pair, 1)
+        # Per i LONG peschiamo dalle 'asks' (venditori), per gli SHORT dalle 'bids'
+        ob_side = ob['asks'] if side == 'long' else ob['bids']
+        if ob_side and len(ob_side) > 0:
+          top_price, top_volume = ob_side[0]
+          top_liquidity_usdt = top_volume * top_price
+          max_allowed_by_ob = top_liquidity_usdt * self.MAX_ORDERBOOK_RATIO
+          if stake > max_allowed_by_ob:
+            stake = max_allowed_by_ob
+    except Exception:
+      pass
+
+    # Verifica min_stake dell'exchange
+    if min_stake is not None and stake < min_stake:
+      return 0.0
+
+    return stake
+
+  def _nfix7_custom_stake_amount(
     self,
     pair: str,
     current_time: datetime,
