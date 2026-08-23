@@ -1,0 +1,9 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Installa le dipendenze per comunicare con le API di Gemini e Freqtrade
+RUN pip install --no-cache-dir requests google-genai
+
+# Lo script verrà montato come volume in /app/scripts e /app/user_data (per i log/state)
+CMD ["python3", "-u", "/app/scripts/llm_risk_manager.py"]

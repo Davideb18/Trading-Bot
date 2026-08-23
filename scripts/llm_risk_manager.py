@@ -29,6 +29,7 @@ import json
 import signal
 import logging
 import requests
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Tuple
@@ -295,6 +296,20 @@ class FreqtradeAPIClient:
         result = self.post("/forceexit", json={"tradeid": str(trade_id)})
         return result is not None
 
+    def get_blacklist(self) -> list:
+        """Get the current pair blacklist."""
+        data = self.get("/blacklist")
+        if data and isinstance(data, dict):
+            return data.get("blacklist", [])
+        return []
+
+    def add_to_blacklist(self, pairs: list) -> bool:
+        """Add specific pairs to the blacklist."""
+        if not pairs:
+            return True
+        result = self.post("/blacklist", json={"blacklist": pairs})
+        return result is not None
+
 
 # ==================================================================================
 # Sentiment Analyzer (Gemini + Fear & Greed Index)
@@ -339,6 +354,23 @@ The "regime" field must be exactly one of: BULL, BEAR, PANIC (uppercase).
 The "confidence" field must be a float between 0.0 and 1.0.
 """
 
+MICRO_SYSTEM_PROMPT = """\
+You are a Senior Crypto Trader managing risk for an automated system.
+You will be given a list of cryptocurrency pairs that the system is currently trading.
+YOUR JOB is to check for specific, devastating news or structural flaws regarding ONLY these coins.
+
+Categories of risk for a single coin:
+- HODL: Normal market conditions, low-level rumors, general volatility. No action needed.
+- EXIT_PAIR: Confirmed catastrophic news for this specific coin (e.g., smart contract hacked, founders arrested, major exchange delisting, SEC lawsuit). The system must dump this coin immediately.
+- CONTAGION: The catastrophic news for this coin will crash the entire global crypto market (e.g., USDT/USDC depegs, major exchange bankruptcy, Bitcoin critical flaw). The system must trigger the nuclear option.
+
+OUTPUT FORMAT: Respond with ONLY a valid JSON object. No markdown, no explanation.
+{
+  "PAIR_NAME": {"action": "HODL"|"EXIT_PAIR"|"CONTAGION", "reason": "brief explanation"},
+  ...
+}
+"""
+
 
 class SentimentAnalyzer:
     """
@@ -358,6 +390,7 @@ class SentimentAnalyzer:
         self.gemini_api_key = gemini_api_key
         self.gemini_client = None
         self.consecutive_llm_failures = 0
+        self.consecutive_micro_failures = 0
         self.circuit_breaker_until: Optional[datetime] = None
 
         if gemini_api_key:
@@ -480,7 +513,7 @@ class SentimentAnalyzer:
             )
 
             response = self.gemini_client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-3.5-flash-lite",
                 contents=user_prompt,
                 config=types.GenerateContentConfig(
                     system_instruction=GEMINI_SYSTEM_PROMPT,
@@ -490,6 +523,8 @@ class SentimentAnalyzer:
                 ),
             )
 
+            if not response.text:
+                raise ValueError("Empty response from Gemini (possibly blocked by safety filters)")
             result_text = response.text.strip()
             result = json.loads(result_text)
             regime = result.get("regime", "").upper()
@@ -588,6 +623,52 @@ class SentimentAnalyzer:
         )
         return regime
 
+    def analyze_specific_pairs(self, pairs: list) -> Optional[dict]:
+        """
+        Query Gemini to analyze specific crypto pairs using Senior Trader logic.
+        """
+        if not self.gemini_client or not pairs:
+            return None
+
+        if self._is_circuit_breaker_active():
+            return None
+
+        try:
+            from google.genai import types
+
+            pairs_str = ", ".join(pairs)
+            user_prompt = (
+                f"Analyze the following specific pairs currently in open trades: {pairs_str}. "
+                f"Current UTC time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}"
+            )
+
+            response = self.gemini_client.models.generate_content(
+                model="gemini-3.5-flash-lite",
+                contents=user_prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=MICRO_SYSTEM_PROMPT,
+                    temperature=0.1,
+                    max_output_tokens=512,
+                    response_mime_type="application/json",
+                ),
+            )
+
+            if not response.text:
+                raise ValueError("Empty response from Gemini (possibly blocked by safety filters)")
+            result_text = response.text.strip()
+            result = json.loads(result_text)
+            logger.info(f"🧠 Micro-analysis for {pairs_str}: {json.dumps(result)}")
+            
+            self.consecutive_micro_failures = 0
+            return result
+
+        except Exception as e:
+            logger.warning(f"Gemini Micro-analysis failed: {type(e).__name__}: {e}")
+            self.consecutive_micro_failures += 1
+            if self.consecutive_micro_failures >= LLM_MAX_CONSECUTIVE_FAILURES:
+                self._trip_circuit_breaker()
+            return None
+
 
 # ==================================================================================
 # Risk Manager (Main Orchestrator)
@@ -618,10 +699,13 @@ class RiskManager:
         self.sentiment = SentimentAnalyzer(GEMINI_API_KEY)
 
         self.initial_balance: Optional[float] = None
+        self.peak_balance: Optional[float] = None
         self.nuclear_triggered = False
         self.current_regime = "bull"
         self.cycle_count = 0
         self._shutdown_requested = False
+        self.known_open_pairs = set()
+        self.last_micro_analysis_time = None
 
         # Load persisted state from disk
         self._load_state()
@@ -648,12 +732,14 @@ class RiskManager:
                 with open(STATE_FILE, "r") as f:
                     state = json.load(f)
                 self.initial_balance = state.get("initial_balance")
+                self.peak_balance = state.get("peak_balance", self.initial_balance)
                 self.nuclear_triggered = state.get("nuclear_triggered", False)
                 self.current_regime = state.get("current_regime", "bull")
                 if self.initial_balance:
                     logger.info(
                         f"📁 Restored state from disk: "
                         f"initial_balance={self.initial_balance:.2f} USDT, "
+                        f"peak_balance={self.peak_balance:.2f} USDT, "
                         f"nuclear={self.nuclear_triggered}, "
                         f"regime={self.current_regime}"
                     )
@@ -669,6 +755,7 @@ class RiskManager:
         """Persist current state to disk."""
         state = {
             "initial_balance": self.initial_balance,
+            "peak_balance": self.peak_balance,
             "nuclear_triggered": self.nuclear_triggered,
             "current_regime": self.current_regime,
             "last_updated": datetime.now(timezone.utc).isoformat(),
@@ -749,9 +836,45 @@ class RiskManager:
                     time.sleep(0.5)
 
                 logger.info(
-                    f"Force exit sweep complete: "
+                    f"Initial force exit sweep complete: "
                     f"{exit_successes} succeeded, {exit_failures} failed"
                 )
+
+                # Retry sweep for failed exits
+                MAX_RETRY_SWEEPS = 3
+                RETRY_DELAY = 5  # seconds
+
+                for sweep in range(MAX_RETRY_SWEEPS):
+                    if exit_failures == 0:
+                        break
+                    
+                    logger.warning(
+                        f"⚠️ Retry sweep #{sweep + 1}/{MAX_RETRY_SWEEPS} "
+                        f"for {exit_failures} failed exit(s)..."
+                    )
+                    time.sleep(RETRY_DELAY * (sweep + 1))
+                    
+                    trades = self.api_client.get_open_trades()
+                    if not trades:
+                        logger.info("All trades successfully closed.")
+                        break
+                    
+                    exit_failures = 0
+                    for trade in trades:
+                        trade_id = trade.get("trade_id")
+                        try:
+                            if not self.api_client.force_exit(trade_id):
+                                exit_failures += 1
+                        except Exception:
+                            exit_failures += 1
+                        time.sleep(0.5)
+
+                if exit_failures > 0:
+                    logger.critical(
+                        f"🚨 CRITICAL: {exit_failures} trade(s) could NOT be closed! "
+                        f"MANUAL INTERVENTION REQUIRED on Binance!"
+                    )
+
             else:
                 logger.info("No open trades to close.")
         except Exception as e:
@@ -784,6 +907,7 @@ class RiskManager:
         # Lock initial balance on first successful read
         if self.initial_balance is None and current_balance > 0:
             self.initial_balance = current_balance
+            self.peak_balance = current_balance
             logger.info(
                 f"🔒 Initial balance locked at: "
                 f"{self.initial_balance:.2f} USDT"
@@ -793,19 +917,30 @@ class RiskManager:
         if self.initial_balance is None or self.initial_balance <= 0:
             return False
 
-        drawdown = (self.initial_balance - current_balance) / self.initial_balance
+        # Update peak (high-water mark)
+        if self.peak_balance is None:
+            self.peak_balance = self.initial_balance
+            
+        if current_balance > self.peak_balance:
+            self.peak_balance = current_balance
+            self._save_state()
+
+        # Calculate drawdown from PEAK
+        drawdown = (self.peak_balance - current_balance) / self.peak_balance
         drawdown_pct = drawdown * 100
 
         if drawdown > 0:
             logger.info(
                 f"💰 Balance: {current_balance:.2f} USDT | "
+                f"Peak: {self.peak_balance:.2f} USDT | "
                 f"Drawdown: {drawdown_pct:.2f}% "
                 f"(threshold: {GLOBAL_HARD_STOPLOSS_PERCENT * 100:.1f}%)"
             )
         else:
-            profit_pct = abs(drawdown_pct)
+            profit_pct = abs((self.initial_balance - current_balance) / self.initial_balance) * 100
             logger.info(
                 f"💰 Balance: {current_balance:.2f} USDT | "
+                f"Peak: {self.peak_balance:.2f} USDT | "
                 f"Profit: +{profit_pct:.2f}% from initial"
             )
 
@@ -865,16 +1000,91 @@ class RiskManager:
 
         logger.info("🟢 Risk Manager is now active and monitoring.")
 
+        # Start LLM Sentinel in a separate daemon thread
+        llm_thread = threading.Thread(
+            target=self._llm_sentinel_loop,
+            name="LLM-Sentinel",
+            daemon=True
+        )
+        llm_thread.start()
+
+        # Main thread: ONLY drawdown guard (never blocked by LLM)
+        self._drawdown_guard_loop()
+
+    def _drawdown_guard_loop(self):
+        """
+        High-priority drawdown monitor. Runs every 20 seconds.
+        NEVER calls any external LLM or sentiment API.
+        """
+        DRAWDOWN_CHECK_INTERVAL = CHECK_INTERVAL_SECONDS
+        
+        while not self.nuclear_triggered and not self._shutdown_requested:
+            try:
+                if self._check_drawdown():
+                    break
+                time.sleep(DRAWDOWN_CHECK_INTERVAL)
+            except Exception as e:
+                logger.error(f"Drawdown guard error: {e}", exc_info=True)
+                time.sleep(DRAWDOWN_CHECK_INTERVAL)
+
+    def _llm_sentinel_loop(self):
+        """
+        Lower-priority LLM analysis. Runs in background thread.
+        If it blocks on Gemini, the drawdown guard is NOT affected.
+        """
+        LLM_INTERVAL = CHECK_INTERVAL_SECONDS * LLM_CHECK_INTERVAL_CYCLES
+        
         while not self.nuclear_triggered and not self._shutdown_requested:
             try:
                 self.cycle_count += 1
-                logger.debug(f"--- Cycle #{self.cycle_count} ---")
+                logger.debug(f"--- Sentinel Cycle #{self.cycle_count} ---")
 
-                # 1. ALWAYS check drawdown (mathematical safety, never skipped)
-                if self._check_drawdown():
-                    break
+                # Smart Reactive Micro-Analysis for specific pairs
+                trades = self.api_client.get_open_trades()
+                if trades is not None:
+                    current_pairs = {trade.get("pair") for trade in trades if trade.get("pair")}
+                    
+                    # Trigger if there are NEW pairs, or if 15 mins (approx 15 cycles) have passed
+                    new_pairs = current_pairs - self.known_open_pairs
+                    
+                    if self.last_micro_analysis_time:
+                        time_since_last = (datetime.now(timezone.utc) - self.last_micro_analysis_time).total_seconds()
+                    else:
+                        time_since_last = float('inf')
+                    
+                    if new_pairs or (current_pairs and time_since_last > 900): # 900s = 15m
+                        if new_pairs:
+                            logger.info(f"🆕 Detected new open pairs: {new_pairs}. Triggering immediate micro-analysis.")
+                        else:
+                            logger.info(f"⏱️ 15 minutes passed. Triggering routine micro-analysis for {current_pairs}.")
+                        
+                        micro_result = self.sentiment.analyze_specific_pairs(list(current_pairs))
+                        self.last_micro_analysis_time = datetime.now(timezone.utc)
+                        self.known_open_pairs = current_pairs
+                        
+                        if micro_result:
+                            for pair, analysis in micro_result.items():
+                                action = analysis.get("action", "HODL")
+                                reason = analysis.get("reason", "N/A")
+                                
+                                if action == "CONTAGION":
+                                    self.trigger_nuclear_option(f"CONTAGION risk detected for {pair}: {reason}")
+                                    break
+                                elif action == "EXIT_PAIR":
+                                    logger.warning(f"🚨 EXIT_PAIR for {pair}: {reason}. Initiating force exit and blacklist.")
+                                    # Find trade IDs for this pair
+                                    trade_ids_to_close = [t.get("trade_id") for t in trades if t.get("pair") == pair]
+                                    for tid in trade_ids_to_close:
+                                        self.api_client.force_exit(tid)
+                                    # Add to blacklist
+                                    self.api_client.add_to_blacklist([pair])
+                                elif action == "HODL":
+                                    logger.debug(f"HODL {pair}: {reason}")
+                                    
+                    # Update known pairs even if we didn't query (e.g. if pairs closed)
+                    self.known_open_pairs = current_pairs
 
-                # 2. Check market regime periodically (every N cycles)
+                # Check market regime periodically
                 if self.cycle_count % LLM_CHECK_INTERVAL_CYCLES == 0:
                     regime = self.sentiment.analyze()
                     previous_regime = self.current_regime
@@ -889,24 +1099,20 @@ class RiskManager:
 
                     if regime == "panic":
                         self.trigger_nuclear_option(
-                            "AI Sentinel detected extreme Black Swan / "
-                            "panic event!"
+                            "AI Sentinel detected extreme Black Swan / panic event!"
                         )
                         break
                     elif regime == "bear":
-                        logger.warning(
-                            "🐻 Market regime: BEAR — Elevated risk. "
-                            "Monitoring closely."
-                        )
+                        logger.warning("🐻 Market regime: BEAR — Elevated risk. Monitoring closely.")
                     elif regime == "bull":
                         logger.info("🟢 Market regime: BULL — Normal operations.")
 
-                # Sleep until next check
+                # Sleep until next check (for Sentinel, we sleep shorter so it can react quicker to shutdown)
                 time.sleep(CHECK_INTERVAL_SECONDS)
 
             except Exception as e:
                 logger.error(
-                    f"Risk Manager loop error: {e}", exc_info=True
+                    f"LLM Sentinel loop error: {e}", exc_info=True
                 )
                 time.sleep(CHECK_INTERVAL_SECONDS)
 
