@@ -80,7 +80,7 @@ LLM_CIRCUIT_BREAKER_COOLDOWN_SECONDS = int(
 )
 
 # State persistence file
-STATE_FILE = Path(__file__).resolve().parent / "risk_manager_state.json"
+STATE_FILE = Path(__file__).resolve().parent.parent / "user_data" / "risk_manager_state.json"
 
 
 # ==================================================================================
@@ -303,6 +303,13 @@ class FreqtradeAPIClient:
             return data.get("blacklist", [])
         return []
 
+    def get_whitelist(self) -> list:
+        """Get the current dynamic whitelist from Freqtrade."""
+        data = self.get("/whitelist")
+        if data and isinstance(data, dict):
+            return data.get("whitelist", [])
+        return []
+
     def add_to_blacklist(self, pairs: list) -> bool:
         """Add specific pairs to the blacklist."""
         if not pairs:
@@ -354,9 +361,9 @@ The "regime" field must be exactly one of: BULL, BEAR, PANIC (uppercase).
 The "confidence" field must be a float between 0.0 and 1.0.
 """
 
-MICRO_SYSTEM_PROMPT = """\
+BATCH_SYSTEM_PROMPT = """\
 You are a Senior Crypto Trader managing risk for an automated system.
-You will be given a list of cryptocurrency pairs that the system is currently trading.
+You will be given a list of cryptocurrency pairs that the system is considering trading.
 YOUR JOB is to check for specific, devastating news or structural flaws regarding ONLY these coins.
 
 Categories of risk for a single coin:
@@ -364,9 +371,9 @@ Categories of risk for a single coin:
 - EXIT_PAIR: Confirmed catastrophic news for this specific coin (e.g., smart contract hacked, founders arrested, major exchange delisting, SEC lawsuit). The system must dump this coin immediately.
 - CONTAGION: The catastrophic news for this coin will crash the entire global crypto market (e.g., USDT/USDC depegs, major exchange bankruptcy, Bitcoin critical flaw). The system must trigger the nuclear option.
 
-OUTPUT FORMAT: Respond with ONLY a valid JSON object. No markdown, no explanation.
+OUTPUT FORMAT: Respond with ONLY a valid JSON object. No markdown, no explanation. Include ONLY coins that require an action other than HODL. If all are HODL, return {}.
 {
-  "PAIR_NAME": {"action": "HODL"|"EXIT_PAIR"|"CONTAGION", "reason": "brief explanation"},
+  "PAIR_NAME": {"action": "EXIT_PAIR"|"CONTAGION", "reason": "brief explanation"},
   ...
 }
 """
@@ -623,9 +630,9 @@ class SentimentAnalyzer:
         )
         return regime
 
-    def analyze_specific_pairs(self, pairs: list) -> Optional[dict]:
+    def analyze_whitelist_batch(self, pairs: list) -> Optional[dict]:
         """
-        Query Gemini to analyze specific crypto pairs using Senior Trader logic.
+        Query Gemini to proactively analyze a batch of crypto pairs.
         """
         if not self.gemini_client or not pairs:
             return None
@@ -638,7 +645,8 @@ class SentimentAnalyzer:
 
             pairs_str = ", ".join(pairs)
             user_prompt = (
-                f"Analyze the following specific pairs currently in open trades: {pairs_str}. "
+                f"Analyze the following {len(pairs)} specific pairs: {pairs_str}. "
+                f"Return ONLY those requiring EXIT_PAIR or CONTAGION. If none, return empty JSON {{}}. "
                 f"Current UTC time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}"
             )
 
@@ -646,24 +654,24 @@ class SentimentAnalyzer:
                 model="gemini-3.5-flash-lite",
                 contents=user_prompt,
                 config=types.GenerateContentConfig(
-                    system_instruction=MICRO_SYSTEM_PROMPT,
+                    system_instruction=BATCH_SYSTEM_PROMPT,
                     temperature=0.1,
-                    max_output_tokens=512,
+                    max_output_tokens=1024,
                     response_mime_type="application/json",
                 ),
             )
 
             if not response.text:
-                raise ValueError("Empty response from Gemini (possibly blocked by safety filters)")
+                raise ValueError("Empty response from Gemini")
             result_text = response.text.strip()
             result = json.loads(result_text)
-            logger.info(f"🧠 Micro-analysis for {pairs_str}: {json.dumps(result)}")
+            logger.info(f"🧠 Proactive batch analysis for {len(pairs)} pairs completed. Flags: {list(result.keys()) if result else 'None'}")
             
             self.consecutive_micro_failures = 0
             return result
 
         except Exception as e:
-            logger.warning(f"Gemini Micro-analysis failed: {type(e).__name__}: {e}")
+            logger.warning(f"Gemini Batch analysis failed: {type(e).__name__}: {e}")
             self.consecutive_micro_failures += 1
             if self.consecutive_micro_failures >= LLM_MAX_CONSECUTIVE_FAILURES:
                 self._trip_circuit_breaker()
@@ -1039,31 +1047,14 @@ class RiskManager:
                 self.cycle_count += 1
                 logger.debug(f"--- Sentinel Cycle #{self.cycle_count} ---")
 
-                # Smart Reactive Micro-Analysis for specific pairs
-                trades = self.api_client.get_open_trades()
-                if trades is not None:
-                    current_pairs = {trade.get("pair") for trade in trades if trade.get("pair")}
-                    
-                    # Trigger if there are NEW pairs, or if 15 mins (approx 15 cycles) have passed
-                    new_pairs = current_pairs - self.known_open_pairs
-                    
-                    if self.last_micro_analysis_time:
-                        time_since_last = (datetime.now(timezone.utc) - self.last_micro_analysis_time).total_seconds()
-                    else:
-                        time_since_last = float('inf')
-                    
-                    if new_pairs or (current_pairs and time_since_last > 900): # 900s = 15m
-                        if new_pairs:
-                            logger.info(f"🆕 Detected new open pairs: {new_pairs}. Triggering immediate micro-analysis.")
-                        else:
-                            logger.info(f"⏱️ 15 minutes passed. Triggering routine micro-analysis for {current_pairs}.")
-                        
-                        micro_result = self.sentiment.analyze_specific_pairs(list(current_pairs))
-                        self.last_micro_analysis_time = datetime.now(timezone.utc)
-                        self.known_open_pairs = current_pairs
-                        
-                        if micro_result:
-                            for pair, analysis in micro_result.items():
+                # Proactive Whitelist Batch Analysis (Every 15 cycles ~ 15 minutes)
+                if self.cycle_count % 15 == 0:
+                    whitelist = self.api_client.get_whitelist()
+                    if whitelist:
+                        logger.info(f"🔍 Proactive batch analysis of {len(whitelist)} whitelist pairs...")
+                        batch_result = self.sentiment.analyze_whitelist_batch(whitelist)
+                        if batch_result:
+                            for pair, analysis in batch_result.items():
                                 action = analysis.get("action", "HODL")
                                 reason = analysis.get("reason", "N/A")
                                 
@@ -1071,18 +1062,15 @@ class RiskManager:
                                     self.trigger_nuclear_option(f"CONTAGION risk detected for {pair}: {reason}")
                                     break
                                 elif action == "EXIT_PAIR":
-                                    logger.warning(f"🚨 EXIT_PAIR for {pair}: {reason}. Initiating force exit and blacklist.")
-                                    # Find trade IDs for this pair
-                                    trade_ids_to_close = [t.get("trade_id") for t in trades if t.get("pair") == pair]
-                                    for tid in trade_ids_to_close:
-                                        self.api_client.force_exit(tid)
-                                    # Add to blacklist
+                                    logger.warning(f"🚨 PROACTIVE EXIT_PAIR for {pair}: {reason}. Initiating blacklist and force exit if open.")
+                                    # Add to blacklist so it won't be bought
                                     self.api_client.add_to_blacklist([pair])
-                                elif action == "HODL":
-                                    logger.debug(f"HODL {pair}: {reason}")
-                                    
-                    # Update known pairs even if we didn't query (e.g. if pairs closed)
-                    self.known_open_pairs = current_pairs
+                                    # Just in case we already hold it, try to force exit
+                                    trades = self.api_client.get_open_trades()
+                                    if trades:
+                                        trade_ids_to_close = [t.get("trade_id") for t in trades if t.get("pair") == pair]
+                                        for tid in trade_ids_to_close:
+                                            self.api_client.force_exit(tid)
 
                 # Check market regime periodically
                 if self.cycle_count % LLM_CHECK_INTERVAL_CYCLES == 0:
