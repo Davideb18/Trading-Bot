@@ -22,17 +22,18 @@ Usage:
     python scripts/llm_risk_manager.py
 """
 
-import os
-import sys
-import time
 import json
-import signal
 import logging
-import requests
+import os
+import signal
+import sys
 import threading
-from datetime import datetime, timedelta, timezone
+import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Optional, Tuple
+
+import requests
+
 
 # ==================================================================================
 # Logging Setup
@@ -108,9 +109,9 @@ class FreqtradeAPIClient:
         self.base_url = base_url.rstrip("/")
         self.username = username
         self.password = password
-        self.access_token: Optional[str] = None
-        self.refresh_token: Optional[str] = None
-        self.token_expiry: Optional[datetime] = None
+        self.access_token: str | None = None
+        self.refresh_token: str | None = None
+        self.token_expiry: datetime | None = None
         self.session = requests.Session()
         self.session.headers.update(
             {
@@ -135,7 +136,7 @@ class FreqtradeAPIClient:
                 self.access_token = data["access_token"]
                 self.refresh_token = data["refresh_token"]
                 self.token_expiry = (
-                    datetime.now(timezone.utc)
+                    datetime.now(UTC)
                     + self.ACCESS_TOKEN_LIFETIME
                     - self.TOKEN_REFRESH_MARGIN
                 )
@@ -185,7 +186,7 @@ class FreqtradeAPIClient:
             data = response.json()
             self.access_token = data["access_token"]
             self.token_expiry = (
-                datetime.now(timezone.utc)
+                datetime.now(UTC)
                 + self.ACCESS_TOKEN_LIFETIME
                 - self.TOKEN_REFRESH_MARGIN
             )
@@ -199,7 +200,7 @@ class FreqtradeAPIClient:
         """Ensure we have a valid, non-expired access token."""
         if self.access_token is None:
             return self.login()
-        if self.token_expiry and datetime.now(timezone.utc) >= self.token_expiry:
+        if self.token_expiry and datetime.now(UTC) >= self.token_expiry:
             return self._refresh_access_token()
         return True
 
@@ -207,7 +208,7 @@ class FreqtradeAPIClient:
 
     def _request(
         self, method: str, endpoint: str, retries: int = 2, **kwargs
-    ) -> Optional[dict | list]:
+    ) -> dict | list | None:
         """
         Make an authenticated request to the Freqtrade API.
         Handles token expiry and 401 responses with automatic re-auth.
@@ -262,24 +263,24 @@ class FreqtradeAPIClient:
 
         return None
 
-    def get(self, endpoint: str, **kwargs) -> Optional[dict | list]:
+    def get(self, endpoint: str, **kwargs) -> dict | list | None:
         """Authenticated GET request."""
         return self._request("GET", endpoint, **kwargs)
 
-    def post(self, endpoint: str, **kwargs) -> Optional[dict | list]:
+    def post(self, endpoint: str, **kwargs) -> dict | list | None:
         """Authenticated POST request."""
         return self._request("POST", endpoint, **kwargs)
 
     # ----- High-Level Operations -----
 
-    def get_balance(self) -> Optional[float]:
+    def get_balance(self) -> float | None:
         """Get total account balance from Freqtrade."""
         data = self.get("/balance")
         if data and isinstance(data, dict):
             return data.get("total", 0.0)
         return None
 
-    def get_open_trades(self) -> Optional[list]:
+    def get_open_trades(self) -> list | None:
         """Get list of currently open trades."""
         data = self.get("/status")
         if isinstance(data, list):
@@ -368,10 +369,13 @@ YOUR JOB is to check for specific, devastating news or structural flaws regardin
 
 Categories of risk for a single coin:
 - HODL: Normal market conditions, low-level rumors, general volatility. No action needed.
-- EXIT_PAIR: Confirmed catastrophic news for this specific coin (e.g., smart contract hacked, founders arrested, major exchange delisting, SEC lawsuit). The system must dump this coin immediately.
-- CONTAGION: The catastrophic news for this coin will crash the entire global crypto market (e.g., USDT/USDC depegs, major exchange bankruptcy, Bitcoin critical flaw). The system must trigger the nuclear option.
+- EXIT_PAIR: Confirmed catastrophic news for this specific coin.
+  The system must dump this coin immediately.
+- CONTAGION: The catastrophic news for this coin will crash the entire global crypto market.
+  The system must trigger the nuclear option.
 
-OUTPUT FORMAT: Respond with ONLY a valid JSON object. No markdown, no explanation. Include ONLY coins that require an action other than HODL. If all are HODL, return {}.
+OUTPUT FORMAT: Respond with ONLY a valid JSON object. No markdown, no explanation.
+Include ONLY coins that require an action other than HODL. If all are HODL, return {}.
 {
   "PAIR_NAME": {"action": "EXIT_PAIR"|"CONTAGION", "reason": "brief explanation"},
   ...
@@ -398,7 +402,7 @@ class SentimentAnalyzer:
         self.gemini_client = None
         self.consecutive_llm_failures = 0
         self.consecutive_micro_failures = 0
-        self.circuit_breaker_until: Optional[datetime] = None
+        self.circuit_breaker_until: datetime | None = None
 
         if gemini_api_key:
             try:
@@ -423,7 +427,7 @@ class SentimentAnalyzer:
 
     # ----- Fear & Greed Index -----
 
-    def get_fear_and_greed_index(self) -> Optional[Tuple[int, str]]:
+    def get_fear_and_greed_index(self) -> tuple[int, str] | None:
         """
         Fetch the current Crypto Fear & Greed Index from alternative.me.
         Returns: (value 0-100, classification_string) or None on failure.
@@ -467,7 +471,7 @@ class SentimentAnalyzer:
         """Check if the LLM circuit breaker is currently active."""
         if self.circuit_breaker_until is None:
             return False
-        if datetime.now(timezone.utc) >= self.circuit_breaker_until:
+        if datetime.now(UTC) >= self.circuit_breaker_until:
             logger.info(
                 "🔄 LLM circuit breaker cooldown expired. "
                 "Re-enabling LLM analysis."
@@ -475,7 +479,7 @@ class SentimentAnalyzer:
             self.circuit_breaker_until = None
             self.consecutive_llm_failures = 0
             return False
-        remaining = (self.circuit_breaker_until - datetime.now(timezone.utc)).seconds
+        remaining = (self.circuit_breaker_until - datetime.now(UTC)).seconds
         logger.debug(
             f"Circuit breaker active, {remaining}s remaining until LLM re-enabled"
         )
@@ -483,7 +487,7 @@ class SentimentAnalyzer:
 
     def _trip_circuit_breaker(self):
         """Activate the circuit breaker after too many LLM failures."""
-        self.circuit_breaker_until = datetime.now(timezone.utc) + timedelta(
+        self.circuit_breaker_until = datetime.now(UTC) + timedelta(
             seconds=LLM_CIRCUIT_BREAKER_COOLDOWN_SECONDS
         )
         cooldown_min = LLM_CIRCUIT_BREAKER_COOLDOWN_SECONDS / 60
@@ -495,7 +499,7 @@ class SentimentAnalyzer:
 
     # ----- Gemini LLM -----
 
-    def _query_gemini(self, fgi_value: int, fgi_classification: str) -> Optional[str]:
+    def _query_gemini(self, fgi_value: int, fgi_classification: str) -> str | None:
         """
         Query Gemini 2.5 Flash for market regime analysis.
 
@@ -514,7 +518,7 @@ class SentimentAnalyzer:
                 f"Current Crypto Fear & Greed Index: {fgi_value} "
                 f"({fgi_classification})\n\n"
                 f"Current UTC time: "
-                f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}\n\n"
+                f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M')}\n\n"
                 f"Based on the current market data and any knowledge you have "
                 f"of recent events, classify the current market regime."
             )
@@ -630,7 +634,7 @@ class SentimentAnalyzer:
         )
         return regime
 
-    def analyze_whitelist_batch(self, pairs: list) -> Optional[dict]:
+    def analyze_whitelist_batch(self, pairs: list) -> dict | None:
         """
         Query Gemini to proactively analyze a batch of crypto pairs.
         """
@@ -646,8 +650,9 @@ class SentimentAnalyzer:
             pairs_str = ", ".join(pairs)
             user_prompt = (
                 f"Analyze the following {len(pairs)} specific pairs: {pairs_str}. "
-                f"Return ONLY those requiring EXIT_PAIR or CONTAGION. If none, return empty JSON {{}}. "
-                f"Current UTC time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}"
+                f"Return ONLY those requiring EXIT_PAIR or CONTAGION. "
+                f"If none, return empty JSON {{}}. "
+                f"Current UTC time: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M')}"
             )
 
             response = self.gemini_client.models.generate_content(
@@ -665,8 +670,12 @@ class SentimentAnalyzer:
                 raise ValueError("Empty response from Gemini")
             result_text = response.text.strip()
             result = json.loads(result_text)
-            logger.info(f"🧠 Proactive batch analysis for {len(pairs)} pairs completed. Flags: {list(result.keys()) if result else 'None'}")
-            
+            flags = list(result.keys()) if result else 'None'
+            logger.info(
+                f"🧠 Proactive batch analysis for {len(pairs)} pairs completed. "
+                f"Flags: {flags}"
+            )
+
             self.consecutive_micro_failures = 0
             return result
 
@@ -706,8 +715,8 @@ class RiskManager:
         )
         self.sentiment = SentimentAnalyzer(GEMINI_API_KEY)
 
-        self.initial_balance: Optional[float] = None
-        self.peak_balance: Optional[float] = None
+        self.initial_balance: float | None = None
+        self.peak_balance: float | None = None
         self.nuclear_triggered = False
         self.current_regime = "bull"
         self.cycle_count = 0
@@ -737,7 +746,8 @@ class RiskManager:
         """Load persisted state from disk (survives restarts)."""
         if STATE_FILE.exists():
             try:
-                with open(STATE_FILE, "r") as f:
+                from pathlib import Path
+                with Path(STATE_FILE).open() as f:
                     state = json.load(f)
                 self.initial_balance = state.get("initial_balance")
                 self.peak_balance = state.get("peak_balance", self.initial_balance)
@@ -766,17 +776,18 @@ class RiskManager:
             "peak_balance": self.peak_balance,
             "nuclear_triggered": self.nuclear_triggered,
             "current_regime": self.current_regime,
-            "last_updated": datetime.now(timezone.utc).isoformat(),
+            "last_updated": datetime.now(UTC).isoformat(),
         }
         try:
-            with open(STATE_FILE, "w") as f:
+            from pathlib import Path
+            with Path(STATE_FILE).open("w") as f:
                 json.dump(state, f, indent=2)
         except Exception as e:
             logger.error(f"Failed to save state: {e}")
 
     # ----- Nuclear Option -----
 
-    def trigger_nuclear_option(self, reason: str):
+    def trigger_nuclear_option(self, reason: str):  # noqa: C901
         """
         EMERGENCY STOP — Last line of defense against catastrophic losses.
 
@@ -855,18 +866,18 @@ class RiskManager:
                 for sweep in range(MAX_RETRY_SWEEPS):
                     if exit_failures == 0:
                         break
-                    
+
                     logger.warning(
                         f"⚠️ Retry sweep #{sweep + 1}/{MAX_RETRY_SWEEPS} "
                         f"for {exit_failures} failed exit(s)..."
                     )
                     time.sleep(RETRY_DELAY * (sweep + 1))
-                    
+
                     trades = self.api_client.get_open_trades()
                     if not trades:
                         logger.info("All trades successfully closed.")
                         break
-                    
+
                     exit_failures = 0
                     for trade in trades:
                         trade_id = trade.get("trade_id")
@@ -928,7 +939,7 @@ class RiskManager:
         # Update peak (high-water mark)
         if self.peak_balance is None:
             self.peak_balance = self.initial_balance
-            
+
         if current_balance > self.peak_balance:
             self.peak_balance = current_balance
             self._save_state()
@@ -1025,7 +1036,7 @@ class RiskManager:
         NEVER calls any external LLM or sentiment API.
         """
         DRAWDOWN_CHECK_INTERVAL = CHECK_INTERVAL_SECONDS
-        
+
         while not self.nuclear_triggered and not self._shutdown_requested:
             try:
                 if self._check_drawdown():
@@ -1035,13 +1046,12 @@ class RiskManager:
                 logger.error(f"Drawdown guard error: {e}", exc_info=True)
                 time.sleep(DRAWDOWN_CHECK_INTERVAL)
 
-    def _llm_sentinel_loop(self):
+    def _llm_sentinel_loop(self):  # noqa: C901
         """
         Lower-priority LLM analysis. Runs in background thread.
         If it blocks on Gemini, the drawdown guard is NOT affected.
         """
-        LLM_INTERVAL = CHECK_INTERVAL_SECONDS * LLM_CHECK_INTERVAL_CYCLES
-        
+
         while not self.nuclear_triggered and not self._shutdown_requested:
             try:
                 self.cycle_count += 1
@@ -1051,24 +1061,35 @@ class RiskManager:
                 if self.cycle_count % 15 == 0:
                     whitelist = self.api_client.get_whitelist()
                     if whitelist:
-                        logger.info(f"🔍 Proactive batch analysis of {len(whitelist)} whitelist pairs...")
+                        logger.info(
+                            f"🔍 Proactive batch analysis of {len(whitelist)} whitelist pairs..."
+                        )
                         batch_result = self.sentiment.analyze_whitelist_batch(whitelist)
                         if batch_result:
                             for pair, analysis in batch_result.items():
                                 action = analysis.get("action", "HODL")
                                 reason = analysis.get("reason", "N/A")
-                                
+
                                 if action == "CONTAGION":
-                                    self.trigger_nuclear_option(f"CONTAGION risk detected for {pair}: {reason}")
+                                    self.trigger_nuclear_option(
+                                        f"CONTAGION risk detected for {pair}: {reason}"
+                                    )
                                     break
                                 elif action == "EXIT_PAIR":
-                                    logger.warning(f"🚨 PROACTIVE EXIT_PAIR for {pair}: {reason}. Initiating blacklist and force exit if open.")
+                                    logger.warning(
+                                        f"🚨 PROACTIVE EXIT_PAIR for {pair}: {reason}. "
+                                        "Initiating blacklist and force exit if open."
+                                    )
                                     # Add to blacklist so it won't be bought
                                     self.api_client.add_to_blacklist([pair])
                                     # Just in case we already hold it, try to force exit
                                     trades = self.api_client.get_open_trades()
                                     if trades:
-                                        trade_ids_to_close = [t.get("trade_id") for t in trades if t.get("pair") == pair]
+                                        trade_ids_to_close = [
+                                            t.get("trade_id")
+                                            for t in trades
+                                            if t.get("pair") == pair
+                                        ]
                                         for tid in trade_ids_to_close:
                                             self.api_client.force_exit(tid)
 
@@ -1091,11 +1112,13 @@ class RiskManager:
                         )
                         break
                     elif regime == "bear":
-                        logger.warning("🐻 Market regime: BEAR — Elevated risk. Monitoring closely.")
+                        logger.warning(
+                            "🐻 Market regime: BEAR — Elevated risk. Monitoring closely."
+                        )
                     elif regime == "bull":
                         logger.info("🟢 Market regime: BULL — Normal operations.")
 
-                # Sleep until next check (for Sentinel, we sleep shorter so it can react quicker to shutdown)
+                # Sleep until next check
                 time.sleep(CHECK_INTERVAL_SECONDS)
 
             except Exception as e:
