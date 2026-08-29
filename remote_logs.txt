@@ -1,0 +1,400 @@
+freqtrade_risk_manager  | 2026-08-29 11:57:30 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 11:58:30 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 11:59:30 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:00:30 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:00:43 [INFO] ZeroBurn.RiskManager: 📊 Fear & Greed Index: 68 (Greed)
+freqtrade_risk_manager  | 2026-08-29 12:00:43 [INFO] google_genai.models: AFC is enabled with max remote calls: 10.
+freqtrade_risk_manager  | 2026-08-29 12:00:58 [INFO] httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent "HTTP/1.1 504 Gateway Timeout"
+freqtrade_risk_manager  | 2026-08-29 12:00:58 [WARNING] ZeroBurn.RiskManager: Gemini API call failed: ServerError: 504 DEADLINE_EXCEEDED. {'error': {'code': 504, 'message': 'Deadline expired before operation could complete.', 'status': 'DEADLINE_EXCEEDED'}}
+freqtrade_risk_manager  | 2026-08-29 12:00:58 [INFO] ZeroBurn.RiskManager: LLM failure count: 1/3
+freqtrade_risk_manager  | 2026-08-29 12:00:58 [INFO] ZeroBurn.RiskManager: 📊 Using FGI deterministic fallback: FGI=68 → regime=BULL
+freqtrade_risk_manager  | 2026-08-29 12:00:58 [INFO] ZeroBurn.RiskManager: 🟢 Market regime: BULL — Normal operations.
+freqtrade_risk_manager  | 2026-08-29 12:01:30 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:02:30 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:03:30 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:04:31 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:05:31 [INFO] ZeroBurn.RiskManager: 🔄 Access token refreshed successfully
+freqtrade_risk_manager  | 2026-08-29 12:05:31 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:05:58 [INFO] ZeroBurn.RiskManager: 📊 Fear & Greed Index: 68 (Greed)
+freqtrade_risk_manager  | 2026-08-29 12:05:58 [INFO] google_genai.models: AFC is enabled with max remote calls: 10.
+freqtrade_risk_manager  | 2026-08-29 12:05:59 [INFO] httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent "HTTP/1.1 200 OK"
+freqtrade_risk_manager  | 2026-08-29 12:05:59 [INFO] ZeroBurn.RiskManager: 🤖 Gemini analysis: regime=BULL, confidence=0.85, reason='Fear & Greed Index indicates healthy market sentiment in Greed territory with no systemic panic triggers present.'
+freqtrade_risk_manager  | 2026-08-29 12:05:59 [INFO] ZeroBurn.RiskManager: 🟢 Market regime: BULL — Normal operations.
+freqtrade_risk_manager  | 2026-08-29 12:06:31 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:07:31 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:08:31 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:09:31 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:10:31 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:10:59 [INFO] ZeroBurn.RiskManager: 🔍 Proactive batch analysis of 42 whitelist pairs...
+freqtrade               | 2026-08-29 12:23:16,003 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade_risk_manager  | 2026-08-29 12:10:59 [INFO] google_genai.models: AFC is enabled with max remote calls: 10.
+freqtrade               | 2026-08-29 12:24:16,004 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade_risk_manager  | 2026-08-29 12:11:00 [INFO] httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent "HTTP/1.1 200 OK"
+freqtrade               | 2026-08-29 12:25:31,000 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade_risk_manager  | 2026-08-29 12:11:00 [INFO] ZeroBurn.RiskManager: 🧠 Proactive batch analysis for 42 pairs completed. Flags: None
+freqtrade               | 2026-08-29 12:26:31,001 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade_risk_manager  | 2026-08-29 12:11:00 [INFO] ZeroBurn.RiskManager: 📊 Fear & Greed Index: 68 (Greed)
+freqtrade               | 2026-08-29 12:27:31,002 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade_risk_manager  | 2026-08-29 12:11:00 [INFO] google_genai.models: AFC is enabled with max remote calls: 10.
+freqtrade               | 2026-08-29 12:28:31,003 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade_risk_manager  | 2026-08-29 12:11:01 [INFO] httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent "HTTP/1.1 200 OK"
+freqtrade               | 2026-08-29 12:29:17,277 - rangestabilityfilter - INFO - Removed BMT/USDT from whitelist, because rate of change over 3 days is 1.045, which is above the threshold of 0.95.
+freqtrade               | 2026-08-29 12:29:17,278 - rangestabilityfilter - INFO - Removed HEMI/USDT from whitelist, because rate of change over 3 days is 1.047, which is above the threshold of 0.95.
+freqtrade               | 2026-08-29 12:29:17,400 - freqtrade.plugins.pairlistmanager - INFO - Whitelist with 42 pairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'ZEC/USDT', 'ENA/USDT', 'XAUT/USDT', 'DOGE/USDT', 
+freqtrade               | 'TRX/USDT', 'SUI/USDT', 'PUMP/USDT', 'PEPE/USDT', 'PAXG/USDT', 'ADA/USDT', 'LINK/USDT', 'SNDKB/USDT', 'TAO/USDT', 'NEAR/USDT', 'WLD/USDT', 'UNI/USDT', 'LTC/USDT', 'CHIP/USDT', 'AAVE/USDT', 
+freqtrade               | 'CRCLB/USDT', 'FET/USDT', 'BCH/USDT', 'HBAR/USDT', 'ASTER/USDT', 'AVAX/USDT', 'XLM/USDT', 'PENGU/USDT', 'ZRO/USDT', 'ONDO/USDT', 'SPCXB/USDT', 'XPL/USDT', 'MSTRB/USDT', 'TURBO/USDT', 'COTI/USDT', 
+freqtrade               | 'OPG/USDT', 'DASH/USDT', 'BICO/USDT', 'ICP/USDT']
+freqtrade               | 2026-08-29 12:29:17,402 - freqtrade.exchange.exchange - INFO - Couldn't reuse watch for ICP/USDT, 5m, falling back to REST api. False, 1788006300000, 0, 2026-08-29T12:25:00, 1970-01-01T00:00:00 
+freqtrade               | 2026-08-29 12:29:17,402 - freqtrade.exchange.exchange - INFO - Couldn't reuse watch for ICP/USDT, 1h, falling back to REST api. False, 1788004800000, 0, 2026-08-29T12:00:00, 1970-01-01T00:00:00 
+freqtrade               | 2026-08-29 12:29:17,403 - freqtrade.exchange.exchange - INFO - Couldn't reuse watch for ICP/USDT, 15m, falling back to REST api. False, 1788005700000, 0, 2026-08-29T12:15:00, 1970-01-01T00:00:00 
+freqtrade               | 2026-08-29 12:29:17,404 - freqtrade.exchange.exchange - INFO - Couldn't reuse watch for ICP/USDT, 4h, falling back to REST api. False, 1788004800000, 0, 2026-08-29T12:00:00, 1970-01-01T00:00:00 
+freqtrade               | 2026-08-29 12:29:17,405 - freqtrade.exchange.exchange - INFO - Couldn't reuse watch for ICP/USDT, 1d, falling back to REST api. False, 1787961600000, 0, 2026-08-29T00:00:00, 1970-01-01T00:00:00 
+freqtrade               | 2026-08-29 12:29:31,004 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:30:46,000 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:31:46,001 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:32:46,002 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:33:46,004 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:34:46,005 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:35:01,125 - freqtrade.exchange.exchange_ws - INFO - Removing ('POL/USDT', '15m', <CandleType.SPOT: 'spot'>) from websocket watchlist.
+freqtrade               | 2026-08-29 12:35:01,126 - freqtrade.exchange.exchange_ws - INFO - Removing ('POL/USDT', '5m', <CandleType.SPOT: 'spot'>) from websocket watchlist.
+freqtrade               | 2026-08-29 12:35:01,126 - freqtrade.exchange.exchange_ws - INFO - Removal done: new watch list (172)
+freqtrade               | 2026-08-29 12:35:02,898 - freqtrade.exchange.exchange_ws - INFO - POL/USDT, 5m, spot - Task finished - done
+freqtrade               | 2026-08-29 12:35:02,899 - freqtrade.exchange.exchange_ws - INFO - POL/USDT, 15m, spot - Task finished - done
+freqtrade               | 2026-08-29 12:36:01,000 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:37:01,001 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:38:01,002 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:39:01,003 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:40:16,000 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:41:16,001 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:42:16,002 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:43:16,003 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:44:16,004 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:45:31,000 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:46:31,001 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:46:31,003 - rangestabilityfilter - INFO - Removed XAUT/USDT from whitelist, no candles found.
+freqtrade               | 2026-08-29 12:46:31,003 - rangestabilityfilter - INFO - Removed ONG/USDT from whitelist, no candles found.
+freqtrade               | 2026-08-29 12:46:31,128 - freqtrade.plugins.pairlistmanager - INFO - Whitelist with 41 pairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'ZEC/USDT', 'ENA/USDT', 'DOGE/USDT', 'TRX/USDT', 
+freqtrade               | 'SUI/USDT', 'PUMP/USDT', 'PEPE/USDT', 'PAXG/USDT', 'ADA/USDT', 'LINK/USDT', 'SNDKB/USDT', 'TAO/USDT', 'NEAR/USDT', 'WLD/USDT', 'UNI/USDT', 'LTC/USDT', 'CHIP/USDT', 'AAVE/USDT', 'CRCLB/USDT', 
+freqtrade               | 'FET/USDT', 'BCH/USDT', 'HBAR/USDT', 'ASTER/USDT', 'AVAX/USDT', 'XLM/USDT', 'PENGU/USDT', 'ZRO/USDT', 'ONDO/USDT', 'SPCXB/USDT', 'XPL/USDT', 'MSTRB/USDT', 'TURBO/USDT', 'COTI/USDT', 'OPG/USDT', 
+freqtrade               | 'DASH/USDT', 'BICO/USDT', 'ICP/USDT']
+freqtrade               | 2026-08-29 12:46:33,239 - freqtrade.wallets - INFO - Wallets synced.
+freqtrade               | 2026-08-29 12:46:46,004 - rangestabilityfilter - INFO - Removed ONG/USDT from whitelist, because rate of change over 3 days is 2.234, which is above the threshold of 0.95.
+freqtrade               | 2026-08-29 12:47:31,002 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:48:31,003 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:49:31,004 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:50:46,000 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:51:46,001 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:52:46,002 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:53:46,003 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:54:46,005 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:56:01,000 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:57:01,001 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:58:01,002 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:59:01,003 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 12:59:18,703 - VolumePairList - INFO - Pair BNB/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,704 - VolumePairList - INFO - Pair TUSD/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,704 - VolumePairList - INFO - Pair ICX/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,705 - VolumePairList - INFO - Pair USDC/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,705 - VolumePairList - INFO - Pair ONE/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,706 - VolumePairList - INFO - Pair CHZ/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,706 - VolumePairList - INFO - Pair STX/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,706 - VolumePairList - INFO - Pair FTT/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,707 - VolumePairList - INFO - Pair EUR/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,707 - VolumePairList - INFO - Pair LSK/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,707 - VolumePairList - INFO - Pair MBL/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,708 - VolumePairList - INFO - Pair NMR/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,708 - VolumePairList - INFO - Pair LUNA/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,709 - VolumePairList - INFO - Pair BEL/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,709 - VolumePairList - INFO - Pair JUV/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,709 - VolumePairList - INFO - Pair PSG/USDT in your blacklist. Removing it from whitelist...
+freqtrade_risk_manager  | 2026-08-29 12:11:01 [INFO] ZeroBurn.RiskManager: 🤖 Gemini analysis: regime=BULL, confidence=0.85, reason='Market sentiment is in Greed territory with no systemic crises or panic indicators present.'
+freqtrade_risk_manager  | 2026-08-29 12:11:01 [INFO] ZeroBurn.RiskManager: 🟢 Market regime: BULL — Normal operations.
+freqtrade_risk_manager  | 2026-08-29 12:11:31 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:12:31 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:13:31 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:14:31 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:15:31 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:16:01 [INFO] ZeroBurn.RiskManager: 📊 Fear & Greed Index: 68 (Greed)
+freqtrade_risk_manager  | 2026-08-29 12:16:01 [INFO] google_genai.models: AFC is enabled with max remote calls: 10.
+freqtrade_risk_manager  | 2026-08-29 12:16:02 [INFO] httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent "HTTP/1.1 200 OK"
+freqtrade_risk_manager  | 2026-08-29 12:16:02 [INFO] ZeroBurn.RiskManager: 🤖 Gemini analysis: regime=BULL, confidence=0.85, reason='Market sentiment is in Greed territory with no systemic shocks or liquidity crises present.'
+freqtrade_risk_manager  | 2026-08-29 12:16:02 [INFO] ZeroBurn.RiskManager: 🟢 Market regime: BULL — Normal operations.
+freqtrade_risk_manager  | 2026-08-29 12:16:31 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:17:31 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:18:31 [INFO] ZeroBurn.RiskManager: 🔄 Access token refreshed successfully
+freqtrade_risk_manager  | 2026-08-29 12:18:31 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:19:31 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:20:32 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:21:03 [INFO] ZeroBurn.RiskManager: 📊 Fear & Greed Index: 68 (Greed)
+freqtrade_risk_manager  | 2026-08-29 12:21:03 [INFO] google_genai.models: AFC is enabled with max remote calls: 10.
+freqtrade_risk_manager  | 2026-08-29 12:21:03 [INFO] httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent "HTTP/1.1 200 OK"
+freqtrade_risk_manager  | 2026-08-29 12:21:03 [INFO] ZeroBurn.RiskManager: 🤖 Gemini analysis: regime=BULL, confidence=0.85, reason='Fear & Greed index indicates positive sentiment in Greed territory with no systemic shocks or panic triggers present.'
+freqtrade_risk_manager  | 2026-08-29 12:21:03 [INFO] ZeroBurn.RiskManager: 🟢 Market regime: BULL — Normal operations.
+freqtrade_risk_manager  | 2026-08-29 12:21:32 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:22:32 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:23:32 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:24:32 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:25:32 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:26:04 [INFO] ZeroBurn.RiskManager: 🔍 Proactive batch analysis of 42 whitelist pairs...
+freqtrade_risk_manager  | 2026-08-29 12:26:04 [INFO] google_genai.models: AFC is enabled with max remote calls: 10.
+freqtrade_risk_manager  | 2026-08-29 12:26:04 [INFO] httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent "HTTP/1.1 200 OK"
+freqtrade_risk_manager  | 2026-08-29 12:26:04 [INFO] ZeroBurn.RiskManager: 🧠 Proactive batch analysis for 42 pairs completed. Flags: None
+freqtrade_risk_manager  | 2026-08-29 12:26:05 [INFO] ZeroBurn.RiskManager: 📊 Fear & Greed Index: 68 (Greed)
+freqtrade_risk_manager  | 2026-08-29 12:26:05 [INFO] google_genai.models: AFC is enabled with max remote calls: 10.
+freqtrade_risk_manager  | 2026-08-29 12:26:05 [INFO] httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent "HTTP/1.1 200 OK"
+freqtrade_risk_manager  | 2026-08-29 12:26:05 [INFO] ZeroBurn.RiskManager: 🤖 Gemini analysis: regime=BULL, confidence=0.85, reason='Fear and Greed index indicates positive market sentiment in Greed territory with no systemic crisis indicators present.'
+freqtrade_risk_manager  | 2026-08-29 12:26:05 [INFO] ZeroBurn.RiskManager: 🟢 Market regime: BULL — Normal operations.
+freqtrade_risk_manager  | 2026-08-29 12:26:32 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:27:32 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:28:32 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:29:32 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:30:32 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:31:06 [INFO] ZeroBurn.RiskManager: 📊 Fear & Greed Index: 68 (Greed)
+freqtrade_risk_manager  | 2026-08-29 12:31:06 [INFO] google_genai.models: AFC is enabled with max remote calls: 10.
+freqtrade_risk_manager  | 2026-08-29 12:31:06 [INFO] httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent "HTTP/1.1 200 OK"
+freqtrade_risk_manager  | 2026-08-29 12:31:06 [INFO] ZeroBurn.RiskManager: 🤖 Gemini analysis: regime=BULL, confidence=0.85, reason='Fear and Greed index indicates positive market sentiment in the greed zone with no systemic black swan events present.'
+freqtrade_risk_manager  | 2026-08-29 12:31:06 [INFO] ZeroBurn.RiskManager: 🟢 Market regime: BULL — Normal operations.
+freqtrade_risk_manager  | 2026-08-29 12:31:32 [INFO] ZeroBurn.RiskManager: 🔄 Access token refreshed successfully
+freqtrade_risk_manager  | 2026-08-29 12:31:32 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:32:32 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:33:32 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:34:32 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:35:32 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:36:07 [INFO] ZeroBurn.RiskManager: 📊 Fear & Greed Index: 68 (Greed)
+freqtrade_risk_manager  | 2026-08-29 12:36:07 [INFO] google_genai.models: AFC is enabled with max remote calls: 10.
+freqtrade_risk_manager  | 2026-08-29 12:36:08 [INFO] httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent "HTTP/1.1 200 OK"
+freqtrade_risk_manager  | 2026-08-29 12:36:08 [INFO] ZeroBurn.RiskManager: 🤖 Gemini analysis: regime=BULL, confidence=0.82, reason='Market sentiment remains in the Greed territory with stable conditions and no systemic threats detected.'
+freqtrade_risk_manager  | 2026-08-29 12:36:08 [INFO] ZeroBurn.RiskManager: 🟢 Market regime: BULL — Normal operations.
+freqtrade_risk_manager  | 2026-08-29 12:36:32 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:37:32 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:38:32 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:39:32 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:40:32 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:41:08 [INFO] ZeroBurn.RiskManager: 🔍 Proactive batch analysis of 42 whitelist pairs...
+freqtrade_risk_manager  | 2026-08-29 12:41:08 [INFO] google_genai.models: AFC is enabled with max remote calls: 10.
+freqtrade_risk_manager  | 2026-08-29 12:41:08 [INFO] httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent "HTTP/1.1 200 OK"
+freqtrade_risk_manager  | 2026-08-29 12:41:08 [INFO] ZeroBurn.RiskManager: 🧠 Proactive batch analysis for 42 pairs completed. Flags: None
+freqtrade_risk_manager  | 2026-08-29 12:41:09 [INFO] ZeroBurn.RiskManager: 📊 Fear & Greed Index: 68 (Greed)
+freqtrade_risk_manager  | 2026-08-29 12:41:09 [INFO] google_genai.models: AFC is enabled with max remote calls: 10.
+freqtrade_risk_manager  | 2026-08-29 12:41:09 [INFO] httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent "HTTP/1.1 200 OK"
+freqtrade_risk_manager  | 2026-08-29 12:41:09 [INFO] ZeroBurn.RiskManager: 🤖 Gemini analysis: regime=BULL, confidence=0.85, reason='Fear & Greed Index indicates positive market sentiment in the greed zone with no systemic black swan events.'
+freqtrade_risk_manager  | 2026-08-29 12:41:09 [INFO] ZeroBurn.RiskManager: 🟢 Market regime: BULL — Normal operations.
+freqtrade_risk_manager  | 2026-08-29 12:41:33 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:42:33 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:43:33 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:44:33 [INFO] ZeroBurn.RiskManager: 🔄 Access token refreshed successfully
+freqtrade_risk_manager  | 2026-08-29 12:44:33 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:45:33 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:46:10 [INFO] ZeroBurn.RiskManager: 📊 Fear & Greed Index: 68 (Greed)
+freqtrade_risk_manager  | 2026-08-29 12:46:10 [INFO] google_genai.models: AFC is enabled with max remote calls: 10.
+freqtrade_risk_manager  | 2026-08-29 12:46:11 [INFO] httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent "HTTP/1.1 200 OK"
+freqtrade_risk_manager  | 2026-08-29 12:46:11 [INFO] ZeroBurn.RiskManager: 🤖 Gemini analysis: regime=BULL, confidence=0.85, reason='Fear & Greed Index indicates positive market sentiment in Greed territory with no systemic panic triggers present.'
+freqtrade_risk_manager  | 2026-08-29 12:46:11 [INFO] ZeroBurn.RiskManager: 🟢 Market regime: BULL — Normal operations.
+freqtrade_risk_manager  | 2026-08-29 12:46:33 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:47:33 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:48:33 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:49:33 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:50:33 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:51:11 [INFO] ZeroBurn.RiskManager: 📊 Fear & Greed Index: 68 (Greed)
+freqtrade_risk_manager  | 2026-08-29 12:51:11 [INFO] google_genai.models: AFC is enabled with max remote calls: 10.
+freqtrade_risk_manager  | 2026-08-29 12:51:12 [INFO] httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent "HTTP/1.1 200 OK"
+freqtrade_risk_manager  | 2026-08-29 12:51:12 [INFO] ZeroBurn.RiskManager: 🤖 Gemini analysis: regime=BULL, confidence=0.85, reason='Market sentiment is in 'Greed' with no systemic black swan events or panic criteria met.'
+freqtrade_risk_manager  | 2026-08-29 12:51:12 [INFO] ZeroBurn.RiskManager: 🟢 Market regime: BULL — Normal operations.
+freqtrade_risk_manager  | 2026-08-29 12:51:33 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:52:33 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:53:33 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:54:33 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:55:33 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:56:12 [INFO] ZeroBurn.RiskManager: 🔍 Proactive batch analysis of 42 whitelist pairs...
+freqtrade_risk_manager  | 2026-08-29 12:56:12 [INFO] google_genai.models: AFC is enabled with max remote calls: 10.
+freqtrade_risk_manager  | 2026-08-29 12:56:12 [INFO] httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent "HTTP/1.1 200 OK"
+freqtrade_risk_manager  | 2026-08-29 12:56:12 [INFO] ZeroBurn.RiskManager: 🧠 Proactive batch analysis for 42 pairs completed. Flags: None
+freqtrade_risk_manager  | 2026-08-29 12:56:13 [INFO] ZeroBurn.RiskManager: 📊 Fear & Greed Index: 68 (Greed)
+freqtrade_risk_manager  | 2026-08-29 12:56:13 [INFO] google_genai.models: AFC is enabled with max remote calls: 10.
+freqtrade_risk_manager  | 2026-08-29 12:56:14 [INFO] httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent "HTTP/1.1 200 OK"
+freqtrade_risk_manager  | 2026-08-29 12:56:14 [INFO] ZeroBurn.RiskManager: 🤖 Gemini analysis: regime=BULL, confidence=0.85, reason='Fear & Greed Index indicates healthy market greed with no systemic black swan events present.'
+freqtrade_risk_manager  | 2026-08-29 12:56:14 [INFO] ZeroBurn.RiskManager: 🟢 Market regime: BULL — Normal operations.
+freqtrade_risk_manager  | 2026-08-29 12:56:33 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:57:33 [INFO] ZeroBurn.RiskManager: 🔄 Access token refreshed successfully
+freqtrade_risk_manager  | 2026-08-29 12:57:33 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:58:33 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 12:59:33 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 13:00:33 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 13:01:14 [INFO] ZeroBurn.RiskManager: 📊 Fear & Greed Index: 68 (Greed)
+freqtrade_risk_manager  | 2026-08-29 13:01:14 [INFO] google_genai.models: AFC is enabled with max remote calls: 10.
+freqtrade_risk_manager  | 2026-08-29 13:01:29 [INFO] httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent "HTTP/1.1 504 Gateway Timeout"
+freqtrade_risk_manager  | 2026-08-29 13:01:29 [WARNING] ZeroBurn.RiskManager: Gemini API call failed: ServerError: 504 DEADLINE_EXCEEDED. {'error': {'code': 504, 'message': 'Deadline expired before operation could complete.', 'status': 'DEADLINE_EXCEEDED'}}
+freqtrade_risk_manager  | 2026-08-29 13:01:29 [INFO] ZeroBurn.RiskManager: LLM failure count: 1/3
+freqtrade_risk_manager  | 2026-08-29 13:01:29 [INFO] ZeroBurn.RiskManager: 📊 Using FGI deterministic fallback: FGI=68 → regime=BULL
+freqtrade_risk_manager  | 2026-08-29 13:01:29 [INFO] ZeroBurn.RiskManager: 🟢 Market regime: BULL — Normal operations.
+freqtrade_risk_manager  | 2026-08-29 13:01:33 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 13:02:33 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 13:03:33 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 13:04:34 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 13:05:34 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 13:06:29 [INFO] ZeroBurn.RiskManager: 📊 Fear & Greed Index: 68 (Greed)
+freqtrade_risk_manager  | 2026-08-29 13:06:29 [INFO] google_genai.models: AFC is enabled with max remote calls: 10.
+freqtrade_risk_manager  | 2026-08-29 13:06:30 [INFO] httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent "HTTP/1.1 200 OK"
+freqtrade_risk_manager  | 2026-08-29 13:06:30 [INFO] ZeroBurn.RiskManager: 🤖 Gemini analysis: regime=BULL, confidence=0.80, reason='Fear & Greed Index in Greed territory with no systemic black swan events or panic catalysts present.'
+freqtrade_risk_manager  | 2026-08-29 13:06:30 [INFO] ZeroBurn.RiskManager: 🟢 Market regime: BULL — Normal operations.
+freqtrade_risk_manager  | 2026-08-29 13:06:34 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 13:07:34 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 13:08:34 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 13:09:34 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 13:10:34 [INFO] ZeroBurn.RiskManager: 🔄 Access token refreshed successfully
+freqtrade_risk_manager  | 2026-08-29 13:10:34 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 13:11:30 [INFO] ZeroBurn.RiskManager: 🔍 Proactive batch analysis of 42 whitelist pairs...
+freqtrade_risk_manager  | 2026-08-29 13:11:30 [INFO] google_genai.models: AFC is enabled with max remote calls: 10.
+freqtrade_risk_manager  | 2026-08-29 13:11:31 [INFO] httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent "HTTP/1.1 200 OK"
+freqtrade_risk_manager  | 2026-08-29 13:11:31 [INFO] ZeroBurn.RiskManager: 🧠 Proactive batch analysis for 42 pairs completed. Flags: None
+freqtrade_risk_manager  | 2026-08-29 13:11:31 [INFO] ZeroBurn.RiskManager: 📊 Fear & Greed Index: 68 (Greed)
+freqtrade_risk_manager  | 2026-08-29 13:11:31 [INFO] google_genai.models: AFC is enabled with max remote calls: 10.
+freqtrade_risk_manager  | 2026-08-29 13:11:32 [INFO] httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent "HTTP/1.1 200 OK"
+freqtrade_risk_manager  | 2026-08-29 13:11:32 [INFO] ZeroBurn.RiskManager: 🤖 Gemini analysis: regime=BULL, confidence=0.85, reason='Fear and Greed Index shows healthy greed at 68 with no systemic black swan events reported.'
+freqtrade_risk_manager  | 2026-08-29 13:11:32 [INFO] ZeroBurn.RiskManager: 🟢 Market regime: BULL — Normal operations.
+freqtrade_risk_manager  | 2026-08-29 13:11:34 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 13:12:34 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 13:13:34 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 13:14:34 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 13:15:34 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 13:16:32 [INFO] ZeroBurn.RiskManager: 📊 Fear & Greed Index: 68 (Greed)
+freqtrade_risk_manager  | 2026-08-29 13:16:32 [INFO] google_genai.models: AFC is enabled with max remote calls: 10.
+freqtrade_risk_manager  | 2026-08-29 13:16:33 [INFO] httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent "HTTP/1.1 200 OK"
+freqtrade_risk_manager  | 2026-08-29 13:16:33 [INFO] ZeroBurn.RiskManager: 🤖 Gemini analysis: regime=BULL, confidence=0.85, reason='Market sentiment is in the Greed zone with stable conditions and no systemic threats present.'
+freqtrade_risk_manager  | 2026-08-29 13:16:33 [INFO] ZeroBurn.RiskManager: 🟢 Market regime: BULL — Normal operations.
+freqtrade_risk_manager  | 2026-08-29 13:16:34 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 13:17:34 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 13:18:34 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 13:19:34 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 13:20:34 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 13:21:34 [INFO] ZeroBurn.RiskManager: 📊 Fear & Greed Index: 68 (Greed)
+freqtrade_risk_manager  | 2026-08-29 13:21:34 [INFO] google_genai.models: AFC is enabled with max remote calls: 10.
+freqtrade_risk_manager  | 2026-08-29 13:21:34 [INFO] ZeroBurn.RiskManager: 💰 Balance: 1000.00 USDT | Peak: 1000.00 USDT | Profit: +0.00% from initial
+freqtrade_risk_manager  | 2026-08-29 13:21:34 [INFO] httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent "HTTP/1.1 200 OK"
+freqtrade_risk_manager  | 2026-08-29 13:21:34 [INFO] ZeroBurn.RiskManager: 🤖 Gemini analysis: regime=BULL, confidence=0.85, reason='Market sentiment is in the Greed zone with stable conditions and no systemic threats detected.'
+freqtrade_risk_manager  | 2026-08-29 13:21:34 [INFO] ZeroBurn.RiskManager: 🟢 Market regime: BULL — Normal operations.
+freqtrade               | 2026-08-29 12:59:18,710 - VolumePairList - INFO - Pair ATM/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,710 - VolumePairList - INFO - Pair ASR/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,710 - VolumePairList - INFO - Pair RIF/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,711 - VolumePairList - INFO - Pair ACM/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,711 - VolumePairList - INFO - Pair ALICE/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,711 - VolumePairList - INFO - Pair TLM/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,712 - VolumePairList - INFO - Pair BAR/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,712 - VolumePairList - INFO - Pair DEXE/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,712 - VolumePairList - INFO - Pair FLOW/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,713 - VolumePairList - INFO - Pair USDP/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,713 - VolumePairList - INFO - Pair YGG/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,713 - VolumePairList - INFO - Pair AGLD/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,714 - VolumePairList - INFO - Pair RARE/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,714 - VolumePairList - INFO - Pair MOVR/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,714 - VolumePairList - INFO - Pair CITY/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,715 - VolumePairList - INFO - Pair ACH/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,715 - VolumePairList - INFO - Pair GLMR/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,715 - VolumePairList - INFO - Pair XNO/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,716 - VolumePairList - INFO - Pair ALPINE/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,716 - VolumePairList - INFO - Pair MAGIC/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,716 - VolumePairList - INFO - Pair USTC/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,717 - VolumePairList - INFO - Pair PROM/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,717 - VolumePairList - INFO - Pair QKC/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,718 - VolumePairList - INFO - Pair FDUSD/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,718 - VolumePairList - INFO - Pair ARK/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,718 - VolumePairList - INFO - Pair MEME/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,718 - VolumePairList - INFO - Pair 1000SATS/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,719 - VolumePairList - INFO - Pair ACE/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,719 - VolumePairList - INFO - Pair XAI/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,719 - VolumePairList - INFO - Pair JUP/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,720 - VolumePairList - INFO - Pair DYM/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,720 - VolumePairList - INFO - Pair PIXEL/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,720 - VolumePairList - INFO - Pair PORTAL/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,721 - VolumePairList - INFO - Pair W/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,721 - VolumePairList - INFO - Pair TNSR/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,721 - VolumePairList - INFO - Pair SAGA/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,722 - VolumePairList - INFO - Pair BB/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,722 - VolumePairList - INFO - Pair LISTA/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,722 - VolumePairList - INFO - Pair EURI/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,723 - VolumePairList - INFO - Pair NEIRO/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,723 - VolumePairList - INFO - Pair HMSTR/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,723 - VolumePairList - INFO - Pair ACT/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,724 - VolumePairList - INFO - Pair 1000CAT/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,724 - VolumePairList - INFO - Pair AIXBT/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,724 - VolumePairList - INFO - Pair S/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,725 - VolumePairList - INFO - Pair TRUMP/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,725 - VolumePairList - INFO - Pair ANIME/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,725 - VolumePairList - INFO - Pair 1000CHEEMS/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,725 - VolumePairList - INFO - Pair TST/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,726 - VolumePairList - INFO - Pair LAYER/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,726 - VolumePairList - INFO - Pair HEI/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,726 - VolumePairList - INFO - Pair GPS/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,727 - VolumePairList - INFO - Pair EPIC/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,727 - VolumePairList - INFO - Pair XUSD/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,727 - VolumePairList - INFO - Pair NIL/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,728 - VolumePairList - INFO - Pair MUBARAK/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,728 - VolumePairList - INFO - Pair TUT/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,728 - VolumePairList - INFO - Pair BROCCOLI714/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,729 - VolumePairList - INFO - Pair BANANAS31/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,729 - VolumePairList - INFO - Pair WCT/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,729 - VolumePairList - INFO - Pair SYRUP/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,730 - VolumePairList - INFO - Pair USD1/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,730 - VolumePairList - INFO - Pair SOPH/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,730 - VolumePairList - INFO - Pair RESOLV/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,731 - VolumePairList - INFO - Pair SAHARA/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,731 - VolumePairList - INFO - Pair DOLO/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,731 - VolumePairList - INFO - Pair WLFI/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,732 - VolumePairList - INFO - Pair EDEN/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,732 - VolumePairList - INFO - Pair NOM/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,733 - VolumePairList - INFO - Pair ENSO/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,733 - VolumePairList - INFO - Pair YB/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,733 - VolumePairList - INFO - Pair F/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,734 - VolumePairList - INFO - Pair BANK/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,734 - VolumePairList - INFO - Pair MET/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,734 - VolumePairList - INFO - Pair 币安人生/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,734 - VolumePairList - INFO - Pair ZKP/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,735 - VolumePairList - INFO - Pair U/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,735 - VolumePairList - INFO - Pair RLUSD/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,735 - VolumePairList - INFO - Pair ESP/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,736 - VolumePairList - INFO - Pair OPN/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,736 - VolumePairList - INFO - Pair NIGHT/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,736 - VolumePairList - INFO - Pair KAT/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,737 - VolumePairList - INFO - Pair USDS/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,737 - VolumePairList - INFO - Pair AIGENSYN/USDT in your blacklist. Removing it from whitelist...
+freqtrade               | 2026-08-29 12:59:18,876 - rangestabilityfilter - INFO - Removed BMT/USDT from whitelist, because rate of change over 3 days is 1.045, which is above the threshold of 0.95.
+freqtrade               | 2026-08-29 12:59:18,877 - rangestabilityfilter - INFO - Removed HEMI/USDT from whitelist, because rate of change over 3 days is 1.047, which is above the threshold of 0.95.
+freqtrade               | 2026-08-29 12:59:19,000 - freqtrade.plugins.pairlistmanager - INFO - Whitelist with 42 pairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'ZEC/USDT', 'ENA/USDT', 'XAUT/USDT', 'DOGE/USDT', 
+freqtrade               | 'TRX/USDT', 'SUI/USDT', 'PUMP/USDT', 'PEPE/USDT', 'PAXG/USDT', 'ADA/USDT', 'LINK/USDT', 'SNDKB/USDT', 'TAO/USDT', 'NEAR/USDT', 'WLD/USDT', 'UNI/USDT', 'AAVE/USDT', 'CHIP/USDT', 'LTC/USDT', 
+freqtrade               | 'CRCLB/USDT', 'FET/USDT', 'BCH/USDT', 'HBAR/USDT', 'ASTER/USDT', 'AVAX/USDT', 'XLM/USDT', 'ZRO/USDT', 'PENGU/USDT', 'ONDO/USDT', 'SPCXB/USDT', 'XPL/USDT', 'MSTRB/USDT', 'TURBO/USDT', 'OPG/USDT', 
+freqtrade               | 'COTI/USDT', 'DASH/USDT', 'BICO/USDT', 'ICP/USDT']
+freqtrade               | 2026-08-29 13:00:16,000 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 13:01:16,001 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 13:02:16,002 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 13:03:16,003 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 13:04:16,004 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 13:05:01,124 - freqtrade.exchange.exchange_ws - INFO - Removing ('POL/USDT', '1h', <CandleType.SPOT: 'spot'>) from websocket watchlist.
+freqtrade               | 2026-08-29 13:05:01,125 - freqtrade.exchange.exchange_ws - INFO - Removal done: new watch list (171)
+freqtrade               | 2026-08-29 13:05:04,889 - freqtrade.exchange.exchange_ws - INFO - POL/USDT, 1h, spot - Task finished - done
+freqtrade               | 2026-08-29 13:05:31,000 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 13:06:31,001 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 13:07:31,002 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 13:08:31,003 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 13:09:31,004 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 13:10:46,000 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 13:11:46,001 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 13:12:46,002 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 13:13:46,003 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 13:14:46,005 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 13:16:01,000 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 13:17:01,001 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 13:17:01,004 - rangestabilityfilter - INFO - Removed ONG/USDT from whitelist, because rate of change over 3 days is 2.234, which is above the threshold of 0.95.
+freqtrade               | 2026-08-29 13:18:01,002 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 13:19:01,004 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 13:19:06,322 - uvicorn.error - INFO - 172.18.0.1:36326 - "WebSocket 
+freqtrade               | /api/v1/message/ws?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZGVudGl0eSI6eyJ1IjoiZnJlcXRyYWRlIn0sImV4cCI6MTc4ODAxMDQ0NCwiaWF0IjoxNzg4MDA5NTQ0LCJ0eXBlIjoiYWNjZXNzIn0.heAQZfsMSJOpe9jHnQxr1GwuGsY8vO
+freqtrade               | ARZcjdsIfg_6s" [accepted]
+freqtrade               | 2026-08-29 13:19:06,323 - uvicorn.error - INFO - connection open
+freqtrade               | 2026-08-29 13:19:06,323 - freqtrade.rpc.api_server.ws.channel - INFO - Connected to channel - WebSocketChannel(3c7bb1c7, ('172.18.0.1', 36326))
+freqtrade               | 2026-08-29 13:19:06,582 - uvicorn.error - INFO - 172.18.0.1:36330 - "WebSocket 
+freqtrade               | /api/v1/message/ws?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZGVudGl0eSI6eyJ1IjoiZnJlcXRyYWRlIn0sImV4cCI6MTc4ODAxMDQ0NCwiaWF0IjoxNzg4MDA5NTQ0LCJ0eXBlIjoiYWNjZXNzIn0.heAQZfsMSJOpe9jHnQxr1GwuGsY8vO
+freqtrade               | ARZcjdsIfg_6s" [accepted]
+freqtrade               | 2026-08-29 13:19:06,582 - uvicorn.error - INFO - connection open
+freqtrade               | 2026-08-29 13:19:06,583 - freqtrade.rpc.api_server.ws.channel - INFO - Connected to channel - WebSocketChannel(8c2f3ec0, ('172.18.0.1', 36330))
+freqtrade               | 2026-08-29 13:20:16,000 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'
+freqtrade               | 2026-08-29 13:21:16,001 - freqtrade.worker - INFO - Bot heartbeat. PID=1, version='2026.7, strategy_version: v17.4.537', state='RUNNING'

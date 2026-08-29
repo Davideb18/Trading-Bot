@@ -29,7 +29,7 @@ import signal
 import sys
 import threading
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import timezone, datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -67,7 +67,7 @@ FREQTRADE_PASSWORD = os.getenv("FREQTRADE_PASSWORD", "SuperSecurePassword")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 # Risk Thresholds
-GLOBAL_HARD_STOPLOSS_PERCENT = float(os.getenv("GLOBAL_HARD_STOPLOSS_PERCENT", "0.05"))
+GLOBAL_HARD_STOPLOSS_PERCENT = float(os.getenv("GLOBAL_HARD_STOPLOSS_PERCENT", "0.20"))
 
 # Timing
 CHECK_INTERVAL_SECONDS = int(os.getenv("CHECK_INTERVAL_SECONDS", "60"))
@@ -136,7 +136,7 @@ class FreqtradeAPIClient:
                 self.access_token = data["access_token"]
                 self.refresh_token = data["refresh_token"]
                 self.token_expiry = (
-                    datetime.now(UTC)
+                    datetime.now(timezone.utc)
                     + self.ACCESS_TOKEN_LIFETIME
                     - self.TOKEN_REFRESH_MARGIN
                 )
@@ -186,7 +186,7 @@ class FreqtradeAPIClient:
             data = response.json()
             self.access_token = data["access_token"]
             self.token_expiry = (
-                datetime.now(UTC)
+                datetime.now(timezone.utc)
                 + self.ACCESS_TOKEN_LIFETIME
                 - self.TOKEN_REFRESH_MARGIN
             )
@@ -200,7 +200,7 @@ class FreqtradeAPIClient:
         """Ensure we have a valid, non-expired access token."""
         if self.access_token is None:
             return self.login()
-        if self.token_expiry and datetime.now(UTC) >= self.token_expiry:
+        if self.token_expiry and datetime.now(timezone.utc) >= self.token_expiry:
             return self._refresh_access_token()
         return True
 
@@ -471,7 +471,7 @@ class SentimentAnalyzer:
         """Check if the LLM circuit breaker is currently active."""
         if self.circuit_breaker_until is None:
             return False
-        if datetime.now(UTC) >= self.circuit_breaker_until:
+        if datetime.now(timezone.utc) >= self.circuit_breaker_until:
             logger.info(
                 "🔄 LLM circuit breaker cooldown expired. "
                 "Re-enabling LLM analysis."
@@ -479,7 +479,7 @@ class SentimentAnalyzer:
             self.circuit_breaker_until = None
             self.consecutive_llm_failures = 0
             return False
-        remaining = (self.circuit_breaker_until - datetime.now(UTC)).seconds
+        remaining = (self.circuit_breaker_until - datetime.now(timezone.utc)).seconds
         logger.debug(
             f"Circuit breaker active, {remaining}s remaining until LLM re-enabled"
         )
@@ -487,7 +487,7 @@ class SentimentAnalyzer:
 
     def _trip_circuit_breaker(self):
         """Activate the circuit breaker after too many LLM failures."""
-        self.circuit_breaker_until = datetime.now(UTC) + timedelta(
+        self.circuit_breaker_until = datetime.now(timezone.utc) + timedelta(
             seconds=LLM_CIRCUIT_BREAKER_COOLDOWN_SECONDS
         )
         cooldown_min = LLM_CIRCUIT_BREAKER_COOLDOWN_SECONDS / 60
@@ -518,7 +518,7 @@ class SentimentAnalyzer:
                 f"Current Crypto Fear & Greed Index: {fgi_value} "
                 f"({fgi_classification})\n\n"
                 f"Current UTC time: "
-                f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M')}\n\n"
+                f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}\n\n"
                 f"Based on the current market data and any knowledge you have "
                 f"of recent events, classify the current market regime."
             )
@@ -652,7 +652,7 @@ class SentimentAnalyzer:
                 f"Analyze the following {len(pairs)} specific pairs: {pairs_str}. "
                 f"Return ONLY those requiring EXIT_PAIR or CONTAGION. "
                 f"If none, return empty JSON {{}}. "
-                f"Current UTC time: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M')}"
+                f"Current UTC time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}"
             )
 
             response = self.gemini_client.models.generate_content(
@@ -776,7 +776,7 @@ class RiskManager:
             "peak_balance": self.peak_balance,
             "nuclear_triggered": self.nuclear_triggered,
             "current_regime": self.current_regime,
-            "last_updated": datetime.now(UTC).isoformat(),
+            "last_updated": datetime.now(timezone.utc).isoformat(),
         }
         try:
             from pathlib import Path
