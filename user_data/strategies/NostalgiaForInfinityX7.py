@@ -246,7 +246,7 @@ class NostalgiaForInfinityX7(IStrategy):
   short_top_coins_mode_name = "short_tc"
   short_scalp_mode_name = "short_scalp"
 
-  is_futures_mode = False
+  is_futures_mode = True
   futures_mode_leverage = 3.0
   futures_mode_leverage_rebuy_mode = 3.0
   futures_mode_leverage_grind_mode = 3.0
