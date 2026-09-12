@@ -65,7 +65,14 @@ FREQTRADE_API_URL = os.getenv("FREQTRADE_API_URL", "http://127.0.0.1:8080/api/v1
 FREQTRADE_USERNAME = os.getenv("FREQTRADE_USERNAME", "freqtrade")
 FREQTRADE_PASSWORD = os.getenv("FREQTRADE_PASSWORD", "SuperSecurePassword")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+# Multi-tier fallback cascade for Free Tier resiliency
+GEMINI_FALLBACK_MODELS = list(dict.fromkeys([
+    GEMINI_MODEL,
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash-lite",
+    "gemini-3.8-flash",
+]))
 
 # Risk Thresholds
 GLOBAL_HARD_STOPLOSS_PERCENT = float(os.getenv("GLOBAL_HARD_STOPLOSS_PERCENT", "0.08"))
@@ -547,19 +554,35 @@ class SentimentAnalyzer:
                 f"of recent events, classify the current market regime."
             )
 
-            response = self.gemini_client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=user_prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=GEMINI_SYSTEM_PROMPT,
-                    temperature=0.1,
-                    max_output_tokens=256,
-                    response_mime_type="application/json",
-                ),
-            )
+            response = None
+            used_model = None
+            last_err = None
+            for model_name in GEMINI_FALLBACK_MODELS:
+                try:
+                    response = self.gemini_client.models.generate_content(
+                        model=model_name,
+                        contents=user_prompt,
+                        config=types.GenerateContentConfig(
+                            system_instruction=GEMINI_SYSTEM_PROMPT,
+                            temperature=0.1,
+                            max_output_tokens=256,
+                            response_mime_type="application/json",
+                        ),
+                    )
+                    if response and response.text:
+                        used_model = model_name
+                        break
+                except Exception as model_err:
+                    last_err = model_err
+                    logger.warning(
+                        f"Gemini model '{model_name}' unavailable ({model_err}). "
+                        "Trying next fallback model..."
+                    )
 
-            if not response.text:
-                raise ValueError("Empty response from Gemini (possibly blocked by safety filters)")
+            if not response or not response.text:
+                raise ValueError(
+                    f"All Gemini models in fallback cascade failed. Last error: {last_err}"
+                )
             result_text = response.text.strip()
             result = json.loads(result_text)
             regime = result.get("regime", "").upper()
@@ -679,19 +702,35 @@ class SentimentAnalyzer:
                 f"Current UTC time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}"
             )
 
-            response = self.gemini_client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=user_prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=BATCH_SYSTEM_PROMPT,
-                    temperature=0.1,
-                    max_output_tokens=1024,
-                    response_mime_type="application/json",
-                ),
-            )
+            response = None
+            used_model = None
+            last_err = None
+            for model_name in GEMINI_FALLBACK_MODELS:
+                try:
+                    response = self.gemini_client.models.generate_content(
+                        model=model_name,
+                        contents=user_prompt,
+                        config=types.GenerateContentConfig(
+                            system_instruction=BATCH_SYSTEM_PROMPT,
+                            temperature=0.1,
+                            max_output_tokens=1024,
+                            response_mime_type="application/json",
+                        ),
+                    )
+                    if response and response.text:
+                        used_model = model_name
+                        break
+                except Exception as model_err:
+                    last_err = model_err
+                    logger.warning(
+                        f"Batch analysis on model '{model_name}' failed ({model_err}). "
+                        "Trying next fallback model..."
+                    )
 
-            if not response.text:
-                raise ValueError("Empty response from Gemini")
+            if not response or not response.text:
+                raise ValueError(
+                    f"All Gemini models in fallback cascade failed for batch analysis. Last error: {last_err}"
+                )
             result_text = response.text.strip()
             result = json.loads(result_text)
             flags = list(result.keys()) if result else 'None'
