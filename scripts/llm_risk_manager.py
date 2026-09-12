@@ -65,6 +65,7 @@ FREQTRADE_API_URL = os.getenv("FREQTRADE_API_URL", "http://127.0.0.1:8080/api/v1
 FREQTRADE_USERNAME = os.getenv("FREQTRADE_USERNAME", "freqtrade")
 FREQTRADE_PASSWORD = os.getenv("FREQTRADE_PASSWORD", "SuperSecurePassword")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 
 # Risk Thresholds
 GLOBAL_HARD_STOPLOSS_PERCENT = float(os.getenv("GLOBAL_HARD_STOPLOSS_PERCENT", "0.08"))
@@ -435,7 +436,7 @@ class SentimentAnalyzer:
                     api_key=gemini_api_key,
                     http_options={"timeout": LLM_TIMEOUT_MS},
                 )
-                logger.info("✅ Gemini AI client initialized (model: gemini-2.5-flash)")
+                logger.info(f"✅ Gemini AI client initialized (model: {GEMINI_MODEL})")
             except ImportError:
                 logger.warning(
                     "⚠️ google-genai library not installed. "
@@ -547,7 +548,7 @@ class SentimentAnalyzer:
             )
 
             response = self.gemini_client.models.generate_content(
-                model="gemini-2.5-flash",
+                model=GEMINI_MODEL,
                 contents=user_prompt,
                 config=types.GenerateContentConfig(
                     system_instruction=GEMINI_SYSTEM_PROMPT,
@@ -679,7 +680,7 @@ class SentimentAnalyzer:
             )
 
             response = self.gemini_client.models.generate_content(
-                model="gemini-2.5-flash",
+                model=GEMINI_MODEL,
                 contents=user_prompt,
                 config=types.GenerateContentConfig(
                     system_instruction=BATCH_SYSTEM_PROMPT,
