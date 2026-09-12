@@ -67,7 +67,7 @@ FREQTRADE_PASSWORD = os.getenv("FREQTRADE_PASSWORD", "SuperSecurePassword")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 # Risk Thresholds
-GLOBAL_HARD_STOPLOSS_PERCENT = float(os.getenv("GLOBAL_HARD_STOPLOSS_PERCENT", "0.20"))
+GLOBAL_HARD_STOPLOSS_PERCENT = float(os.getenv("GLOBAL_HARD_STOPLOSS_PERCENT", "0.08"))
 
 # Timing
 CHECK_INTERVAL_SECONDS = int(os.getenv("CHECK_INTERVAL_SECONDS", "60"))
@@ -279,6 +279,29 @@ class FreqtradeAPIClient:
         if data and isinstance(data, dict):
             return data.get("total", 0.0)
         return None
+
+    def get_equity(self) -> float | None:
+        """
+        Get true real-time equity of the account:
+        total wallet balance + unrealized floating PnL of all open trades.
+        Ensures floating drawdown is never masked by closed-trade profit.
+        """
+        total_balance = self.get_balance()
+        if total_balance is None:
+            return None
+
+        trades = self.get_open_trades()
+        if trades and isinstance(trades, list):
+            unrealized_pnl = 0.0
+            for t in trades:
+                pnl = t.get("total_profit_abs")
+                if pnl is None:
+                    pnl = t.get("profit_abs", 0.0)
+                if isinstance(pnl, (int, float)):
+                    unrealized_pnl += pnl
+            return total_balance + unrealized_pnl
+
+        return total_balance
 
     def get_open_trades(self) -> list | None:
         """Get list of currently open trades."""
@@ -524,7 +547,7 @@ class SentimentAnalyzer:
             )
 
             response = self.gemini_client.models.generate_content(
-                model="gemini-3.5-flash-lite",
+                model="gemini-2.5-flash",
                 contents=user_prompt,
                 config=types.GenerateContentConfig(
                     system_instruction=GEMINI_SYSTEM_PROMPT,
@@ -656,7 +679,7 @@ class SentimentAnalyzer:
             )
 
             response = self.gemini_client.models.generate_content(
-                model="gemini-3.5-flash-lite",
+                model="gemini-2.5-flash",
                 contents=user_prompt,
                 config=types.GenerateContentConfig(
                     system_instruction=BATCH_SYSTEM_PROMPT,
@@ -914,11 +937,11 @@ class RiskManager:
 
         Returns True if nuclear option was triggered, False otherwise.
         """
-        current_balance = self.api_client.get_balance()
+        current_balance = self.api_client.get_equity()
 
         if current_balance is None:
             logger.warning(
-                "⚠️ Could not fetch balance from Freqtrade. "
+                "⚠️ Could not fetch equity from Freqtrade. "
                 "Skipping drawdown check this cycle."
             )
             return False
@@ -950,7 +973,7 @@ class RiskManager:
 
         if drawdown > 0:
             logger.info(
-                f"💰 Balance: {current_balance:.2f} USDT | "
+                f"💰 Equity: {current_balance:.2f} USDT | "
                 f"Peak: {self.peak_balance:.2f} USDT | "
                 f"Drawdown: {drawdown_pct:.2f}% "
                 f"(threshold: {GLOBAL_HARD_STOPLOSS_PERCENT * 100:.1f}%)"
@@ -958,7 +981,7 @@ class RiskManager:
         else:
             profit_pct = abs((self.initial_balance - current_balance) / self.initial_balance) * 100
             logger.info(
-                f"💰 Balance: {current_balance:.2f} USDT | "
+                f"💰 Equity: {current_balance:.2f} USDT | "
                 f"Peak: {self.peak_balance:.2f} USDT | "
                 f"Profit: +{profit_pct:.2f}% from initial"
             )
