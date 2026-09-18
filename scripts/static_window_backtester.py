@@ -90,28 +90,23 @@ def run():
     monthly_stats = []
 
     print("=========================================================")
-    print("🚀 STARTING DYNAMIC SLIDING WINDOW BACKTEST (2023-2026)")
+    print("🚀 STARTING STATIC WINDOW BACKTEST (2023-2026)")
     print("=========================================================")
+    
+    # 1. Get Top Pairs ONCE for the start of the period
+    static_pairs = get_top_pairs_for_month(datetime(2023, 1, 1), datetime(2023, 2, 1))
+    if not static_pairs:
+        print("No data found for initial pairs. Exiting.")
+        return
+        
+    print(f"Selected {len(static_pairs)} STATIC pairs. Examples: {static_pairs[:5]}...")
+    create_temp_config(static_pairs)
     
     while current < end_date:
         next_month = current + relativedelta(months=1)
-        prev_month_start = current - relativedelta(months=1)
-        prev_month_end = current
         
         timerange_str = f"{current.strftime('%Y%m%d')}-{next_month.strftime('%Y%m%d')}"
         print(f"\n--- Processing Window: {timerange_str} ---")
-        
-        # 1. Get Top Pairs
-        top_pairs = get_top_pairs_for_month(prev_month_start, prev_month_end)
-        if not top_pairs:
-            print("No data found for previous month. Using default pairs or skipping...")
-            current = next_month
-            continue
-            
-        print(f"Selected {len(top_pairs)} pairs. Examples: {top_pairs[:5]}...")
-        
-        # 2. Create Config
-        create_temp_config(top_pairs)
         
         # 3. Run Freqtrade
         cmd = [
@@ -163,11 +158,11 @@ def run():
     print("=========================================================")
     
     # Generate Report
-    report_path = os.path.join(RESULTS_DIR, "master_dynamic_report.txt")
+    report_path = os.path.join(RESULTS_DIR, "master_static_report.txt")
     with open(report_path, "w") as f:
-        f.write("MASTER SLIDING WINDOW BACKTEST REPORT (2023-2026)\n")
+        f.write("MASTER STATIC WINDOW BACKTEST REPORT (2023-2026)\n")
         f.write("Strategy: NostalgiaForInfinityX7\n")
-        f.write("Mode: Dynamic Pairlist (Top 40 by Volume updated Monthly)\n")
+        f.write("Mode: Static Pairlist (Top 34 Pairs from Jan 2023 held for 3.5 years)\n")
         f.write("=========================================================\n\n")
         
         f.write("MONTHLY BREAKDOWN:\n")
