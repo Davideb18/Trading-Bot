@@ -119,4 +119,13 @@ target/
 !user_data/config.example.json
 !user_data/backtest_config.json
 
+# Remote & local runtime logs
+remote_*.txt
+remote_freqtrade_logs.txt
+remote_logs.txt
+backtest_results.txt
+user_data/risk_manager_state.json
+risk_manager_state.json
+user_data/logs/
+
 docker-compose-*.yml
