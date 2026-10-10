@@ -3,7 +3,7 @@
 ## Overview
 This repository contains a high-performance, fully automated quantitative trading engine built on a Python architecture. It leverages complex mathematical models and indicators to execute trades autonomously in the cryptocurrency markets.
 
-The core strategy implemented is based on a highly optimized, sniper-like approach that prioritizes capital preservation (strict drawdown limits) and extreme win rates.
+The core strategy implemented is `NostalgiaForInfinityX8`, based on a highly optimized multi-timeframe sniper approach that prioritizes capital preservation (strict drawdown limits) and extreme win rates.
 
 ## 🧠 Autonomous LLM Risk Sentinel (Supervisor Loop)
 

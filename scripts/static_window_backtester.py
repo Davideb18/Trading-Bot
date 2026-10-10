@@ -11,7 +11,7 @@ DATA_DIR = "user_data/data/binance/"
 RESULTS_DIR = "user_data/backtest_results/"
 BASE_CONFIG = "user_data/config.json"
 TEMP_CONFIG = "user_data/temp_window_config.json"
-STRATEGY = "NostalgiaForInfinityX7"
+STRATEGY = "NostalgiaForInfinityX8"
 TOP_N_PAIRS = 40
 
 def get_top_pairs_for_month(prev_start: datetime, prev_end: datetime):
@@ -63,10 +63,27 @@ def create_temp_config(pairs):
 import zipfile
 
 def get_latest_backtest_result():
+    last_res_path = os.path.join(RESULTS_DIR, ".last_result.json")
+    if os.path.exists(last_res_path):
+        try:
+            with open(last_res_path) as f:
+                data = json.load(f)
+            latest_filename = data.get("latest_backtest")
+            if latest_filename:
+                latest_file = os.path.join(RESULTS_DIR, latest_filename)
+                if os.path.exists(latest_file):
+                    with zipfile.ZipFile(latest_file, 'r') as z:
+                        for name in z.namelist():
+                            if name.endswith('.json') and not name.endswith('_config.json'):
+                                with z.open(name) as zf:
+                                    return json.load(zf)
+        except Exception as e:
+            print(f"Error reading .last_result.json: {e}")
+
     files = glob.glob(os.path.join(RESULTS_DIR, "backtest-result-*.zip"))
     if not files:
         return None
-    latest_file = max(files, key=os.path.getctime)
+    latest_file = max(files, key=os.path.getmtime)
     try:
         with zipfile.ZipFile(latest_file, 'r') as z:
             for name in z.namelist():
@@ -116,6 +133,7 @@ def run():
             "-c", TEMP_CONFIG,
             "--timerange", timerange_str,
             "--dry-run-wallet", str(current_balance),
+            "--fee", "0.00075",
             "--no-color"
         ]
         
@@ -161,7 +179,7 @@ def run():
     report_path = os.path.join(RESULTS_DIR, "master_static_report.txt")
     with open(report_path, "w") as f:
         f.write("MASTER STATIC WINDOW BACKTEST REPORT (2023-2026)\n")
-        f.write("Strategy: NostalgiaForInfinityX7\n")
+        f.write("Strategy: NostalgiaForInfinityX8\n")
         f.write("Mode: Static Pairlist (Top 34 Pairs from Jan 2023 held for 3.5 years)\n")
         f.write("=========================================================\n\n")
         
