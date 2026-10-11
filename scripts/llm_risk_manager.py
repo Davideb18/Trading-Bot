@@ -65,12 +65,13 @@ FREQTRADE_API_URL = os.getenv("FREQTRADE_API_URL", "http://127.0.0.1:8080/api/v1
 FREQTRADE_USERNAME = os.getenv("FREQTRADE_USERNAME", "freqtrade")
 FREQTRADE_PASSWORD = os.getenv("FREQTRADE_PASSWORD", "SuperSecurePassword")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
-# Multi-tier fallback cascade for Free Tier resiliency
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
+# Multi-tier fallback cascade for Free Tier resiliency (prioritize high-quota Lite models)
 GEMINI_FALLBACK_MODELS = list(dict.fromkeys([
     GEMINI_MODEL,
-    "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash",
     "gemini-3.8-flash",
 ]))
 
