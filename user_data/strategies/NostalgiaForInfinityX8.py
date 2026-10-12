@@ -10,6 +10,7 @@ from freqtrade.strategy import merge_informative_pair
 from pandas import DataFrame, Series
 from functools import reduce
 from freqtrade.persistence import Trade, Order
+Orders = list[Order]
 from datetime import datetime, timedelta
 import time
 from typing import Optional
@@ -197,6 +198,7 @@ class NostalgiaForInfinityX8(IStrategy):
   short_rapid_mode_tags = ["601", "602", "603", "604", "605", "606", "607", "608", "609", "610"]
   # Short grind mode tags
   short_grind_mode_tags = ["620"]
+  short_grind_mode_name = "short_grind"
   # Short top coins mode tags
   short_top_coins_mode_tags = ["641", "642"]
   # Short scalp mode tags
@@ -2486,7 +2488,7 @@ class NostalgiaForInfinityX8(IStrategy):
     short_rapid_rebuy_grind_mode_tags = self.short_rapid_rebuy_grind_mode_tags
     short_grind_mode_tags = self.short_grind_mode_tags
 
-    enter_tags = entry_tag.split()
+    enter_tags = entry_tag.split() if entry_tag else []
     is_futures_mode = self.is_futures_mode
     system_name_use = self.system_name_use
     system_name_is_v3 = system_name_use == system_v3_name
@@ -2904,10 +2906,10 @@ class NostalgiaForInfinityX8(IStrategy):
     stake_amount: float,
     profit_stake: float,
     profit_ratio: float,
-    grind_profit_stake: float = None,
-    grind_profit_pct: float = None,
-    stake_currency: str = None,
-    coin_amount: float = None,
+    grind_profit_stake: Optional[float] = None,
+    grind_profit_pct: Optional[float] = None,
+    stake_currency: Optional[str] = None,
+    coin_amount: Optional[float] = None,
   ) -> str:
     """
     Generate a formatted notification message for trade events.
@@ -2998,7 +3000,7 @@ class NostalgiaForInfinityX8(IStrategy):
 
     # Start with the header
     header_label = header_labels.get(msg_type, None)
-    msg = None if header_label is None else f"{header_label}`({tag})`\n"
+    msg = "" if header_label is None else f"{header_label}`({tag})`\n"
 
     # Add exchange information
     exchange_name = getattr(self, "config", {}).get("exchange", {}).get("name", "Unknown").capitalize()
@@ -3118,7 +3120,7 @@ class NostalgiaForInfinityX8(IStrategy):
     return out
 
   @staticmethod
-  def stochrsi_k(rsi_14: np.ndarray, ta_min: np.ndarray, ta_max: np.ndarray, ta_sma: np.ndarray) -> np.ndarray:
+  def stochrsi_k(rsi_14: np.ndarray, ta_min, ta_max, ta_sma) -> np.ndarray:
     """
     Calculate the %K line of the Stochastic RSI.
 
@@ -5319,7 +5321,7 @@ class NostalgiaForInfinityX8(IStrategy):
       return True
 
     # Mode Validation
-    entry_tags = entry_tag.split()
+    entry_tags = entry_tag.split() if entry_tag else []
     is_long_side = side == "long"
     is_short_side = side == "short"
     long_grind_mode_tags = self.long_grind_mode_tags
@@ -5377,7 +5379,7 @@ class NostalgiaForInfinityX8(IStrategy):
       return False
 
     open_trades = Trade.get_trades_proxy(is_open=True)
-    num_open_grind_mode = sum(1 for t in open_trades if all(c in long_grind_mode_tags for c in t.enter_tag.split()))
+    num_open_grind_mode = sum(1 for t in open_trades if t.enter_tag and all(c in long_grind_mode_tags for c in t.enter_tag.split()))
     if num_open_grind_mode >= grind_mode_max_slots:
       log.info(f"[{current_time}] Cancelling entry for {pair} due to grind mode slots limit reached.")
       return False
@@ -5503,7 +5505,7 @@ class NostalgiaForInfinityX8(IStrategy):
     side: str,
     **kwargs,
   ) -> float:
-    enter_tags = entry_tag.split()
+    enter_tags = entry_tag.split() if entry_tag else []
     long_rebuy_mode_tags = self.long_rebuy_mode_tags
     long_grind_mode_tags = self.long_grind_mode_tags
     if all(c in long_rebuy_mode_tags for c in enter_tags):

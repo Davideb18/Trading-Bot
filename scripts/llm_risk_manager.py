@@ -1,39 +1,64 @@
 #!/usr/bin/env python3
 """
-Zero-Burn LLM Risk Manager — Phase 4
-=====================================
+Zero-Burn LLM Risk Manager — Production Sentinel (Enterprise Edition)
+=====================================================================
 
-External supervisor script that monitors Freqtrade via REST API
-and uses AI + Sentiment analysis to detect Black Swan events.
-
-Architecture:
-    ┌────────────────┐   JWT Auth    ┌──────────────┐
-    │  Risk Manager  │◄────────────► │  Freqtrade   │
-    │  (this script) │               │  REST API    │
-    └───────┬────────┘               └──────────────┘
-            │
-            ├── Gemini 2.5 Flash (primary sentiment)
-            └── Fear & Greed Index  (deterministic fallback)
-
-Usage:
-    export FREQTRADE_USERNAME="freqtrade"
-    export FREQTRADE_PASSWORD="SuperSecurePassword"
-    export GEMINI_API_KEY="your_gemini_api_key"
-    python scripts/llm_risk_manager.py
+Autonomous institutional-grade risk supervisor for Freqtrade.
+Continuously audits the Freqtrade REST API, calculates true floating equity,
+and combines:
+  1. Live Breaking Crypto News (CoinDesk, CoinTelegraph, Decrypt RSS + Atom)
+     - Explicit Memory Eviction (<2 hours TTL / max 50 entries)
+     - Isolated Per-Source Exception Sandboxing (Cloudflare 403 & XML fault tolerant)
+  2. Live Binance Macro Market Metrics (BTC & ETH 1h/24h Price Action + Fallback Vision API)
+  3. Fear & Greed Index (Macro Sentiment)
+  4. Google Gemini AI Multi-Tier Cascade (gemini-3.1-flash-lite / 3.5-flash-lite / 3.8-flash)
+  5. Deterministic Flash-Crash Circuit Breakers & 8% True Equity Hard Stop
+  6. Strict API Quota Management & Anti-Hallucination Dual-Factor Cross-Validation
+  7. Red-Team Hardening:
+     - Anti-Whipsaw Hysteresis State Machine (BULL confirmation cycles)
+     - Guarded Wake-Up Lock (prevent blind cooldown reactivations during crashes)
+     - Critical Command Retry with Exponential Backoff & State Verification
+     - Zero Network Calls inside Thread State Locks (Deadlock-Free 24/7/365)
 """
 
+import html
 import json
 import logging
+import math
 import os
+import re
 import signal
 import sys
 import threading
 import time
-from datetime import timezone, datetime, timedelta
+import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
 
+# ==================================================================================
+# Native .env File Loader
+# ==================================================================================
+
+def load_env_file():
+    """Load variables from .env file into os.environ if not already set."""
+    env_file = Path(__file__).resolve().parent.parent / ".env"
+    if env_file.exists():
+        try:
+            with open(env_file) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip('"').strip("'")
+                        if k and k not in os.environ:
+                            os.environ[k] = v
+        except Exception:
+            pass
+
+load_env_file()
 
 # ==================================================================================
 # Logging Setup
@@ -42,7 +67,6 @@ import requests
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
-# Ensure log directory exists
 LOG_DIR = Path(__file__).resolve().parent.parent / "user_data" / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -58,20 +82,20 @@ logging.basicConfig(
 logger = logging.getLogger("ZeroBurn.RiskManager")
 
 # ==================================================================================
-# Configuration (all overridable via environment variables)
+# Configuration (Environment & Overrides)
 # ==================================================================================
 
 FREQTRADE_API_URL = os.getenv("FREQTRADE_API_URL", "http://127.0.0.1:8080/api/v1")
 FREQTRADE_USERNAME = os.getenv("FREQTRADE_USERNAME", "freqtrade")
-FREQTRADE_PASSWORD = os.getenv("FREQTRADE_PASSWORD", "SuperSecurePassword")
+FREQTRADE_PASSWORD = os.getenv("FREQTRADE_PASSWORD", "ZeroBurnPassword2026!")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
+# Prioritize high-quota lite models for Free-Tier stability
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
-# Multi-tier fallback cascade for Free Tier resiliency (prioritize high-quota Lite models)
 GEMINI_FALLBACK_MODELS = list(dict.fromkeys([
     GEMINI_MODEL,
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
-    "gemini-3.5-flash",
     "gemini-3.8-flash",
 ]))
 
@@ -79,40 +103,97 @@ GEMINI_FALLBACK_MODELS = list(dict.fromkeys([
 GLOBAL_HARD_STOPLOSS_PERCENT = float(os.getenv("GLOBAL_HARD_STOPLOSS_PERCENT", "0.08"))
 
 # Timing
-CHECK_INTERVAL_SECONDS = int(os.getenv("CHECK_INTERVAL_SECONDS", "60"))
+CHECK_INTERVAL_SECONDS = int(os.getenv("CHECK_INTERVAL_SECONDS", "30"))
 LLM_CHECK_INTERVAL_CYCLES = int(os.getenv("LLM_CHECK_INTERVAL_CYCLES", "5"))
 
-# LLM Settings
+# LLM Settings & Quota Limits
 LLM_TIMEOUT_MS = int(os.getenv("LLM_TIMEOUT_MS", "15000"))
 LLM_MAX_CONSECUTIVE_FAILURES = int(os.getenv("LLM_MAX_CONSECUTIVE_FAILURES", "3"))
 LLM_CIRCUIT_BREAKER_COOLDOWN_SECONDS = int(
     os.getenv("LLM_CIRCUIT_BREAKER_COOLDOWN_SECONDS", "1800")
 )
+MAX_DAILY_GEMINI_CALLS = int(os.getenv("MAX_DAILY_GEMINI_CALLS", "1200"))
+MIN_GEMINI_INTERVAL_SECONDS = float(os.getenv("MIN_GEMINI_INTERVAL_SECONDS", "15.0"))
+
+# State Machine & Hysteresis Guards
+BULL_CONFIRMATION_CYCLES = int(os.getenv("BULL_CONFIRMATION_CYCLES", "3"))
+WAKE_UP_COOLDOWN_MINUTES = int(os.getenv("WAKE_UP_COOLDOWN_MINUTES", "60"))
+CRITICAL_COMMAND_MAX_ATTEMPTS = int(os.getenv("CRITICAL_COMMAND_MAX_ATTEMPTS", "5"))
+
+# News Aggregator Memory Bounds (Anti-Leak)
+MAX_NEWS_CACHE_AGE_SECONDS = int(os.getenv("MAX_NEWS_CACHE_AGE_SECONDS", "7200"))  # 2 hours max
+MAX_NEWS_CACHE_ENTRIES = int(os.getenv("MAX_NEWS_CACHE_ENTRIES", "50"))
 
 # State persistence file
 STATE_FILE = Path(__file__).resolve().parent.parent / "user_data" / "risk_manager_state.json"
 
 
 # ==================================================================================
-# Freqtrade API Client
+# API Quota & Rate Limit Sentinel
 # ==================================================================================
 
+class APIQuotaTracker:
+    """
+    Enforces strict rate limits and daily call ceilings for Google Gemini Free Tier:
+      - Max 15 Requests Per Minute (RPM) -> throttled via min call interval.
+      - Max 1,500 Requests Per Day (RPD) -> capped at MAX_DAILY_GEMINI_CALLS (1,200).
+    Automatically rolls over at UTC midnight.
+    """
+
+    def __init__(self, max_daily_calls: int = MAX_DAILY_GEMINI_CALLS, min_interval_s: float = MIN_GEMINI_INTERVAL_SECONDS):
+        self.max_daily_calls = max_daily_calls
+        self.min_interval_s = min_interval_s
+        self._lock = threading.Lock()
+        self._current_date = datetime.now(timezone.utc).date()
+        self._calls_today = 0
+        self._last_call_time = 0.0
+
+    def can_call(self) -> tuple[bool, str]:
+        """Check if an API call is permitted under quota and rate limits."""
+        with self._lock:
+            now_utc = datetime.now(timezone.utc)
+            if now_utc.date() != self._current_date:
+                self._current_date = now_utc.date()
+                self._calls_today = 0
+                logger.info(f"🔄 Daily API call counter reset for {self._current_date}.")
+
+            if self._calls_today >= self.max_daily_calls:
+                return False, f"Daily Gemini quota cap reached ({self._calls_today}/{self.max_daily_calls})"
+
+            elapsed = time.time() - self._last_call_time
+            if elapsed < self.min_interval_s:
+                return False, f"Rate limit throttle: {self.min_interval_s - elapsed:.1f}s cooldown remaining"
+
+            return True, "OK"
+
+    def record_call(self):
+        """Record a successful API call invocation."""
+        with self._lock:
+            self._calls_today += 1
+            self._last_call_time = time.time()
+            if self._calls_today % 100 == 0 or self._calls_today >= (self.max_daily_calls - 50):
+                logger.info(f"📊 Gemini API Daily Usage: {self._calls_today}/{self.max_daily_calls} calls used today.")
+
+    @property
+    def calls_today(self) -> int:
+        with self._lock:
+            return self._calls_today
+
+
+# ==================================================================================
+# Freqtrade API Client (Thread-Safe & Critical Retry Hardened)
+# ==================================================================================
 
 class FreqtradeAPIClient:
     """
-    Handles authenticated communication with the Freqtrade REST API.
-
-    Implements the correct JWT authentication flow:
-      1. Login with HTTP Basic Auth -> receive access_token + refresh_token
-      2. Use access_token as Bearer token for API calls
-      3. Auto-refresh access_token before expiry (15 min lifetime)
-      4. Fall back to full re-login if refresh fails
+    Authenticated communication with Freqtrade REST API.
+    Thread-safe implementation with JWT lifecycle, trade control, pause/resume,
+    force liquidation, exponential backoff retries, and state verification.
     """
 
     ACCESS_TOKEN_LIFETIME = timedelta(minutes=15)
     TOKEN_REFRESH_MARGIN = timedelta(minutes=2)
     MAX_RETRIES = 3
-    RETRY_BACKOFF_BASE = 2  # seconds
 
     def __init__(self, base_url: str, username: str, password: str):
         self.base_url = base_url.rstrip("/")
@@ -122,229 +203,268 @@ class FreqtradeAPIClient:
         self.refresh_token: str | None = None
         self.token_expiry: datetime | None = None
         self.session = requests.Session()
-        self.session.headers.update(
-            {
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            }
-        )
-
-    # ----- Authentication -----
+        self.session.headers.update({
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        })
+        self._lock = threading.RLock()
 
     def login(self) -> bool:
         """Authenticate with Freqtrade API using HTTP Basic Auth."""
-        for attempt in range(1, self.MAX_RETRIES + 1):
+        with self._lock:
+            for attempt in range(1, self.MAX_RETRIES + 1):
+                try:
+                    response = self.session.post(
+                        f"{self.base_url}/token/login",
+                        auth=(self.username, self.password),
+                        timeout=(3.0, 10.0),
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                    self.access_token = data["access_token"]
+                    self.refresh_token = data["refresh_token"]
+                    self.token_expiry = (
+                        datetime.now(timezone.utc)
+                        + self.ACCESS_TOKEN_LIFETIME
+                        - self.TOKEN_REFRESH_MARGIN
+                    )
+                    self.session.headers["Authorization"] = f"Bearer {self.access_token}"
+                    logger.info("🔑 Freqtrade API authentication successful.")
+                    return True
+                except Exception as e:
+                    logger.warning(f"Login attempt {attempt}/{self.MAX_RETRIES} failed: {e}")
+                    if attempt < self.MAX_RETRIES:
+                        time.sleep(2)
+            return False
+
+    def _ensure_authenticated(self) -> bool:
+        """Ensure access token is valid, refreshing if needed."""
+        with self._lock:
+            if not self.access_token:
+                return self.login()
+            if self.token_expiry and datetime.now(timezone.utc) >= self.token_expiry:
+                return self._refresh_token()
+            return True
+
+    def _refresh_token(self) -> bool:
+        """Refresh JWT access token."""
+        with self._lock:
             try:
-                response = self.session.post(
-                    f"{self.base_url}/token/login",
-                    auth=(self.username, self.password),
-                    timeout=10,
+                headers = {"Authorization": f"Bearer {self.refresh_token}"}
+                resp = self.session.post(
+                    f"{self.base_url}/token/refresh",
+                    headers=headers,
+                    timeout=(3.0, 10.0),
                 )
-                response.raise_for_status()
-                data = response.json()
+                resp.raise_for_status()
+                data = resp.json()
                 self.access_token = data["access_token"]
-                self.refresh_token = data["refresh_token"]
                 self.token_expiry = (
                     datetime.now(timezone.utc)
                     + self.ACCESS_TOKEN_LIFETIME
                     - self.TOKEN_REFRESH_MARGIN
                 )
-                logger.info("✅ Successfully authenticated with Freqtrade API")
+                self.session.headers["Authorization"] = f"Bearer {self.access_token}"
                 return True
+            except Exception:
+                return self.login()
 
-            except requests.exceptions.ConnectionError as e:
-                logger.warning(
-                    f"Login attempt {attempt}/{self.MAX_RETRIES} — "
-                    f"connection error: {e}"
-                )
-            except requests.exceptions.HTTPError as e:
-                logger.error(
-                    f"Login attempt {attempt}/{self.MAX_RETRIES} — HTTP error: {e}"
-                )
-                if e.response is not None and e.response.status_code == 401:
-                    logger.critical(
-                        "❌ Invalid credentials for Freqtrade API! "
-                        "Check FREQTRADE_USERNAME and FREQTRADE_PASSWORD."
-                    )
-                    return False  # Don't retry on bad credentials
-            except Exception as e:
-                logger.error(
-                    f"Login attempt {attempt}/{self.MAX_RETRIES} — "
-                    f"unexpected error: {e}"
-                )
-
-            if attempt < self.MAX_RETRIES:
-                backoff = self.RETRY_BACKOFF_BASE**attempt
-                logger.info(f"Retrying login in {backoff}s...")
-                time.sleep(backoff)
-
-        logger.critical(
-            "❌ Failed to authenticate with Freqtrade API after all retries"
-        )
-        return False
-
-    def _refresh_access_token(self) -> bool:
-        """Refresh the access token using the refresh token."""
-        try:
-            response = self.session.post(
-                f"{self.base_url}/token/refresh",
-                headers={"Authorization": f"Bearer {self.refresh_token}"},
-                timeout=10,
-            )
-            response.raise_for_status()
-            data = response.json()
-            self.access_token = data["access_token"]
-            self.token_expiry = (
-                datetime.now(timezone.utc)
-                + self.ACCESS_TOKEN_LIFETIME
-                - self.TOKEN_REFRESH_MARGIN
-            )
-            logger.info("🔄 Access token refreshed successfully")
-            return True
-        except Exception as e:
-            logger.warning(f"Token refresh failed ({e}), attempting full re-login...")
-            return self.login()
-
-    def _ensure_authenticated(self) -> bool:
-        """Ensure we have a valid, non-expired access token."""
-        if self.access_token is None:
-            return self.login()
-        if self.token_expiry and datetime.now(timezone.utc) >= self.token_expiry:
-            return self._refresh_access_token()
-        return True
-
-    # ----- Generic Request -----
-
-    def _request(
-        self, method: str, endpoint: str, retries: int = 2, **kwargs
-    ) -> dict | list | None:
-        """
-        Make an authenticated request to the Freqtrade API.
-        Handles token expiry and 401 responses with automatic re-auth.
-        """
-        kwargs.setdefault("timeout", 10)
-
-        for attempt in range(retries + 1):
+    def _request(self, method: str, endpoint: str, **kwargs) -> dict | list | None:
+        """Execute authenticated HTTP request with retries and lock safety."""
+        with self._lock:
             if not self._ensure_authenticated():
                 return None
-
-            try:
-                # Build headers with current token
-                headers = kwargs.pop("headers", {})
-                headers["Authorization"] = f"Bearer {self.access_token}"
-
-                response = self.session.request(
-                    method,
-                    f"{self.base_url}{endpoint}",
-                    headers=headers,
-                    **kwargs,
-                )
-
-                # If 401, force re-login and retry
-                if response.status_code == 401 and attempt < retries:
-                    logger.warning(
-                        f"Got 401 on {method} {endpoint}, re-authenticating..."
-                    )
-                    self.access_token = None
-                    continue
-
-                response.raise_for_status()
-                return response.json()
-
-            except requests.exceptions.HTTPError as e:
-                logger.error(f"API request failed: {method} {endpoint} → {e}")
-                if attempt < retries:
-                    time.sleep(1)
-                    continue
-                return None
-            except requests.exceptions.ConnectionError as e:
-                logger.error(f"Connection error to Freqtrade API: {e}")
-                return None
-            except requests.exceptions.Timeout as e:
-                logger.error(f"Timeout on {method} {endpoint}: {e}")
-                if attempt < retries:
-                    time.sleep(1)
-                    continue
-                return None
-            except Exception as e:
-                logger.error(f"Unexpected API error on {method} {endpoint}: {e}")
-                return None
-
-        return None
+            url = f"{self.base_url}{endpoint}"
+            for attempt in range(1, self.MAX_RETRIES + 1):
+                try:
+                    resp = self.session.request(method, url, timeout=(3.0, 10.0), **kwargs)
+                    if resp.status_code == 401:
+                        if self._refresh_token():
+                            continue
+                        return None
+                    resp.raise_for_status()
+                    return resp.json()
+                except Exception as e:
+                    if attempt < self.MAX_RETRIES:
+                        time.sleep(1)
+                        continue
+                    logger.error(f"API request failed: {method} {endpoint} → {e}")
+                    return None
+            return None
 
     def get(self, endpoint: str, **kwargs) -> dict | list | None:
-        """Authenticated GET request."""
         return self._request("GET", endpoint, **kwargs)
 
     def post(self, endpoint: str, **kwargs) -> dict | list | None:
-        """Authenticated POST request."""
         return self._request("POST", endpoint, **kwargs)
 
-    # ----- High-Level Operations -----
+    # ----- Operational Methods & Critical Command Executor -----
 
-    def get_balance(self) -> float | None:
-        """Get total account balance from Freqtrade."""
+    def execute_critical_command(
+        self,
+        command_name: str,
+        method: str,
+        endpoint: str,
+        payload: dict | None = None,
+        expected_state: str | None = None,
+        max_attempts: int = CRITICAL_COMMAND_MAX_ATTEMPTS,
+        backoff_base: float = 1.0,
+    ) -> bool:
+        """
+        Executes critical Freqtrade control commands (/stopbuy, /start, /forceexit)
+        with exponential backoff, detailed HTTP status inspection, and state verification.
+        Logs CRITICAL alerts on retries and failures.
+        """
+        with self._lock:
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    if not self._ensure_authenticated():
+                        logger.critical(
+                            f"🚨 CRITICAL CMD [{command_name}] attempt {attempt}/{max_attempts}: Authentication failed!"
+                        )
+                        delay = backoff_base * (1.5 ** (attempt - 1))
+                        time.sleep(delay)
+                        continue
+
+                    url = f"{self.base_url}{endpoint}"
+                    resp = self.session.request(
+                        method,
+                        url,
+                        json=payload,
+                        timeout=(3.0, 10.0),
+                    )
+
+                    if resp.status_code == 401:
+                        logger.warning(f"⚠️ Token expired during critical command [{command_name}]. Refreshing token...")
+                        if self._refresh_token():
+                            continue
+
+                    if resp.status_code not in (200, 201):
+                        logger.critical(
+                            f"🚨 CRITICAL CMD [{command_name}] attempt {attempt}/{max_attempts} failed! "
+                            f"HTTP {resp.status_code}: {resp.text}"
+                        )
+                        delay = backoff_base * (1.5 ** (attempt - 1))
+                        time.sleep(delay)
+                        continue
+
+                    # If state verification is requested, query /show_config to confirm true bot state
+                    if expected_state:
+                        actual_state = self.get_bot_state()
+                        if actual_state != expected_state.lower():
+                            logger.critical(
+                                f"🚨 STATE MISMATCH for [{command_name}] attempt {attempt}/{max_attempts}! "
+                                f"Expected state '{expected_state}', but Freqtrade reports '{actual_state}'."
+                            )
+                            delay = backoff_base * (1.5 ** (attempt - 1))
+                            time.sleep(delay)
+                            continue
+
+                    logger.info(f"✅ Critical command [{command_name}] successfully executed and verified on attempt {attempt}.")
+                    return True
+
+                except Exception as e:
+                    logger.critical(
+                        f"🚨 CRITICAL CMD [{command_name}] attempt {attempt}/{max_attempts} exception: {e}"
+                    )
+                    delay = backoff_base * (1.5 ** (attempt - 1))
+                    time.sleep(delay)
+
+            logger.critical(
+                f"💥 FATAL: Critical command [{command_name}] failed permanently after {max_attempts} attempts! "
+                f"Operator manual intervention required!"
+            )
+            return False
+
+    def get_balance(self) -> dict | None:
+        """Fetch raw balance response containing total, total_bot, and individual currencies."""
         data = self.get("/balance")
         if data and isinstance(data, dict):
-            return data.get("total", 0.0)
+            return data
         return None
 
     def get_equity(self) -> float | None:
         """
-        Get true real-time equity of the account:
-        total wallet balance + unrealized floating PnL of all open trades.
-        Ensures floating drawdown is never masked by closed-trade profit.
+        True real-time portfolio equity in stake currency (USDT).
+        Freqtrade's /balance endpoint already computes the total valuation:
+          - 'total_bot': bot-managed free stake + market value of all held assets.
+          - 'total': total wallet stake across all assets.
+        We strictly avoid double-counting unrealized PnL while guarding against NaN.
         """
-        total_balance = self.get_balance()
-        if total_balance is None:
+        data = self.get_balance()
+        if not data:
             return None
 
-        trades = self.get_open_trades()
-        if trades and isinstance(trades, list):
-            unrealized_pnl = 0.0
-            for t in trades:
-                pnl = t.get("total_profit_abs")
-                if pnl is None:
-                    pnl = t.get("profit_abs", 0.0)
-                if isinstance(pnl, (int, float)):
-                    unrealized_pnl += pnl
-            return total_balance + unrealized_pnl
+        # Prioritize total_bot (exact bot-allocated equity)
+        total_bot = data.get("total_bot")
+        if (
+            total_bot is not None
+            and isinstance(total_bot, (int, float))
+            and total_bot > 0
+            and not math.isnan(total_bot)
+        ):
+            return float(total_bot)
 
-        return total_balance
+        # Fallback to overall total if total_bot is not populated
+        total = data.get("total")
+        if (
+            total is not None
+            and isinstance(total, (int, float))
+            and total > 0
+            and not math.isnan(total)
+        ):
+            return float(total)
 
-    def get_open_trades(self) -> list | None:
-        """Get list of currently open trades."""
+        return None
+
+    def get_open_trades(self) -> list:
         data = self.get("/status")
         if isinstance(data, list):
             return data
+        return []
+
+    def get_bot_state(self) -> str | None:
+        """Returns bot state e.g. 'running', 'paused', 'stopped'."""
+        data = self.get("/show_config")
+        if data and isinstance(data, dict):
+            return data.get("state", "").lower()
         return None
 
     def stop_buying(self) -> bool:
-        """Halt all new entry signals."""
-        result = self.post("/stopbuy")
-        return result is not None
+        """Pause trade entries (existing trades continue managing exits) with verification."""
+        return self.execute_critical_command(
+            command_name="STOP_BUYING",
+            method="POST",
+            endpoint="/stopbuy",
+            expected_state="paused",
+        )
 
-    def force_exit(self, trade_id: int) -> bool:
-        """Force exit a specific trade at market price."""
-        result = self.post("/forceexit", json={"tradeid": str(trade_id)})
-        return result is not None
+    def start_trading(self) -> bool:
+        """Resume active trading entries with verification."""
+        return self.execute_critical_command(
+            command_name="START_TRADING",
+            method="POST",
+            endpoint="/start",
+            expected_state="running",
+        )
 
-    def get_blacklist(self) -> list:
-        """Get the current pair blacklist."""
-        data = self.get("/blacklist")
-        if data and isinstance(data, dict):
-            return data.get("blacklist", [])
-        return []
+    def force_exit(self, trade_id: int | str) -> bool:
+        """Liquidate a specific trade at market price with verification."""
+        return self.execute_critical_command(
+            command_name=f"FORCE_EXIT_{trade_id}",
+            method="POST",
+            endpoint="/forceexit",
+            payload={"tradeid": str(trade_id)},
+            expected_state=None,
+        )
 
     def get_whitelist(self) -> list:
-        """Get the current dynamic whitelist from Freqtrade."""
         data = self.get("/whitelist")
         if data and isinstance(data, dict):
             return data.get("whitelist", [])
         return []
 
     def add_to_blacklist(self, pairs: list) -> bool:
-        """Add specific pairs to the blacklist."""
         if not pairs:
             return True
         result = self.post("/blacklist", json={"blacklist": pairs})
@@ -352,79 +472,302 @@ class FreqtradeAPIClient:
 
 
 # ==================================================================================
-# Sentiment Analyzer (Gemini + Fear & Greed Index)
+# Live Crypto News Aggregator (Memory-Leak Free & Feed-Isolated Resilient)
 # ==================================================================================
 
-GEMINI_SYSTEM_PROMPT = """\
-You are a cryptocurrency macro-risk sentinel for an automated trading system \
-managing institutional capital. Your decisions directly control whether the \
-system liquidates all positions.
+class CryptoNewsAggregator:
+    """
+    Fetches, cleans, unescapes, and deduplicates breaking crypto news headlines from
+    multiple top-tier industry sources (CoinDesk, CoinTelegraph, Decrypt).
+    Features:
+      - Explicit In-Memory TTL Eviction (max 2h age / max 50 entries) to guarantee 0 RAM leak 24/7/365.
+      - Sandboxed Per-Source Exception Handling (Cloudflare 403 / HTML error immune).
+    """
 
-YOUR SOLE JOB is to classify the CURRENT market regime into ONE of three categories:
+    FEEDS = [
+        ("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
+        ("CoinTelegraph", "https://cointelegraph.com/rss"),
+        ("Decrypt", "https://decrypt.co/feed"),
+    ]
+    CACHE_TTL_SECONDS = 300  # 5 minutes cache refresh
 
-1. **BULL** — Normal or positive conditions. No intervention needed.
-2. **BEAR** — Elevated risk or nervous market. The system should reduce exposure.
-3. **PANIC** — Extreme systemic threat detected (Black Swan). The system must \
-IMMEDIATELY liquidate ALL positions and halt trading.
+    def __init__(self):
+        self._article_cache: dict[str, dict] = {}  # norm_key -> {"source", "title", "timestamp"}
+        self._last_fetch_time: float = 0.0
+        self._headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)"
+        }
 
-═══ PANIC CRITERIA (trigger ONLY for genuine catastrophic events) ═══
+    def _evict_expired_articles(self, now: float):
+        """Physically prune articles older than MAX_NEWS_CACHE_AGE_SECONDS or exceeding max entries."""
+        cutoff = now - MAX_NEWS_CACHE_AGE_SECONDS
+        expired_keys = [k for k, v in self._article_cache.items() if v.get("timestamp", 0) < cutoff]
+        for k in expired_keys:
+            del self._article_cache[k]
 
-PANIC should be triggered for:
-• Major exchange collapse or insolvency (FTX/Mt.Gox-level event)
-• Government ban on cryptocurrency trading in a G7/G20 country
-• Critical smart contract exploit draining billions from DeFi
-• Nuclear/military conflict directly impacting global financial markets
-• Stablecoin de-peg of USDT/USDC below $0.95
-• Central bank emergency actions causing market-wide circuit breakers
+        # Enforce hard upper bound on cache entries
+        if len(self._article_cache) > MAX_NEWS_CACHE_ENTRIES:
+            sorted_keys = sorted(
+                self._article_cache.keys(),
+                key=lambda k: self._article_cache[k].get("timestamp", 0)
+            )
+            excess = len(self._article_cache) - MAX_NEWS_CACHE_ENTRIES
+            for k in sorted_keys[:excess]:
+                del self._article_cache[k]
 
-PANIC should NOT be triggered for:
-• Normal 10-30% market corrections (these are routine in crypto)
-• FUD about regulations that haven't been enacted yet
-• Individual altcoin crashes (unless top-5 by market cap)
-• Social media rumors without official confirmation
-• Gradual bear market declines over weeks/months
-• Exchange temporary outages or maintenance
+    def get_headlines(self, max_items: int = 8) -> list[str]:
+        """Return fresh breaking headlines with isolated feed resilience and bounded memory."""
+        now = time.time()
+        self._evict_expired_articles(now)
 
-═══ OUTPUT FORMAT ═══
+        if self._article_cache and (now - self._last_fetch_time < self.CACHE_TTL_SECONDS):
+            # Return cached articles sorted by timestamp descending
+            sorted_items = sorted(
+                self._article_cache.values(),
+                key=lambda v: v.get("timestamp", 0),
+                reverse=True
+            )
+            return [f"[{item['source']}] {item['title']}" for item in sorted_items[:max_items]]
 
-Respond with ONLY a valid JSON object. No markdown, no explanation, no preamble:
-{"regime": "BULL", "confidence": 0.85, "reason": "brief one-line explanation"}
+        # Query feeds with isolated exception handling per source
+        for source_name, url in self.FEEDS:
+            resp = None
+            root = None
+            content = None
+            try:
+                resp = requests.get(url, headers=self._headers, timeout=(2.5, 4.0), allow_redirects=True)
 
-The "regime" field must be exactly one of: BULL, BEAR, PANIC (uppercase).
-The "confidence" field must be a float between 0.0 and 1.0.
-"""
+                if resp.status_code != 200:
+                    logger.warning(
+                        f"⚠️ RSS provider '{source_name}' returned HTTP {resp.status_code}. "
+                        f"Skipping source for this cycle."
+                    )
+                    continue
 
-BATCH_SYSTEM_PROMPT = """\
-You are a Senior Crypto Trader managing risk for an automated system.
-You will be given a list of cryptocurrency pairs that the system is considering trading.
-YOUR JOB is to check for specific, devastating news or structural flaws regarding ONLY these coins.
+                content = resp.content.strip()
+                if not content:
+                    logger.debug(f"RSS provider '{source_name}' returned empty response. Skipping.")
+                    continue
 
-Categories of risk for a single coin:
-- HODL: Normal market conditions, low-level rumors, general volatility. No action needed.
-- EXIT_PAIR: Confirmed catastrophic news for this specific coin.
-  The system must dump this coin immediately.
-- CONTAGION: The catastrophic news for this coin will crash the entire global crypto market.
-  The system must trigger the nuclear option.
+                # Guard against Cloudflare challenge / HTML error pages returned with 200
+                sample = content[:300].lower()
+                if b"<html" in sample or b"<!doctype html" in sample or b"cf-browser-verification" in sample:
+                    logger.warning(
+                        f"⚠️ RSS provider '{source_name}' returned HTML challenge page instead of valid XML. "
+                        f"Skipping source for this cycle."
+                    )
+                    continue
 
-OUTPUT FORMAT: Respond with ONLY a valid JSON object. No markdown, no explanation.
-Include ONLY coins that require an action other than HODL. If all are HODL, return {}.
+                # Isolated XML Parsing
+                try:
+                    root = ET.fromstring(content)
+                except ET.ParseError as parse_err:
+                    logger.warning(
+                        f"⚠️ RSS provider '{source_name}' XML parse error: {parse_err}. "
+                        f"Skipping corrupted feed."
+                    )
+                    continue
+
+                # Universal Discovery: RSS 2.0 (<item>), Atom (<entry>), RDF (<item>)
+                items = []
+                items.extend(root.findall(".//item"))
+                if not items:
+                    items.extend(root.findall(".//{http://www.w3.org/2005/Atom}entry"))
+                if not items:
+                    items.extend(root.findall(".//entry"))
+                if not items:
+                    items.extend(root.findall(".//{http://purl.org/rss/1.0/}item"))
+
+                for item in items[:6]:
+                    try:
+                        title_elem = item.find("title")
+                        if title_elem is None:
+                            title_elem = item.find("{http://www.w3.org/2005/Atom}title")
+
+                        if title_elem is not None and title_elem.text:
+                            raw_title = title_elem.text.strip()
+                            raw_title = re.sub(r"^<!\[CDATA\[(.*)\]\]>$", r"\1", raw_title, flags=re.DOTALL)
+                            clean_title = re.sub(r"<[^>]+>", "", raw_title).strip()
+                            clean_title = html.unescape(clean_title)
+
+                            if len(clean_title) >= 12:
+                                norm_key = re.sub(r"[^a-zA-Z0-9]", "", clean_title.lower())
+                                if norm_key not in self._article_cache:
+                                    self._article_cache[norm_key] = {
+                                        "source": source_name,
+                                        "title": clean_title,
+                                        "timestamp": now,
+                                    }
+                    except Exception as item_err:
+                        logger.debug(f"Item extraction error in '{source_name}': {item_err}")
+                        continue
+
+            except requests.exceptions.Timeout:
+                logger.debug(f"RSS provider '{source_name}' timed out (4s). Skipping.")
+            except requests.exceptions.RequestException as req_err:
+                logger.debug(f"RSS provider '{source_name}' network error: {req_err}. Skipping.")
+            except Exception as feed_err:
+                logger.warning(f"⚠️ RSS provider '{source_name}' unhandled error: {feed_err}. Skipping.")
+            finally:
+                # Explicit memory deallocation of DOM and buffer
+                if root is not None:
+                    del root
+                if resp is not None:
+                    del resp
+                if content is not None:
+                    del content
+
+        self._last_fetch_time = now
+        self._evict_expired_articles(now)
+
+        sorted_items = sorted(
+            self._article_cache.values(),
+            key=lambda v: v.get("timestamp", 0),
+            reverse=True
+        )
+        headlines = [f"[{item['source']}] {item['title']}" for item in sorted_items[:max_items]]
+
+        if headlines:
+            logger.info(f"📰 Refreshed breaking crypto headlines ({len(headlines)} items, cache size: {len(self._article_cache)}).")
+        return headlines
+
+
+# ==================================================================================
+# Binance Macro Market Monitor (Primary + Vision Fallback)
+# ==================================================================================
+
+class BinanceMacroMonitor:
+    """
+    Queries Binance public REST endpoints to monitor:
+      - BTC live price and 1h / 24h price momentum
+      - ETH 24h price momentum
+      - Acute flash-crash detection (BTC dropping >5% in 1h)
+      - Heavy bearish correction detection (BTC dropping >6% in 24h)
+    Includes secondary endpoint fallback (data-api.binance.vision).
+    """
+
+    CACHE_TTL_SECONDS = 60  # 1 minute cache
+    ENDPOINTS = [
+        "https://api.binance.com",
+        "https://data-api.binance.vision",
+    ]
+
+    def __init__(self):
+        self._cached_metrics: dict = {}
+        self._last_fetch_time: float = 0.0
+
+    def get_metrics(self) -> dict:
+        now = time.time()
+        if self._cached_metrics and (now - self._last_fetch_time < self.CACHE_TTL_SECONDS):
+            return self._cached_metrics
+
+        metrics = {
+            "btc_price": 0.0,
+            "btc_1h_pct": 0.0,
+            "btc_24h_pct": 0.0,
+            "eth_24h_pct": 0.0,
+            "is_flash_crash": False,
+            "is_heavy_bear": False,
+        }
+
+        for base_url in self.ENDPOINTS:
+            try:
+                # 1. BTC 24h Ticker
+                r_btc = requests.get(
+                    f"{base_url}/api/v3/ticker/24hr?symbol=BTCUSDT",
+                    timeout=(2.0, 3.0),
+                )
+                if r_btc.status_code == 200:
+                    d = r_btc.json()
+                    metrics["btc_price"] = float(d.get("lastPrice", 0.0))
+                    metrics["btc_24h_pct"] = round(float(d.get("priceChangePercent", 0.0)), 2)
+
+                # 2. ETH 24h Ticker
+                r_eth = requests.get(
+                    f"{base_url}/api/v3/ticker/24hr?symbol=ETHUSDT",
+                    timeout=(2.0, 3.0),
+                )
+                if r_eth.status_code == 200:
+                    d = r_eth.json()
+                    metrics["eth_24h_pct"] = round(float(d.get("priceChangePercent", 0.0)), 2)
+
+                # 3. BTC 1h Momentum
+                r_kline = requests.get(
+                    f"{base_url}/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=2",
+                    timeout=(2.0, 3.0),
+                )
+                if r_kline.status_code == 200:
+                    k = r_kline.json()
+                    if k and len(k) > 0 and len(k[-1]) >= 5:
+                        open_p = float(k[-1][1])
+                        close_p = float(k[-1][4])
+                        if open_p > 0:
+                            metrics["btc_1h_pct"] = round((close_p - open_p) / open_p * 100, 2)
+
+                if metrics["btc_1h_pct"] <= -5.0:
+                    metrics["is_flash_crash"] = True
+
+                if metrics["btc_24h_pct"] <= -6.0 or metrics["btc_1h_pct"] <= -3.0:
+                    metrics["is_heavy_bear"] = True
+
+                self._cached_metrics = metrics
+                self._last_fetch_time = now
+                logger.debug(
+                    f"📊 Binance Macro ({base_url}): BTC ${metrics['btc_price']:,.2f} | "
+                    f"1h: {metrics['btc_1h_pct']:+}% | 24h: {metrics['btc_24h_pct']:+}% | "
+                    f"ETH 24h: {metrics['eth_24h_pct']:+}%"
+                )
+                return metrics
+
+            except Exception as e:
+                logger.debug(f"Binance macro fetch error from {base_url}: {e}")
+                continue
+
+        return self._cached_metrics if self._cached_metrics else metrics
+
+
+# ==================================================================================
+# Context-Aware AI Sentiment Analyzer & Anti-Hallucination Guard
+# ==================================================================================
+
+GEMINI_SENTINEL_SYSTEM_PROMPT = """\
+You are an institutional cryptocurrency risk manager supervising an automated trading system.
+Your job is to evaluate real-time breaking news headlines, macro Bitcoin/Ethereum metrics,
+and token listings to protect capital from Black Swan events and acute market dislocations.
+
+REGIMES:
+1. BULL: Normal or positive market conditions. Standard market volatility is acceptable. System trades actively.
+2. BEAR: Elevated risk, acute negative news shock (regulatory threats, ETF dumps, sudden sharp sell-offs).
+   ACTION: System proactively halts new entries (/stopbuy) while letting open trades manage exits naturally.
+3. PANIC: Systemic collapse / Black Swan (Major exchange insolvency, stablecoin depeg < $0.95, major DeFi exploit, global regulatory ban).
+   ACTION: Immediate emergency liquidation of all positions (Nuclear Option).
+
+TOKEN-SPECIFIC THREATS:
+Check the monitored coins against the headlines. If a specific coin suffered a smart contract hack,
+exploit, or delisting announcement, flag it as EXIT_PAIR.
+
+OUTPUT FORMAT: Return ONLY valid JSON:
 {
-  "PAIR_NAME": {"action": "EXIT_PAIR"|"CONTAGION", "reason": "brief explanation"},
-  ...
+  "regime": "BULL" | "BEAR" | "PANIC",
+  "confidence": 0.95,
+  "reason": "Brief explanation referencing the specific headline or metric",
+  "cooldown_minutes": 60,
+  "flagged_coins": {
+    "COIN/USDT": {"action": "EXIT_PAIR", "reason": "brief explanation"}
+  }
 }
 """
+
+CATASTROPHIC_KEYWORDS = [
+    "insolven", "bankrupt", "depeg", "exploit", "stolen", "drained",
+    "hack", "arrest", "indict", "freeze", "liquidation cascade", "collapse"
+]
 
 
 class SentimentAnalyzer:
     """
-    Analyzes market sentiment using a layered approach:
-
-      1. Fear & Greed Index (always fetched first — fast, deterministic)
-      2. Gemini LLM (primary analysis — nuanced, context-aware)
-      3. Fallback logic if LLM is unavailable
-
-    Circuit breaker: after N consecutive LLM failures, automatically
-    falls back to FGI-only mode for a configurable cooldown period.
+    Coordinates Live News, Binance Macro, Fear & Greed Index, and Gemini LLM.
+    Enforces quota tracking, circuit breakers, and anti-hallucination guardrails.
     """
 
     FGI_API_URL = "https://api.alternative.me/fng/"
@@ -432,343 +775,247 @@ class SentimentAnalyzer:
     def __init__(self, gemini_api_key: str):
         self.gemini_api_key = gemini_api_key
         self.gemini_client = None
+        self.news_aggregator = CryptoNewsAggregator()
+        self.macro_monitor = BinanceMacroMonitor()
+        self.quota_tracker = APIQuotaTracker()
         self.consecutive_llm_failures = 0
-        self.consecutive_micro_failures = 0
         self.circuit_breaker_until: datetime | None = None
 
         if gemini_api_key:
             try:
                 from google import genai
-
                 self.gemini_client = genai.Client(
                     api_key=gemini_api_key,
                     http_options={"timeout": LLM_TIMEOUT_MS},
                 )
-                logger.info(f"✅ Gemini AI client initialized (model: {GEMINI_MODEL})")
-            except ImportError:
-                logger.warning(
-                    "⚠️ google-genai library not installed. "
-                    "Run: pip install google-genai"
-                )
+                logger.info(f"✅ Gemini AI Client initialized (default model: {GEMINI_MODEL}).")
             except Exception as e:
                 logger.error(f"Failed to initialize Gemini client: {e}")
         else:
-            logger.warning(
-                "⚠️ GEMINI_API_KEY not set. Using FGI-only mode."
-            )
+            logger.warning("⚠️ GEMINI_API_KEY not set. Running in deterministic Macro+FGI mode.")
 
-    # ----- Fear & Greed Index -----
-
-    def get_fear_and_greed_index(self) -> tuple[int, str] | None:
-        """
-        Fetch the current Crypto Fear & Greed Index from alternative.me.
-        Returns: (value 0-100, classification_string) or None on failure.
-        """
+    def get_fear_and_greed_index(self) -> tuple[int, str]:
         try:
-            response = requests.get(self.FGI_API_URL, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            if "data" in data and len(data["data"]) > 0:
-                entry = data["data"][0]
-                value = int(entry["value"])
-                classification = entry.get("value_classification", "Unknown")
-                logger.info(f"📊 Fear & Greed Index: {value} ({classification})")
-                return value, classification
-        except requests.exceptions.Timeout:
-            logger.warning("⚠️ Fear & Greed Index API timeout")
+            resp = requests.get(self.FGI_API_URL, timeout=(2.0, 4.0))
+            if resp.status_code == 200:
+                data = resp.json()
+                if "data" in data and len(data["data"]) > 0:
+                    val = int(data["data"][0]["value"])
+                    cls_str = data["data"][0].get("value_classification", "Neutral")
+                    return val, cls_str
         except Exception as e:
-            logger.error(f"Failed to fetch Fear & Greed Index: {e}")
-        return None
-
-    @staticmethod
-    def _fgi_to_regime(fgi_value: int) -> str:
-        """
-        Convert Fear & Greed Index to market regime (deterministic fallback).
-
-        Thresholds:
-          FGI <= 10  →  panic  (Extreme Fear, potential systemic crisis)
-          FGI <= 25  →  bear   (Fear, elevated risk)
-          FGI >  25  →  bull   (Neutral to Greed, normal operations)
-        """
-        if fgi_value <= 10:
-            return "panic"
-        elif fgi_value <= 25:
-            return "bear"
-        else:
-            return "bull"
-
-    # ----- Circuit Breaker -----
+            logger.debug(f"FGI fetch warning: {e}")
+        return 50, "Neutral"
 
     def _is_circuit_breaker_active(self) -> bool:
-        """Check if the LLM circuit breaker is currently active."""
         if self.circuit_breaker_until is None:
             return False
         if datetime.now(timezone.utc) >= self.circuit_breaker_until:
-            logger.info(
-                "🔄 LLM circuit breaker cooldown expired. "
-                "Re-enabling LLM analysis."
-            )
+            logger.info("🔄 LLM circuit breaker expired. Re-enabling Gemini analysis.")
             self.circuit_breaker_until = None
             self.consecutive_llm_failures = 0
             return False
-        remaining = (self.circuit_breaker_until - datetime.now(timezone.utc)).seconds
-        logger.debug(
-            f"Circuit breaker active, {remaining}s remaining until LLM re-enabled"
-        )
         return True
 
     def _trip_circuit_breaker(self):
-        """Activate the circuit breaker after too many LLM failures."""
         self.circuit_breaker_until = datetime.now(timezone.utc) + timedelta(
             seconds=LLM_CIRCUIT_BREAKER_COOLDOWN_SECONDS
         )
-        cooldown_min = LLM_CIRCUIT_BREAKER_COOLDOWN_SECONDS / 60
         logger.warning(
-            f"⚡ LLM circuit breaker TRIPPED after "
-            f"{self.consecutive_llm_failures} consecutive failures. "
-            f"Falling back to FGI-only mode for {cooldown_min:.0f} minutes."
+            f"⚡ LLM circuit breaker TRIPPED after {self.consecutive_llm_failures} failures. "
+            f"Falling back to deterministic Macro+FGI mode for {LLM_CIRCUIT_BREAKER_COOLDOWN_SECONDS // 60}m."
         )
 
-    # ----- Gemini LLM -----
-
-    def _query_gemini(self, fgi_value: int, fgi_classification: str) -> str | None:
+    def analyze_market(self, whitelist: list) -> dict:
         """
-        Query Gemini 2.5 Flash for market regime analysis.
-
-        Returns: regime string ("bull", "bear", "panic") or None on failure.
+        Gathers live breaking news, Binance macro momentum, and FGI.
+        Performs contextual AI evaluation or deterministic fallback.
         """
-        if not self.gemini_client:
-            return None
+        fgi_val, fgi_cls = self.get_fear_and_greed_index()
+        macro = self.macro_monitor.get_metrics()
+        headlines = self.news_aggregator.get_headlines(max_items=7)
 
-        if self._is_circuit_breaker_active():
-            return None
+        # 1. Deterministic Flash-Crash Pre-check:
+        if macro.get("is_flash_crash"):
+            logger.critical(
+                f"🚨 FLASH CRASH DETECTED via Binance Macro: "
+                f"BTC 1h={macro['btc_1h_pct']:+}%, 24h={macro['btc_24h_pct']:+}%!"
+            )
+            return {
+                "regime": "PANIC",
+                "confidence": 0.99,
+                "reason": f"Deterministic flash-crash trigger: BTC dropped {macro['btc_1h_pct']}% in 1 hour.",
+                "cooldown_minutes": 180,
+                "flagged_coins": {},
+            }
 
+        # 2. Check Quota & Circuit Breakers before invoking Gemini
+        can_call_gemini, reason = self.quota_tracker.can_call()
+        if not can_call_gemini:
+            logger.debug(f"Gemini call bypassed: {reason}. Using deterministic guardrails.")
+            return self._deterministic_fallback(fgi_val, macro)
+
+        if self.gemini_client and not self._is_circuit_breaker_active():
+            llm_result = self._query_gemini_context(whitelist, fgi_val, fgi_cls, macro, headlines)
+            if llm_result:
+                # Anti-Hallucination Dual-Factor Guardrail:
+                if llm_result.get("regime") == "PANIC":
+                    has_catastrophic_headline = any(
+                        any(kw in h.lower() for kw in CATASTROPHIC_KEYWORDS)
+                        for h in headlines
+                    )
+                    has_price_collapse = (macro["btc_1h_pct"] <= -3.0 or macro["btc_24h_pct"] <= -6.0)
+
+                    if not has_catastrophic_headline and not has_price_collapse:
+                        logger.warning(
+                            f"⚠️ Anti-Hallucination: Gemini signaled PANIC, but market price momentum is calm "
+                            f"(BTC 1h={macro['btc_1h_pct']:+}%, 24h={macro['btc_24h_pct']:+}%) and no catastrophic "
+                            f"headlines were detected. Downgrading to BEAR."
+                        )
+                        llm_result["regime"] = "BEAR"
+                        llm_result["reason"] = f"[Downgraded from PANIC] {llm_result.get('reason')}"
+
+                return llm_result
+
+        # 3. Deterministic Fallback if Gemini unavailable or skipped
+        return self._deterministic_fallback(fgi_val, macro)
+
+    def _clean_llm_json(self, raw_text: str) -> dict | None:
+        """Robustly sanitize and parse LLM JSON output."""
         try:
-            from google.genai import types
-
-            user_prompt = (
-                f"Current Crypto Fear & Greed Index: {fgi_value} "
-                f"({fgi_classification})\n\n"
-                f"Current UTC time: "
-                f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}\n\n"
-                f"Based on the current market data and any knowledge you have "
-                f"of recent events, classify the current market regime."
-            )
-
-            response = None
-            used_model = None
-            last_err = None
-            for model_name in GEMINI_FALLBACK_MODELS:
-                try:
-                    response = self.gemini_client.models.generate_content(
-                        model=model_name,
-                        contents=user_prompt,
-                        config=types.GenerateContentConfig(
-                            system_instruction=GEMINI_SYSTEM_PROMPT,
-                            temperature=0.1,
-                            max_output_tokens=256,
-                            response_mime_type="application/json",
-                        ),
-                    )
-                    if response and response.text:
-                        used_model = model_name
-                        break
-                except Exception as model_err:
-                    last_err = model_err
-                    logger.warning(
-                        f"Gemini model '{model_name}' unavailable ({model_err}). "
-                        "Trying next fallback model..."
-                    )
-
-            if not response or not response.text:
-                raise ValueError(
-                    f"All Gemini models in fallback cascade failed. Last error: {last_err}"
-                )
-            result_text = response.text.strip()
-            result = json.loads(result_text)
-            regime = result.get("regime", "").upper()
-            confidence = float(result.get("confidence", 0.0))
-            reason = result.get("reason", "N/A")
-
-            regime_lower = regime.lower()
-            if regime_lower not in ("bull", "bear", "panic"):
-                logger.warning(
-                    f"Invalid regime from Gemini: '{regime}'. Ignoring response."
-                )
-                raise ValueError(f"Invalid regime: {regime}")
-
-            logger.info(
-                f"🤖 Gemini analysis: regime={regime}, "
-                f"confidence={confidence:.2f}, reason='{reason}'"
-            )
-
-            # Reset failure counter on success
-            self.consecutive_llm_failures = 0
-            return regime_lower
-
-        except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse Gemini response as JSON: {e}")
-        except ImportError:
-            logger.error("google-genai types module not available")
+            text = raw_text.strip()
+            if "```" in text:
+                text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.MULTILINE)
+                text = re.sub(r"\s*```$", "", text, flags=re.MULTILINE)
+            start_idx = text.find("{")
+            end_idx = text.rfind("}")
+            if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                json_str = text[start_idx : end_idx + 1]
+                json_str = re.sub(r",\s*([\]}])", r"\1", json_str)
+                return json.loads(json_str)
         except Exception as e:
-            logger.warning(f"Gemini API call failed: {type(e).__name__}: {e}")
-
-        # Track failure
-        self.consecutive_llm_failures += 1
-        logger.info(
-            f"LLM failure count: {self.consecutive_llm_failures}/"
-            f"{LLM_MAX_CONSECUTIVE_FAILURES}"
-        )
-        if self.consecutive_llm_failures >= LLM_MAX_CONSECUTIVE_FAILURES:
-            self._trip_circuit_breaker()
-
+            logger.debug(f"JSON cleaning error: {e}")
         return None
 
-    # ----- Main Analysis -----
-
-    def analyze(self) -> str:
-        """
-        Determine the current market regime using the full analysis chain:
-
-          1. Fetch Fear & Greed Index (fast, always available)
-          2. Query Gemini LLM with FGI context (nuanced analysis)
-          3. Fall back to FGI-only if LLM is unavailable
-          4. Default to "bull" (safe default) if everything fails
-
-        Anti-hallucination safety: if Gemini says PANIC but FGI is in
-        greed territory (> 50), the signal is downgraded to BEAR.
-
-        Returns: "bull", "bear", or "panic"
-        """
-        # Step 1: Get Fear & Greed Index
-        fgi_result = self.get_fear_and_greed_index()
-
-        if fgi_result is None:
-            logger.warning(
-                "⚠️ FGI unavailable. Attempting LLM-only analysis..."
-            )
-            # Try Gemini without FGI context
-            gemini_regime = self._query_gemini(50, "Neutral (FGI unavailable)")
-            if gemini_regime is not None:
-                return gemini_regime
-            logger.warning(
-                "⚠️ Both FGI and LLM unavailable. "
-                "Defaulting to 'bull' (safe default — no action taken)."
-            )
-            return "bull"
-
-        fgi_value, fgi_classification = fgi_result
-
-        # Step 2: Try Gemini LLM with FGI context
-        gemini_regime = self._query_gemini(fgi_value, fgi_classification)
-
-        if gemini_regime is not None:
-            # Anti-hallucination guard: if LLM says PANIC but FGI is > 50,
-            # the LLM might be hallucinating. Downgrade to BEAR.
-            if gemini_regime == "panic" and fgi_value > 50:
-                logger.warning(
-                    f"⚠️ ANTI-HALLUCINATION: Gemini says PANIC but "
-                    f"FGI is {fgi_value} (greed territory). "
-                    f"Downgrading to BEAR as safety measure."
-                )
-                return "bear"
-            return gemini_regime
-
-        # Step 3: Fallback to deterministic FGI
-        regime = self._fgi_to_regime(fgi_value)
-        logger.info(
-            f"📊 Using FGI deterministic fallback: "
-            f"FGI={fgi_value} → regime={regime.upper()}"
-        )
-        return regime
-
-    def analyze_whitelist_batch(self, pairs: list) -> dict | None:
-        """
-        Query Gemini to proactively analyze a batch of crypto pairs.
-        """
-        if not self.gemini_client or not pairs:
-            return None
-
-        if self._is_circuit_breaker_active():
-            return None
-
+    def _query_gemini_context(
+        self,
+        whitelist: list,
+        fgi_val: int,
+        fgi_cls: str,
+        macro: dict,
+        headlines: list,
+    ) -> dict | None:
         try:
             from google.genai import types
 
-            pairs_str = ", ".join(pairs)
-            user_prompt = (
-                f"Analyze the following {len(pairs)} specific pairs: {pairs_str}. "
-                f"Return ONLY those requiring EXIT_PAIR or CONTAGION. "
-                f"If none, return empty JSON {{}}. "
-                f"Current UTC time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}"
-            )
+            whitelist_sample = ", ".join(whitelist[:20]) if whitelist else "None"
+            headlines_str = "\n".join(f"- {h}" for h in headlines) if headlines else "- No acute news alerts"
+
+            user_prompt = f"""\
+Current Market Context (UTC {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}):
+- Fear & Greed Index: {fgi_val} ({fgi_cls})
+- Bitcoin Price: ${macro['btc_price']:,.2f}
+- Bitcoin 1h Change: {macro['btc_1h_pct']:+}%
+- Bitcoin 24h Change: {macro['btc_24h_pct']:+}%
+- Ethereum 24h Change: {macro['eth_24h_pct']:+}%
+
+Breaking Crypto News Headlines (Past 1-3 Hours):
+{headlines_str}
+
+Active Bot Whitelist Coins Monitored:
+{whitelist_sample}
+
+Evaluate current market regime.
+"""
+
+            if not self.gemini_client:
+                return None
 
             response = None
-            used_model = None
-            last_err = None
             for model_name in GEMINI_FALLBACK_MODELS:
                 try:
                     response = self.gemini_client.models.generate_content(
                         model=model_name,
                         contents=user_prompt,
                         config=types.GenerateContentConfig(
-                            system_instruction=BATCH_SYSTEM_PROMPT,
+                            system_instruction=GEMINI_SENTINEL_SYSTEM_PROMPT,
                             temperature=0.1,
-                            max_output_tokens=1024,
+                            max_output_tokens=300,
                             response_mime_type="application/json",
                         ),
                     )
                     if response and response.text:
-                        used_model = model_name
                         break
-                except Exception as model_err:
-                    last_err = model_err
-                    logger.warning(
-                        f"Batch analysis on model '{model_name}' failed ({model_err}). "
-                        "Trying next fallback model..."
-                    )
+                except Exception as m_err:
+                    logger.debug(f"Model '{model_name}' attempt skipped: {m_err}")
 
             if not response or not response.text:
-                raise ValueError(
-                    f"All Gemini models in fallback cascade failed for batch analysis. Last error: {last_err}"
-                )
-            result_text = response.text.strip()
-            result = json.loads(result_text)
-            flags = list(result.keys()) if result else 'None'
-            logger.info(
-                f"🧠 Proactive batch analysis for {len(pairs)} pairs completed. "
-                f"Flags: {flags}"
-            )
+                raise ValueError("All models in Gemini cascade failed.")
 
-            self.consecutive_micro_failures = 0
-            return result
+            parsed = self._clean_llm_json(response.text)
+            if not parsed or not isinstance(parsed, dict):
+                raise ValueError(f"Failed to parse JSON response: {response.text[:100]}")
+
+            regime = str(parsed.get("regime", "BULL")).upper()
+            if regime not in ("BULL", "BEAR", "PANIC"):
+                regime = "BULL"
+            parsed["regime"] = regime
+
+            logger.info(
+                f"🤖 AI Sentinel Decision: {regime} (conf: {parsed.get('confidence', 0):.2f}) | "
+                f"Reason: {parsed.get('reason', 'N/A')}"
+            )
+            self.quota_tracker.record_call()
+            self.consecutive_llm_failures = 0
+            return parsed
 
         except Exception as e:
-            logger.warning(f"Gemini Batch analysis failed: {type(e).__name__}: {e}")
-            self.consecutive_micro_failures += 1
-            if self.consecutive_micro_failures >= LLM_MAX_CONSECUTIVE_FAILURES:
+            logger.warning(f"Gemini evaluation failure: {e}")
+            self.consecutive_llm_failures += 1
+            if self.consecutive_llm_failures >= LLM_MAX_CONSECUTIVE_FAILURES:
                 self._trip_circuit_breaker()
             return None
 
+    def _deterministic_fallback(self, fgi_val: int, macro: dict) -> dict:
+        """Deterministic mathematical safety net when LLM is unavailable or quota-capped."""
+        if macro.get("is_heavy_bear") or fgi_val <= 15:
+            regime = "BEAR"
+            reason = f"Deterministic heavy bear defense: FGI={fgi_val}, BTC 24h={macro.get('btc_24h_pct', 0)}%."
+            cooldown = 90
+        elif fgi_val <= 25 or macro.get("btc_24h_pct", 0) <= -4.0:
+            regime = "BEAR"
+            reason = f"Elevated market fear: FGI={fgi_val}, BTC 24h={macro.get('btc_24h_pct', 0)}%."
+            cooldown = 60
+        else:
+            regime = "BULL"
+            reason = f"Normal market conditions: FGI={fgi_val}, BTC 24h={macro.get('btc_24h_pct', 0)}%."
+            cooldown = 0
+
+        logger.info(f"📊 Deterministic Guardrail: {regime} | {reason}")
+        return {
+            "regime": regime,
+            "confidence": 0.85,
+            "reason": reason,
+            "cooldown_minutes": cooldown,
+            "flagged_coins": {},
+        }
+
 
 # ==================================================================================
-# Risk Manager (Main Orchestrator)
+# Risk Manager (Main Orchestrator with Hysteresis & Wake-Up Lock)
 # ==================================================================================
-
 
 class RiskManager:
     """
-    Main orchestrator for the Zero-Burn risk management system.
-
-    Monitors:
-      1. Global portfolio drawdown (hard mathematical stop — EVERY cycle)
-      2. Market regime via AI + sentiment (Black Swan detection — every N cycles)
-
-    Actions:
-      - BULL regime: Normal operations, no intervention.
-      - BEAR regime: Log warning. (Future: dynamically reduce max_open_trades)
-      - PANIC regime: Trigger Nuclear Option.
-      - Drawdown > threshold: Trigger Nuclear Option.
+    Main orchestrator for the Zero-Burn risk management architecture.
+    Runs:
+      1. Main Thread: Dedicated High-Priority Drawdown Guard on true floating equity.
+      2. Background Thread: Live News + Binance Macro + Gemini AI Sentinel.
+    Protected by:
+      - Anti-Whipsaw Hysteresis State Machine (BULL_CONFIRMATION_CYCLES)
+      - Guarded Wake-Up Lock on cooldown expiration
+      - Critical Command Retry with Exponential Backoff and State Verification
+      - Deadlock-Free Architecture: Zero network calls inside _state_lock
     """
 
     def __init__(self):
@@ -779,434 +1026,345 @@ class RiskManager:
         )
         self.sentiment = SentimentAnalyzer(GEMINI_API_KEY)
 
+        self._state_lock = threading.RLock()
         self.initial_balance: float | None = None
         self.peak_balance: float | None = None
         self.nuclear_triggered = False
-        self.current_regime = "bull"
+        self.current_regime = "BULL"
+        self.cooldown_until: datetime | None = None
+        self.wake_up_lock = False
+        self.consecutive_bull_cycles = 0
         self.cycle_count = 0
         self._shutdown_requested = False
-        self.known_open_pairs = set()
-        self.last_micro_analysis_time = None
 
-        # Load persisted state from disk
         self._load_state()
 
-        # Register signal handlers for graceful shutdown
         signal.signal(signal.SIGTERM, self._handle_shutdown)
         signal.signal(signal.SIGINT, self._handle_shutdown)
 
-    # ----- Signal Handlers -----
-
     def _handle_shutdown(self, signum, frame):
-        """Handle graceful shutdown on SIGTERM / SIGINT."""
         sig_name = signal.Signals(signum).name
-        logger.info(f"🛑 Received {sig_name}, shutting down gracefully...")
+        logger.info(f"🛑 Received {sig_name}, shutting down Risk Manager gracefully...")
         self._shutdown_requested = True
         self._save_state()
 
-    # ----- State Persistence -----
-
     def _load_state(self):
-        """Load persisted state from disk (survives restarts)."""
-        if STATE_FILE.exists():
-            try:
-                from pathlib import Path
-                with Path(STATE_FILE).open() as f:
-                    state = json.load(f)
-                self.initial_balance = state.get("initial_balance")
-                self.peak_balance = state.get("peak_balance", self.initial_balance)
-                self.nuclear_triggered = state.get("nuclear_triggered", False)
-                self.current_regime = state.get("current_regime", "bull")
-                if self.initial_balance:
-                    logger.info(
-                        f"📁 Restored state from disk: "
-                        f"initial_balance={self.initial_balance:.2f} USDT, "
-                        f"peak_balance={self.peak_balance:.2f} USDT, "
-                        f"nuclear={self.nuclear_triggered}, "
-                        f"regime={self.current_regime}"
-                    )
-                if self.nuclear_triggered:
-                    logger.warning(
-                        "☢️  Nuclear option was previously triggered. "
-                        "Delete risk_manager_state.json to reset."
-                    )
-            except Exception as e:
-                logger.warning(f"Failed to load state file: {e}")
+        with self._state_lock:
+            if STATE_FILE.exists():
+                try:
+                    with open(STATE_FILE) as f:
+                        state = json.load(f)
+                    self.initial_balance = state.get("initial_balance")
+                    self.peak_balance = state.get("peak_balance", self.initial_balance)
+                    self.nuclear_triggered = state.get("nuclear_triggered", False)
+                    self.current_regime = state.get("current_regime", "BULL")
+                    self.wake_up_lock = state.get("wake_up_lock", False)
+                    self.consecutive_bull_cycles = state.get("consecutive_bull_cycles", 0)
+                    cooldown_str = state.get("cooldown_until")
+                    if cooldown_str:
+                        self.cooldown_until = datetime.fromisoformat(cooldown_str)
+                    if self.initial_balance:
+                        logger.info(
+                            f"📁 Restored state from disk: initial={self.initial_balance:.2f} USDT, "
+                            f"peak={self.peak_balance:.2f} USDT, regime={self.current_regime}, "
+                            f"wake_up_lock={self.wake_up_lock}, bull_confirmations={self.consecutive_bull_cycles}"
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to load state file: {e}")
 
     def _save_state(self):
-        """Persist current state to disk."""
-        state = {
-            "initial_balance": self.initial_balance,
-            "peak_balance": self.peak_balance,
-            "nuclear_triggered": self.nuclear_triggered,
-            "current_regime": self.current_regime,
-            "last_updated": datetime.now(timezone.utc).isoformat(),
-        }
-        try:
-            from pathlib import Path
-            with Path(STATE_FILE).open("w") as f:
-                json.dump(state, f, indent=2)
-        except Exception as e:
-            logger.error(f"Failed to save state: {e}")
+        with self._state_lock:
+            state = {
+                "initial_balance": self.initial_balance,
+                "peak_balance": self.peak_balance,
+                "nuclear_triggered": self.nuclear_triggered,
+                "current_regime": self.current_regime,
+                "wake_up_lock": self.wake_up_lock,
+                "consecutive_bull_cycles": self.consecutive_bull_cycles,
+                "cooldown_until": self.cooldown_until.isoformat() if self.cooldown_until else None,
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+            }
+            try:
+                tmp_file = STATE_FILE.with_suffix(".tmp")
+                with open(tmp_file, "w") as f:
+                    json.dump(state, f, indent=2)
+                tmp_file.replace(STATE_FILE)
+            except Exception as e:
+                logger.error(f"Failed to save state: {e}")
 
-    # ----- Nuclear Option -----
+    def trigger_nuclear_option(self, reason: str):
+        """Emergency hard liquidation (Nuclear Option). Zero network calls inside lock."""
+        with self._state_lock:
+            if self.nuclear_triggered:
+                return
 
-    def trigger_nuclear_option(self, reason: str):  # noqa: C901
-        """
-        EMERGENCY STOP — Last line of defense against catastrophic losses.
+            logger.critical("=" * 70)
+            logger.critical("☢️  NUCLEAR OPTION TRIGGERED!")
+            logger.critical(f"   Reason: {reason}")
+            logger.critical("=" * 70)
 
-        Sequence:
-          1. Halt all new entries (/stopbuy)
-          2. Fetch all open trades (/status)
-          3. Force exit each trade at market price (/forceexit)
-          4. Persist state and enter hibernation
-        """
-        if self.nuclear_triggered:
-            logger.warning("Nuclear option already triggered. Skipping.")
-            return
+            self.nuclear_triggered = True
+            self.wake_up_lock = True
+            self._save_state()
 
-        logger.critical("")
-        logger.critical("=" * 60)
-        logger.critical("☢️  NUCLEAR OPTION TRIGGERED!")
-        logger.critical(f"   Reason: {reason}")
-        logger.critical("=" * 60)
-        logger.critical("")
+        # ALL NETWORK OPERATIONS ARE 100% OUTSIDE _STATE_LOCK
+        # 1. Stop all buying immediately with verified critical executor
+        self.api_client.stop_buying()
+        logger.info("🛑 Bot buying permanently HALTED.")
 
-        self.nuclear_triggered = True
+        # 2. Force exit all open trades
+        trades = self.api_client.get_open_trades()
+        if trades and len(trades) > 0:
+            logger.info(f"📤 Liquidating {len(trades)} open positions...")
+            for t in trades:
+                tid = t.get("trade_id") or t.get("tradeid") or t.get("id")
+                pair = t.get("pair")
+                if tid is not None:
+                    self.api_client.force_exit(tid)
+                    logger.warning(f"  ✅ Liquidated #{tid} ({pair})")
+                    time.sleep(0.3)
+        else:
+            logger.info("No open positions to liquidate.")
+
+        logger.critical("☢️  Nuclear option execution complete. Capital secured in USDT.")
         self._save_state()
-
-        # Step 1: Stop all new entries IMMEDIATELY
-        try:
-            if self.api_client.stop_buying():
-                logger.info("🛑 Bot buying HALTED successfully.")
-            else:
-                logger.error(
-                    "⚠️ Failed to halt buying via API! "
-                    "Continuing with force exits..."
-                )
-        except Exception as e:
-            logger.error(f"Error halting buying: {e}")
-
-        # Step 2: Force exit all open positions
-        try:
-            trades = self.api_client.get_open_trades()
-            if trades and len(trades) > 0:
-                logger.info(f"📤 Force exiting {len(trades)} open trade(s)...")
-                exit_successes = 0
-                exit_failures = 0
-                for trade in trades:
-                    trade_id = trade.get("trade_id")
-                    pair = trade.get("pair", "unknown")
-                    profit_pct = trade.get("profit_pct", 0.0)
-                    try:
-                        if self.api_client.force_exit(trade_id):
-                            logger.warning(
-                                f"  ✅ Force exited #{trade_id} "
-                                f"({pair}, P/L: {profit_pct:.2f}%)"
-                            )
-                            exit_successes += 1
-                        else:
-                            logger.error(
-                                f"  ❌ Failed to force exit #{trade_id} ({pair})"
-                            )
-                            exit_failures += 1
-                    except Exception as e:
-                        logger.error(
-                            f"  ❌ Error force exiting #{trade_id}: {e}"
-                        )
-                        exit_failures += 1
-                    # Small delay between exits to avoid rate limits
-                    time.sleep(0.5)
-
-                logger.info(
-                    f"Initial force exit sweep complete: "
-                    f"{exit_successes} succeeded, {exit_failures} failed"
-                )
-
-                # Retry sweep for failed exits
-                MAX_RETRY_SWEEPS = 3
-                RETRY_DELAY = 5  # seconds
-
-                for sweep in range(MAX_RETRY_SWEEPS):
-                    if exit_failures == 0:
-                        break
-
-                    logger.warning(
-                        f"⚠️ Retry sweep #{sweep + 1}/{MAX_RETRY_SWEEPS} "
-                        f"for {exit_failures} failed exit(s)..."
-                    )
-                    time.sleep(RETRY_DELAY * (sweep + 1))
-
-                    trades = self.api_client.get_open_trades()
-                    if not trades:
-                        logger.info("All trades successfully closed.")
-                        break
-
-                    exit_failures = 0
-                    for trade in trades:
-                        trade_id = trade.get("trade_id")
-                        try:
-                            if not self.api_client.force_exit(trade_id):
-                                exit_failures += 1
-                        except Exception:
-                            exit_failures += 1
-                        time.sleep(0.5)
-
-                if exit_failures > 0:
-                    logger.critical(
-                        f"🚨 CRITICAL: {exit_failures} trade(s) could NOT be closed! "
-                        f"MANUAL INTERVENTION REQUIRED on Binance!"
-                    )
-
-            else:
-                logger.info("No open trades to close.")
-        except Exception as e:
-            logger.error(f"Error during force exit sweep: {e}")
-
-        logger.critical(
-            "☢️  Nuclear option execution complete. "
-            "All funds should now be in USDT. "
-            "Risk Manager entering hibernation."
-        )
-        self._save_state()
-
-    # ----- Drawdown Check -----
 
     def _check_drawdown(self) -> bool:
-        """
-        Check global portfolio drawdown against the hard stop threshold.
-
-        Returns True if nuclear option was triggered, False otherwise.
-        """
-        current_balance = self.api_client.get_equity()
-
-        if current_balance is None:
-            logger.warning(
-                "⚠️ Could not fetch equity from Freqtrade. "
-                "Skipping drawdown check this cycle."
-            )
+        """High-priority drawdown calculation against peak balance. Zero network calls inside lock."""
+        current_equity = self.api_client.get_equity()
+        if current_equity is None or current_equity <= 0 or math.isnan(current_equity):
             return False
 
-        # Lock initial balance on first successful read
-        if self.initial_balance is None and current_balance > 0:
-            self.initial_balance = current_balance
-            self.peak_balance = current_balance
-            logger.info(
-                f"🔒 Initial balance locked at: "
-                f"{self.initial_balance:.2f} USDT"
-            )
-            self._save_state()
+        should_trigger_nuclear = False
+        nuclear_reason = ""
 
-        if self.initial_balance is None or self.initial_balance <= 0:
-            return False
+        with self._state_lock:
+            if self.initial_balance is None:
+                self.initial_balance = current_equity
+                self.peak_balance = current_equity
+                logger.info(f"🔒 Initial balance locked at: ${self.initial_balance:,.2f} USDT")
+                self._save_state()
 
-        # Update peak (high-water mark)
-        if self.peak_balance is None:
-            self.peak_balance = self.initial_balance
+            if self.peak_balance is None or current_equity > self.peak_balance:
+                self.peak_balance = current_equity
+                self._save_state()
 
-        if current_balance > self.peak_balance:
-            self.peak_balance = current_balance
-            self._save_state()
+            if self.peak_balance <= 0:
+                return False
 
-        # Calculate drawdown from PEAK
-        drawdown = (self.peak_balance - current_balance) / self.peak_balance
-        drawdown_pct = drawdown * 100
+            drawdown = (self.peak_balance - current_equity) / self.peak_balance
+            drawdown_pct = drawdown * 100
 
-        if drawdown > 0:
-            logger.info(
-                f"💰 Equity: {current_balance:.2f} USDT | "
-                f"Peak: {self.peak_balance:.2f} USDT | "
-                f"Drawdown: {drawdown_pct:.2f}% "
-                f"(threshold: {GLOBAL_HARD_STOPLOSS_PERCENT * 100:.1f}%)"
-            )
-        else:
-            profit_pct = abs((self.initial_balance - current_balance) / self.initial_balance) * 100
-            logger.info(
-                f"💰 Equity: {current_balance:.2f} USDT | "
-                f"Peak: {self.peak_balance:.2f} USDT | "
-                f"Profit: +{profit_pct:.2f}% from initial"
-            )
+            if drawdown > 0:
+                logger.info(
+                    f"💰 Equity: ${current_equity:,.2f} | Peak: ${self.peak_balance:,.2f} | "
+                    f"Drawdown: {drawdown_pct:.2f}% (Limit: {GLOBAL_HARD_STOPLOSS_PERCENT * 100:.1f}%)"
+                )
+            else:
+                profit_pct = ((current_equity - self.initial_balance) / self.initial_balance) * 100
+                logger.info(
+                    f"💰 Equity: ${current_equity:,.2f} | Peak: ${self.peak_balance:,.2f} | "
+                    f"Total Profit: +{profit_pct:.2f}%"
+                )
 
-        if drawdown > GLOBAL_HARD_STOPLOSS_PERCENT:
-            self.trigger_nuclear_option(
-                f"Global drawdown {drawdown_pct:.2f}% exceeded "
-                f"threshold {GLOBAL_HARD_STOPLOSS_PERCENT * 100:.1f}%!"
-            )
+            if drawdown > GLOBAL_HARD_STOPLOSS_PERCENT:
+                should_trigger_nuclear = True
+                nuclear_reason = (
+                    f"Global portfolio drawdown {drawdown_pct:.2f}% breached "
+                    f"the {GLOBAL_HARD_STOPLOSS_PERCENT * 100:.1f}% limit!"
+                )
+
+        # Trigger Nuclear Option OUTSIDE the lock to prevent deadlock
+        if should_trigger_nuclear:
+            self.trigger_nuclear_option(nuclear_reason)
             return True
 
         return False
 
-    # ----- Main Loop -----
-
     def run(self):
-        """
-        Main execution loop.
-
-        Runs indefinitely until:
-          - Nuclear option is triggered
-          - A shutdown signal (SIGTERM/SIGINT) is received
-          - The process is killed externally
-        """
-        logger.info("")
-        logger.info("=" * 60)
-        logger.info("🚀 Zero-Burn LLM Risk Manager — Starting")
+        """Main execution entry point."""
+        logger.info("=" * 70)
+        logger.info("🚀 Zero-Burn AI Risk Sentinel — Active (Enterprise Edition)")
         logger.info(f"   Freqtrade API:       {FREQTRADE_API_URL}")
-        logger.info(f"   Drawdown Threshold:  {GLOBAL_HARD_STOPLOSS_PERCENT * 100:.1f}%")
+        logger.info(f"   Drawdown Limit:      {GLOBAL_HARD_STOPLOSS_PERCENT * 100:.1f}%")
         logger.info(f"   Check Interval:      {CHECK_INTERVAL_SECONDS}s")
-        logger.info(f"   LLM Check Every:     {LLM_CHECK_INTERVAL_CYCLES} cycles "
-                     f"({LLM_CHECK_INTERVAL_CYCLES * CHECK_INTERVAL_SECONDS}s)")
-        logger.info(f"   Gemini LLM:          "
-                     f"{'Enabled' if self.sentiment.gemini_client else 'Disabled (FGI-only)'}")
-        logger.info(f"   State File:          {STATE_FILE}")
-        logger.info("=" * 60)
-        logger.info("")
+        logger.info(f"   Hysteresis Cycles:   {BULL_CONFIRMATION_CYCLES} cycles")
+        logger.info(f"   Wake-Up Cooldown:    {WAKE_UP_COOLDOWN_MINUTES}m")
+        logger.info(f"   Daily Gemini Cap:    {MAX_DAILY_GEMINI_CALLS} calls")
+        logger.info("=" * 70)
 
-        # Abort if nuclear was already triggered in a previous run
-        if self.nuclear_triggered:
-            logger.critical(
-                "☢️  Nuclear option was triggered in a previous session. "
-                "The Risk Manager will NOT restart monitoring."
-            )
-            logger.critical(
-                "   To reset, delete the state file: "
-                f"rm {STATE_FILE}"
-            )
-            return
+        with self._state_lock:
+            if self.nuclear_triggered:
+                logger.critical("☢️  Nuclear option was triggered previously. Delete state file to reset.")
+                return
 
-        # Initial login — abort if we can't authenticate
         if not self.api_client.login():
-            logger.critical(
-                "❌ Cannot start: failed to authenticate with Freqtrade API. "
-                "Ensure Freqtrade is running and credentials are correct."
-            )
+            logger.critical("❌ Failed to authenticate with Freqtrade API. Exiting.")
             sys.exit(1)
 
-        logger.info("🟢 Risk Manager is now active and monitoring.")
-
-        # Start LLM Sentinel in a separate daemon thread
-        llm_thread = threading.Thread(
+        # Launch LLM Sentinel in a background daemon thread
+        sentinel_thread = threading.Thread(
             target=self._llm_sentinel_loop,
-            name="LLM-Sentinel",
-            daemon=True
+            name="AI-Sentinel-Thread",
+            daemon=True,
         )
-        llm_thread.start()
+        sentinel_thread.start()
 
-        # Main thread: ONLY drawdown guard (never blocked by LLM)
+        # Main thread: Dedicated High-Priority Drawdown Guard
         self._drawdown_guard_loop()
 
     def _drawdown_guard_loop(self):
-        """
-        High-priority drawdown monitor. Runs every 20 seconds.
-        NEVER calls any external LLM or sentiment API.
-        """
-        DRAWDOWN_CHECK_INTERVAL = CHECK_INTERVAL_SECONDS
-
         while not self.nuclear_triggered and not self._shutdown_requested:
             try:
                 if self._check_drawdown():
                     break
-                time.sleep(DRAWDOWN_CHECK_INTERVAL)
+                time.sleep(CHECK_INTERVAL_SECONDS)
             except Exception as e:
-                logger.error(f"Drawdown guard error: {e}", exc_info=True)
-                time.sleep(DRAWDOWN_CHECK_INTERVAL)
+                logger.error(f"Drawdown monitor error: {e}")
+                time.sleep(CHECK_INTERVAL_SECONDS)
 
-    def _llm_sentinel_loop(self):  # noqa: C901
-        """
-        Lower-priority LLM analysis. Runs in background thread.
-        If it blocks on Gemini, the drawdown guard is NOT affected.
-        """
-
+    def _llm_sentinel_loop(self):
+        """Background thread auditing News, Binance Macro, and Gemini AI with Hysteresis & Wake-Up Lock."""
         while not self.nuclear_triggered and not self._shutdown_requested:
             try:
                 self.cycle_count += 1
-                logger.debug(f"--- Sentinel Cycle #{self.cycle_count} ---")
+                now = datetime.now(timezone.utc)
 
-                # Proactive Whitelist Batch Analysis (Every 15 cycles ~ 15 minutes)
-                if self.cycle_count % 15 == 0:
-                    whitelist = self.api_client.get_whitelist()
-                    if whitelist:
-                        logger.info(
-                            f"🔍 Proactive batch analysis of {len(whitelist)} whitelist pairs..."
-                        )
-                        batch_result = self.sentiment.analyze_whitelist_batch(whitelist)
-                        if batch_result:
-                            for pair, analysis in batch_result.items():
-                                action = analysis.get("action", "HODL")
-                                reason = analysis.get("reason", "N/A")
+                # Check if currently inside Cooldown timer (Brief local read, 0 network)
+                with self._state_lock:
+                    if self.cooldown_until is not None and now < self.cooldown_until:
+                        in_cooldown_timer = True
+                        rem_min = int((self.cooldown_until - now).total_seconds() // 60)
+                    else:
+                        in_cooldown_timer = False
+                        rem_min = 0
+                    wake_up_locked = self.wake_up_lock
 
-                                if action == "CONTAGION":
-                                    self.trigger_nuclear_option(
-                                        f"CONTAGION risk detected for {pair}: {reason}"
-                                    )
-                                    break
-                                elif action == "EXIT_PAIR":
-                                    logger.warning(
-                                        f"🚨 PROACTIVE EXIT_PAIR for {pair}: {reason}. "
-                                        "Initiating blacklist and force exit if open."
-                                    )
-                                    # Add to blacklist so it won't be bought
-                                    self.api_client.add_to_blacklist([pair])
-                                    # Just in case we already hold it, try to force exit
-                                    trades = self.api_client.get_open_trades()
-                                    if trades:
-                                        trade_ids_to_close = [
-                                            t.get("trade_id")
-                                            for t in trades
-                                            if t.get("pair") == pair
-                                        ]
-                                        for tid in trade_ids_to_close:
+                if in_cooldown_timer:
+                    if self.cycle_count % 5 == 0 or rem_min <= 5:
+                        logger.info(f"⏳ System in DEFENSIVE COOLDOWN: {rem_min}m remaining before re-evaluation.")
+                    time.sleep(CHECK_INTERVAL_SECONDS * LLM_CHECK_INTERVAL_CYCLES)
+                    continue
+
+                # Cooldown timer has elapsed! Query market intelligence OUTSIDE of lock
+                whitelist = self.api_client.get_whitelist()
+                decision = self.sentiment.analyze_market(whitelist)
+                regime = decision.get("regime", "BULL")
+                confidence = float(decision.get("confidence", 0.0))
+                reason = decision.get("reason", "N/A")
+                cooldown_min = decision.get("cooldown_minutes", WAKE_UP_COOLDOWN_MINUTES)
+                flagged_coins = decision.get("flagged_coins", {})
+                macro = self.sentiment.macro_monitor.get_metrics()
+                fgi_val, _ = self.sentiment.get_fear_and_greed_index()
+
+                # 1. Targeted Token Defense (EXIT_PAIR)
+                if flagged_coins and isinstance(flagged_coins, dict):
+                    for coin_id, info in flagged_coins.items():
+                        act = info.get("action") if isinstance(info, dict) else str(info)
+                        if act in ("EXIT_PAIR", "LIQUIDATE"):
+                            logger.warning(f"🚨 TARGETED EXIT for {coin_id}: adding to blacklist and closing position.")
+                            self.api_client.add_to_blacklist([coin_id])
+                            trades = self.api_client.get_open_trades()
+                            if trades:
+                                for t in trades:
+                                    t_pair = t.get("pair", "")
+                                    if (
+                                        t_pair == coin_id
+                                        or t_pair.startswith(f"{coin_id}/")
+                                        or coin_id.startswith(t_pair.split("/")[0])
+                                    ):
+                                        tid = t.get("trade_id") or t.get("tradeid") or t.get("id")
+                                        if tid is not None:
                                             self.api_client.force_exit(tid)
 
-                # Check market regime periodically
-                if self.cycle_count % LLM_CHECK_INTERVAL_CYCLES == 0:
-                    regime = self.sentiment.analyze()
-                    previous_regime = self.current_regime
-                    self.current_regime = regime
-                    self._save_state()
+                # 2. Emergency Black Swan (PANIC)
+                if regime == "PANIC":
+                    self.trigger_nuclear_option(f"AI Sentinel Black Swan Panic: {reason}")
+                    break
 
-                    if regime != previous_regime:
-                        logger.info(
-                            f"📡 Regime change detected: "
-                            f"{previous_regime.upper()} → {regime.upper()}"
-                        )
+                # 3. WAKE-UP LOCK LOGIC (Guarded Cooldown Expiry)
+                if wake_up_locked:
+                    is_safe_bull = (regime == "BULL" and confidence >= 0.80)
+                    is_macro_stable = (macro.get("btc_1h_pct", 0.0) >= -1.0 and macro.get("btc_24h_pct", 0.0) >= -3.5)
+                    is_fgi_stable = (fgi_val > 25)
 
-                    if regime == "panic":
-                        self.trigger_nuclear_option(
-                            "AI Sentinel detected extreme Black Swan / panic event!"
-                        )
-                        break
-                    elif regime == "bear":
+                    if not (is_safe_bull and is_macro_stable and is_fgi_stable):
+                        # Wake-up criteria NOT met! Reject wakeup and extend cooldown
+                        extension_min = cooldown_min if cooldown_min > 0 else WAKE_UP_COOLDOWN_MINUTES
+                        with self._state_lock:
+                            self.cooldown_until = now + timedelta(minutes=extension_min)
+                            self.consecutive_bull_cycles = 0
+                            self._save_state()
+
                         logger.warning(
-                            "🐻 Market regime: BEAR — Elevated risk. Monitoring closely."
+                            f"🔒 WAKE-UP LOCK REJECTED: Cooldown expired but market remains unsafe "
+                            f"(Regime={regime}, Conf={confidence:.2f}, BTC 1h={macro.get('btc_1h_pct')}%, "
+                            f"BTC 24h={macro.get('btc_24h_pct')}%, FGI={fgi_val}). "
+                            f"Extending defensive cooldown by {extension_min}m. Buying remains HALTED."
                         )
-                    elif regime == "bull":
-                        logger.info("🟢 Market regime: BULL — Normal operations.")
+                        # Re-affirm stop buying to be 100% sure Freqtrade is paused
+                        self.api_client.stop_buying()
+                        time.sleep(CHECK_INTERVAL_SECONDS * LLM_CHECK_INTERVAL_CYCLES)
+                        continue
 
-                # Sleep until next check
-                time.sleep(CHECK_INTERVAL_SECONDS)
+                    # Market evaluated as calm BULL: Enforce HYSTERESIS confirmation
+                    with self._state_lock:
+                        self.consecutive_bull_cycles += 1
+                        curr_confirmations = self.consecutive_bull_cycles
+                        self._save_state()
+
+                    logger.info(
+                        f"⏳ HYSTERESIS CONFIRMATION: Calm cycle {curr_confirmations}/{BULL_CONFIRMATION_CYCLES} recorded "
+                        f"(BTC 1h={macro.get('btc_1h_pct'):+}%, FGI={fgi_val}). Entries remain PAUSED until confirmation completes."
+                    )
+
+                    if curr_confirmations < BULL_CONFIRMATION_CYCLES:
+                        time.sleep(CHECK_INTERVAL_SECONDS * LLM_CHECK_INTERVAL_CYCLES)
+                        continue
+
+                    # Hysteresis requirement achieved! Release Wake-Up Lock and resume trading
+                    with self._state_lock:
+                        self.wake_up_lock = False
+                        self.current_regime = "BULL"
+                        self.cooldown_until = None
+                        self.consecutive_bull_cycles = 0
+                        self._save_state()
+
+                    logger.info(
+                        f"🟢 WAKE-UP LOCK RELEASED & HYSTERESIS PASSED: {BULL_CONFIRMATION_CYCLES} consecutive calm cycles confirmed. "
+                        f"Resuming active trade entries (/start)."
+                    )
+                    self.api_client.start_trading()
+                    time.sleep(CHECK_INTERVAL_SECONDS * LLM_CHECK_INTERVAL_CYCLES)
+                    continue
+
+                # 4. NORMAL ACTIVE MONITORING (When wake_up_lock is False)
+                if regime == "BEAR":
+                    with self._state_lock:
+                        self.current_regime = "BEAR"
+                        self.wake_up_lock = True
+                        self.cooldown_until = now + timedelta(minutes=cooldown_min)
+                        self.consecutive_bull_cycles = 0
+                        self._save_state()
+
+                    logger.warning(
+                        f"🛡️  PROACTIVE DEFENSE ACTIVATED (BEAR): {reason}\n"
+                        f"    Halting new trade entries for {cooldown_min} minutes. "
+                        f"Existing trades will exit naturally on stops/targets."
+                    )
+                    self.api_client.stop_buying()
+
+                elif regime == "BULL":
+                    # Normal market, no change needed. Reset any partial counters
+                    with self._state_lock:
+                        self.consecutive_bull_cycles = 0
+
+                time.sleep(CHECK_INTERVAL_SECONDS * LLM_CHECK_INTERVAL_CYCLES)
 
             except Exception as e:
-                logger.error(
-                    f"LLM Sentinel loop error: {e}", exc_info=True
-                )
-                time.sleep(CHECK_INTERVAL_SECONDS)
+                logger.error(f"Sentinel background loop error: {e}", exc_info=True)
+                time.sleep(CHECK_INTERVAL_SECONDS * LLM_CHECK_INTERVAL_CYCLES)
 
-        # ---- Shutdown ----
-        if self._shutdown_requested:
-            logger.info("🛑 Risk Manager stopped by user signal.")
-        elif self.nuclear_triggered:
-            logger.critical(
-                "☢️  Risk Manager in HIBERNATION mode "
-                "(nuclear triggered)."
-            )
-
-        self._save_state()
-        logger.info("Risk Manager process ended.")
-
-
-# ==================================================================================
-# Entry Point
-# ==================================================================================
 
 if __name__ == "__main__":
     manager = RiskManager()

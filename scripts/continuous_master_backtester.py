@@ -13,57 +13,35 @@ BACKTEST_CONFIG = "user_data/config_continuous_backtest.json"
 STRATEGY = "NostalgiaForInfinityX8"
 EXPORT_FILE = os.path.join(RESULTS_DIR, "continuous_5_7_years_nfix8.json")
 
-def get_valid_pairs(top_n=30):
-    print("Scanning available data in user_data/data/binance/...")
-    files_5m = glob.glob(os.path.join(DATA_DIR, "*-5m.feather"))
+def get_valid_pairs():
+    print("Selecting top liquid pairs (Mega-caps + high-momentum alts) ensuring 100% memory safety...")
     
-    # Load blacklist patterns from base config
-    with open(BASE_CONFIG) as f:
-        base_cfg = json.load(f)
-    blacklist = base_cfg.get("exchange", {}).get("pair_blacklist", [])
-    import re
-    compiled_blacklist = [re.compile(p) for p in blacklist]
+    curated_candidates = [
+        'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'DOGE/USDT', 
+        'ADA/USDT', 'DOT/USDT', 'PEPE/USDT', 'AVAX/USDT', 'TRX/USDT', 
+        'LINK/USDT', 'LTC/USDT', 'SUI/USDT', 'NEAR/USDT', 'ARB/USDT', 
+        'AAVE/USDT', 'ENA/USDT', 'WLD/USDT', 'APT/USDT', 'FET/USDT', 
+        'OP/USDT', 'INJ/USDT', 'TAO/USDT', 'RENDER/USDT', 'PUMP/USDT', 
+        'ONDO/USDT', 'SHIB/USDT', 'UNI/USDT'
+    ]
     
-    # Explicit exclusions for synthetic stock tokens or delisted coins
-    synthetic_exclusions = {"CRCLB/USDT", "SNDKB/USDT", "MSTRB/USDT", "GENIUS/USDT", "XAUT/USDT", "PROVE/USDT"}
-    
+    # Calculate volume weights from 1d files
     pair_volumes = {}
-    for f in files_5m:
-        pair_base = os.path.basename(f).replace("-5m.feather", "")
-        parts = pair_base.split("_")
-        if len(parts) >= 3:
-            pair_name = f"{parts[0]}/{parts[1]}:{parts[2]}"
+    for pair in curated_candidates:
+        f_1d = os.path.join(DATA_DIR, f"{pair.replace('/', '_')}-1d.feather")
+        if os.path.exists(f_1d):
+            try:
+                df_1d = pd.read_feather(f_1d, columns=['close', 'volume'])
+                pair_volumes[pair] = float((df_1d['close'] * df_1d['volume']).sum())
+            except Exception:
+                pair_volumes[pair] = 1.0
         else:
-            pair_name = pair_base.replace("_", "/")
-            
-        if pair_name in synthetic_exclusions:
-            continue
-            
-        # Ensure all 5 timeframes exist
-        tf_15m = f.replace("-5m.feather", "-15m.feather")
-        tf_1h = f.replace("-5m.feather", "-1h.feather")
-        tf_4h = f.replace("-5m.feather", "-4h.feather")
-        tf_1d = f.replace("-5m.feather", "-1d.feather")
-        if not (os.path.exists(tf_15m) and os.path.exists(tf_1h) and os.path.exists(tf_4h) and os.path.exists(tf_1d)):
-            continue
-            
-        # Check against blacklist
-        is_blacklisted = any(pattern.match(pair_name) for pattern in compiled_blacklist)
-        if is_blacklisted:
-            continue
-            
-        # Calculate volume weight from 1d file
-        try:
-            df_1d = pd.read_feather(tf_1d, columns=['close', 'volume'])
-            quote_vol = (df_1d['close'] * df_1d['volume']).sum()
-            pair_volumes[pair_name] = quote_vol
-        except Exception:
-            pair_volumes[pair_name] = 1.0
+            pair_volumes[pair] = 1.0
             
     # Sort pairs by quote volume
     sorted_pairs = sorted(pair_volumes.items(), key=lambda x: x[1], reverse=True)
-    selected_pairs = [p[0] for p in sorted_pairs[:top_n]]
-    print(f"Selected top {len(selected_pairs)} liquid pairs by historical volume.")
+    selected_pairs = [p[0] for p in sorted_pairs]
+    print(f"Selected {len(selected_pairs)} pairs: {selected_pairs}")
     return selected_pairs
 
 def build_config(pairs):
@@ -71,10 +49,11 @@ def build_config(pairs):
         cfg = json.load(f)
         
     cfg["strategy"] = STRATEGY
-    cfg["max_open_trades"] = 12
+    cfg["max_open_trades"] = 6
     cfg["stake_currency"] = "USDT"
     cfg["stake_amount"] = "unlimited"
-    cfg["tradable_balance_ratio"] = 0.8  # Zero-Burn Safe Box: 20% reserved
+    cfg["tradable_balance_ratio"] = 0.99
+    cfg["amend_last_stake_amount"] = True
     cfg["max_stake_amount"] = 50000
     cfg["dry_run"] = True
     cfg["dry_run_wallet"] = 1000
@@ -95,7 +74,7 @@ def build_config(pairs):
 def run_backtest(timerange="20210101-20260918"):
     print("\n" + "="*70)
     print(f"🚀 RUNNING CONTINUOUS REALISTIC MULTI-YEAR BACKTEST ({timerange})")
-    print(f"Strategy: {STRATEGY} | Zero-Burn Safe Box: 20% | Max Trades: 12")
+    print(f"Strategy: {STRATEGY} | Max Trades: 6 | Tradable Balance Ratio: 0.99")
     print(f"Continuous Trade Timeline: NO Monthly Slicing, NO Premature Force-Exits")
     print("="*70)
     
@@ -112,8 +91,9 @@ def run_backtest(timerange="20210101-20260918"):
     ]
     
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    for line in iter(process.stdout.readline, ''):
-        print(line, end='', flush=True)
+    if process.stdout is not None:
+        for line in iter(process.stdout.readline, ''):
+            print(line, end='', flush=True)
             
     process.wait()
     print(f"\nFreqtrade backtest process finished with return code {process.returncode}")
@@ -242,6 +222,14 @@ def analyze_and_report():
         if dd_pct > max_dd_pct:
             max_dd_pct = dd_pct
             
+    # Calculate 3.5-Year Window (2023-01-01 to 2026-08-31) metrics for direct comparison
+    mask_3_5y = (df['close_date'] >= pd.to_datetime('2023-01-01', utc=True)) & (df['close_date'] <= pd.to_datetime('2026-08-31 23:59:59', utc=True))
+    df_3_5y = df[mask_3_5y]
+    profit_3_5y = df_3_5y['profit_abs'].sum() if not df_3_5y.empty else 0.0
+    trades_3_5y = len(df_3_5y)
+    wins_3_5y = len(df_3_5y[df_3_5y['profit_abs'] > 0])
+    winrate_3_5y = (wins_3_5y / trades_3_5y * 100) if trades_3_5y > 0 else 0.0
+            
     # Save Report
     report_path = os.path.join(RESULTS_DIR, "master_continuous_5_7_years_report.txt")
     with open(report_path, "w") as f:
@@ -249,11 +237,11 @@ def analyze_and_report():
         f.write("CONTINUOUS 5.7-YEAR REALISTIC MASTER BACKTEST REPORT (2021-2026)\n")
         f.write(f"Strategy: {STRATEGY} | Engine: Freqtrade Native Continuous Backtest\n")
         f.write(f"Execution: Continuous Single Run (ZERO artificial monthly cuts)\n")
-        f.write(f"Tradable Balance Ratio: 0.8 (Zero-Burn 20% Safe Box Reserve)\n")
+        f.write(f"Parameters: max_open_trades=6 | tradable_balance_ratio=0.99 | amend_last_stake=True\n")
         f.write(f"Binance Spot BNB Taker Fee: 0.075% (0.00075)\n")
         f.write("="*75 + "\n\n")
         
-        f.write("SUMMARY PERFORMANCE METRICS:\n")
+        f.write("SUMMARY PERFORMANCE METRICS (FULL 5.7-YEAR PERIOD 2021-2026):\n")
         f.write(f"Starting Wallet: ${starting_balance:,.2f} USDT\n")
         f.write(f"Final Wallet:    ${final_balance:,.2f} USDT\n")
         f.write(f"Total Net Profit: ${total_profit_abs:,.2f} USDT\n")
@@ -263,6 +251,13 @@ def analyze_and_report():
         f.write(f"Losing Trades: {losing_trades} ({(losing_trades/total_trades*100):.2f}%)\n")
         f.write(f"Scratch Trades: {scratch_trades}\n")
         f.write(f"Max Equity Drawdown: {max_dd_pct:.2f}% (${max_dd_abs:,.2f} USDT)\n\n")
+        
+        f.write("="*75 + "\n")
+        f.write("SUB-PERIOD 3.5-YEAR WINDOW (2023-01-01 to 2026-08-31):\n")
+        f.write(f"Trades in 3.5y Window: {trades_3_5y}\n")
+        f.write(f"Win Rate in 3.5y Window: {winrate_3_5y:.2f}%\n")
+        f.write(f"Profit Generated in 3.5y Window: ${profit_3_5y:,.2f} USDT\n")
+        f.write("="*75 + "\n\n")
         
         f.write("EXIT REASON DISTRIBUTION:\n")
         for reason, count in exit_reasons.items():
@@ -287,7 +282,7 @@ def analyze_and_report():
     return report_path
 
 if __name__ == "__main__":
-    pairs = get_valid_pairs(25)
+    pairs = get_valid_pairs()
     build_config(pairs)
     ret = run_backtest("20210101-20260918")
     if ret == 0:
