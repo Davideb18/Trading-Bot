@@ -714,7 +714,7 @@ class NostalgiaForInfinityX8(IStrategy):
   # Bad-trade exits. Enable for new v4 trades without changing older open trades.
   system_v4_bad_trade_exit_enable = True
   legacy_system_bad_trade_exit_enable = False
-  bad_trade_controller_structure_break_exit_enable = True
+  bad_trade_controller_structure_break_exit_enable = False
   bad_trade_controller_structure_break_ema_gap_pct = 35.0
   bad_trade_controller_structure_break_min_adverse_move_pct = 25.0
   bad_trade_controller_stale_exit_enable = True
