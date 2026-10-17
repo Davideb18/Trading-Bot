@@ -1,9 +1,7 @@
 name: Binance Leverage tiers update
 
 on:
-  schedule:
-    - cron: "25 2 * * 4"
-  # on demand
+  # on demand only
   workflow_dispatch:
 
 concurrency:

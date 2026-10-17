@@ -1,9 +1,7 @@
 name: Pre-commit auto-update
 
 on:
-  schedule:
-    - cron: "13 1 * * 2"
-  # on demand
+  # on demand only
   workflow_dispatch:
 
 permissions:
