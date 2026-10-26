@@ -99,8 +99,8 @@ GEMINI_FALLBACK_MODELS = list(dict.fromkeys([
     "gemini-3.8-flash",
 ]))
 
-# Risk Thresholds
-GLOBAL_HARD_STOPLOSS_PERCENT = float(os.getenv("GLOBAL_HARD_STOPLOSS_PERCENT", "0.08"))
+# Risk Thresholds (Default 3.8% for Prop Firm Daily Drawdown protection)
+GLOBAL_HARD_STOPLOSS_PERCENT = float(os.getenv("GLOBAL_HARD_STOPLOSS_PERCENT", os.getenv("PROP_FIRM_DAILY_LIMIT_PERCENT", "0.038")))
 
 # Timing
 CHECK_INTERVAL_SECONDS = int(os.getenv("CHECK_INTERVAL_SECONDS", "30"))
