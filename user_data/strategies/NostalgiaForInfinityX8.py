@@ -1270,7 +1270,12 @@ class NostalgiaForInfinityX8(IStrategy):
 
     if ("trading_mode" in strategy_config) and (strategy_config["trading_mode"] in ["futures", "margin"]):
       self.is_futures_mode = True
-      self.can_short = True
+      if "can_short" in strategy_config:
+        self.can_short = bool(strategy_config["can_short"])
+      elif nfi_parameters and "can_short" in nfi_parameters:
+        self.can_short = bool(nfi_parameters["can_short"])
+      else:
+        self.can_short = True
 
     # If the cached data hasn't changed, it's a no-op
     self.target_profit_cache.save()

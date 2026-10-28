@@ -1,0 +1,63 @@
+---
+# ============================================================
+# HyroTrader $5K Free Trial — Isolated Prop Firm Stack
+# ============================================================
+# Rules enforced:
+#   - Daily DD hard stop: 4.5% of initial (HyroTrader limit: 5%)
+#   - Max loss hard stop: 8.5% of initial (HyroTrader limit: 10%)
+#   - Profit target: 5% of initial ($250 on $5K)
+#   - Daily profit cap: 40% of target per day ($100)
+#   - Min trading days: 5
+#   - Duration: 7 days
+# ============================================================
+services:
+  freqtrade_prop:
+    image: freqtradeorg/freqtrade:stable
+    restart: unless-stopped
+    container_name: freqtrade_prop
+    environment:
+      - FREQTRADE__API_SERVER__JWT_SECRET_KEY=${FREQTRADE_JWT_TOKEN}
+    volumes:
+      - "./user_data:/freqtrade/user_data"
+    ports:
+      - "8088:8088"
+    command: >
+      trade
+      --logfile /freqtrade/user_data/logs/freqtrade_prop.log
+      --db-url sqlite:////freqtrade/user_data/trades_prop.sqlite
+      --config /freqtrade/user_data/config_prop_nfix8.json
+      --strategy NostalgiaForInfinityX8
+
+  freqtrade_prop_risk_manager:
+    build:
+      context: .
+      dockerfile: "./docker/Dockerfile.riskmanager"
+    container_name: freqtrade_prop_risk_manager
+    restart: unless-stopped
+    depends_on:
+      - freqtrade_prop
+    environment:
+      # Freqtrade API connection (uses internal Docker network)
+      - FREQTRADE_API_URL=http://freqtrade_prop:8088/api/v1
+      - FREQTRADE_USERNAME=freqtrade
+      - FREQTRADE_PASSWORD=${FREQTRADE_PASSWORD}
+      - FREQTRADE_JWT_TOKEN=${FREQTRADE_JWT_TOKEN}
+      # Google Gemini AI Sentinel
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      # ---- HyroTrader Prop Firm Risk Rules ----
+      # Phase: trial (5% target) | 1 (10% target) | 2 (5% target)
+      - PROP_FIRM_PHASE=${PROP_FIRM_PHASE:-trial}
+      # Daily drawdown hard stop: 4.5% of INITIAL balance (static from 00:00 UTC)
+      - GLOBAL_HARD_STOPLOSS_PERCENT=0.045
+      - PROP_FIRM_DAILY_LIMIT_PERCENT=0.045
+      # Max overall loss hard stop: 8.5% of initial (HyroTrader limit is 10%)
+      - PROP_FIRM_MAX_LOSS_PERCENT=0.085
+      # Profit target (default handled by phase if not set): 5% for trial/phase2, 10% for phase1
+      - PROP_FIRM_PROFIT_TARGET_PERCENT=0.05
+      # Daily profit cap for target counting: 40% of target per day
+      - PROP_FIRM_DAILY_PROFIT_CAP_PERCENT=0.40
+      # Minimum qualifying trading days required
+      - PROP_FIRM_MIN_TRADING_DAYS=5
+    volumes:
+      - "./scripts:/app/scripts:ro"
+      - "./user_data:/app/user_data:rw"

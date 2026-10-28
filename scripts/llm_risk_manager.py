@@ -99,8 +99,25 @@ GEMINI_FALLBACK_MODELS = list(dict.fromkeys([
     "gemini-3.8-flash",
 ]))
 
-# Risk Thresholds (Default 3.8% for Prop Firm Daily Drawdown protection)
-GLOBAL_HARD_STOPLOSS_PERCENT = float(os.getenv("GLOBAL_HARD_STOPLOSS_PERCENT", os.getenv("PROP_FIRM_DAILY_LIMIT_PERCENT", "0.038")))
+# ==================================================================================
+# HyroTrader Prop Firm Specific Settings ($5K Trial)
+# ==================================================================================
+# Phase support: 'trial' (5%), '1' / 'phase1' (10%), '2' / 'phase2' (5%)
+PROP_FIRM_PHASE = os.getenv("PROP_FIRM_PHASE", "trial").lower()
+
+# Daily loss limit: 5% of INITIAL balance (from 00:00 UTC day start). Hard stop at 4.5% for safety.
+GLOBAL_HARD_STOPLOSS_PERCENT = float(os.getenv("GLOBAL_HARD_STOPLOSS_PERCENT", os.getenv("PROP_FIRM_DAILY_LIMIT_PERCENT", "0.045")))
+# Max overall loss: 10% of initial balance. Hard stop at 8.5% for safety margin.
+PROP_FIRM_MAX_LOSS_PERCENT = float(os.getenv("PROP_FIRM_MAX_LOSS_PERCENT", "0.085"))
+# Profit target: Phase 1 = 10%, Phase 2 & Free Trial = 5% (overrideable via env)
+if "PROP_FIRM_PROFIT_TARGET_PERCENT" in os.environ:
+    PROP_FIRM_PROFIT_TARGET_PERCENT = float(os.environ["PROP_FIRM_PROFIT_TARGET_PERCENT"])
+else:
+    PROP_FIRM_PROFIT_TARGET_PERCENT = 0.10 if PROP_FIRM_PHASE in ["1", "phase1", "step1"] else 0.05
+# Max single-day profit that counts toward target: 40% of target.
+PROP_FIRM_DAILY_PROFIT_CAP_PERCENT = float(os.getenv("PROP_FIRM_DAILY_PROFIT_CAP_PERCENT", "0.40"))
+# Minimum trading days required.
+PROP_FIRM_MIN_TRADING_DAYS = int(os.getenv("PROP_FIRM_MIN_TRADING_DAYS", "5"))
 
 # Timing
 CHECK_INTERVAL_SECONDS = int(os.getenv("CHECK_INTERVAL_SECONDS", "30"))
@@ -420,6 +437,15 @@ class FreqtradeAPIClient:
     def get_open_trades(self) -> list:
         data = self.get("/status")
         if isinstance(data, list):
+            return data
+        return []
+
+    def get_trades(self, limit: int = 100) -> list:
+        """Fetch closed/recent trades from Freqtrade REST API."""
+        data = self.get(f"/trades?limit={limit}")
+        if isinstance(data, dict):
+            return data.get("trades", [])
+        elif isinstance(data, list):
             return data
         return []
 
@@ -1029,6 +1055,10 @@ class RiskManager:
         self._state_lock = threading.RLock()
         self.initial_balance: float | None = None
         self.peak_balance: float | None = None
+        self.current_trading_day: str | None = None
+        self.day_start_balance: float | None = None
+        self.day_peak_balance: float | None = None
+        self.daily_nuclear_triggered = False
         self.nuclear_triggered = False
         self.current_regime = "BULL"
         self.cooldown_until: datetime | None = None
@@ -1036,6 +1066,13 @@ class RiskManager:
         self.consecutive_bull_cycles = 0
         self.cycle_count = 0
         self._shutdown_requested = False
+
+        # --- HyroTrader Prop Firm Trackers ---
+        # Set of UTC date strings (e.g. '2026-10-28') that counted as trading days
+        self.trading_days_set: set[str] = set()
+        # Per-day closed profit tracking for 40% cap enforcement
+        self.day_closed_profit: float = 0.0
+        self.profit_target_reached: bool = False
 
         self._load_state()
 
@@ -1056,6 +1093,10 @@ class RiskManager:
                         state = json.load(f)
                     self.initial_balance = state.get("initial_balance")
                     self.peak_balance = state.get("peak_balance", self.initial_balance)
+                    self.current_trading_day = state.get("current_trading_day")
+                    self.day_start_balance = state.get("day_start_balance")
+                    self.day_peak_balance = state.get("day_peak_balance", self.day_start_balance)
+                    self.daily_nuclear_triggered = state.get("daily_nuclear_triggered", False)
                     self.nuclear_triggered = state.get("nuclear_triggered", False)
                     self.current_regime = state.get("current_regime", "BULL")
                     self.wake_up_lock = state.get("wake_up_lock", False)
@@ -1063,11 +1104,17 @@ class RiskManager:
                     cooldown_str = state.get("cooldown_until")
                     if cooldown_str:
                         self.cooldown_until = datetime.fromisoformat(cooldown_str)
+                    # HyroTrader Prop Firm state
+                    self.trading_days_set = set(state.get("trading_days_set", []))
+                    self.day_closed_profit = float(state.get("day_closed_profit", 0.0))
+                    self.profit_target_reached = bool(state.get("profit_target_reached", False))
                     if self.initial_balance:
                         logger.info(
                             f"📁 Restored state from disk: initial={self.initial_balance:.2f} USDT, "
-                            f"peak={self.peak_balance:.2f} USDT, regime={self.current_regime}, "
-                            f"wake_up_lock={self.wake_up_lock}, bull_confirmations={self.consecutive_bull_cycles}"
+                            f"peak={self.peak_balance:.2f} USDT, day_start={self.day_start_balance}, "
+                            f"day={self.current_trading_day}, regime={self.current_regime}, "
+                            f"wake_up_lock={self.wake_up_lock}, bull_confirmations={self.consecutive_bull_cycles}, "
+                            f"trading_days={len(self.trading_days_set)}/{PROP_FIRM_MIN_TRADING_DAYS}"
                         )
                 except Exception as e:
                     logger.warning(f"Failed to load state file: {e}")
@@ -1077,11 +1124,19 @@ class RiskManager:
             state = {
                 "initial_balance": self.initial_balance,
                 "peak_balance": self.peak_balance,
+                "current_trading_day": self.current_trading_day,
+                "day_start_balance": self.day_start_balance,
+                "day_peak_balance": self.day_peak_balance,
+                "daily_nuclear_triggered": self.daily_nuclear_triggered,
                 "nuclear_triggered": self.nuclear_triggered,
                 "current_regime": self.current_regime,
                 "wake_up_lock": self.wake_up_lock,
                 "consecutive_bull_cycles": self.consecutive_bull_cycles,
                 "cooldown_until": self.cooldown_until.isoformat() if self.cooldown_until else None,
+                # HyroTrader Prop Firm state
+                "trading_days_set": sorted(list(self.trading_days_set)),
+                "day_closed_profit": self.day_closed_profit,
+                "profit_target_reached": self.profit_target_reached,
                 "last_updated": datetime.now(timezone.utc).isoformat(),
             }
             try:
@@ -1130,48 +1185,179 @@ class RiskManager:
         self._save_state()
 
     def _check_drawdown(self) -> bool:
-        """High-priority drawdown calculation against peak balance. Zero network calls inside lock."""
+        """
+        HyroTrader Prop Firm Drawdown Guard.
+
+        Rules enforced:
+          - Daily drawdown: (initial_balance - current_equity) / initial_balance <= 5%
+            HyroTrader measures from INITIAL BALANCE (fixed), not from day_start_balance.
+            Hard stop fires at 4.5% to leave 0.5% safety margin.
+          - Max overall loss: (initial_balance - current_equity) / initial_balance <= 10%
+            Hard stop fires at 8.5% to leave 1.5% safety margin.
+          - Tracks cumulative profit progress toward 5% target.
+          - Tracks qualifying trading days (min 5 required).
+          - Warns when daily closed profit approaches 40% cap ($100 on $5K).
+        """
         current_equity = self.api_client.get_equity()
         if current_equity is None or current_equity <= 0 or math.isnan(current_equity):
             return False
 
+        # Query recent trades outside lock to track qualifying days and daily cap
+        recent_trades = self.api_client.get_trades(limit=100)
+
         should_trigger_nuclear = False
         nuclear_reason = ""
+        now_utc = datetime.now(timezone.utc)
+        today_str = str(now_utc.date())
 
         with self._state_lock:
+            # --- Lock Initial Balance (never changes for the lifetime of the prop trial) ---
             if self.initial_balance is None:
                 self.initial_balance = current_equity
                 self.peak_balance = current_equity
-                logger.info(f"🔒 Initial balance locked at: ${self.initial_balance:,.2f} USDT")
+                self.day_start_balance = current_equity
+                self.day_peak_balance = current_equity
+                self.current_trading_day = today_str
+                logger.info(
+                    f"🔒 PROP FIRM INITIAL BALANCE LOCKED: ${self.initial_balance:,.2f} USDT (Phase: {PROP_FIRM_PHASE})\n"
+                    f"   Daily limit: ${self.initial_balance * GLOBAL_HARD_STOPLOSS_PERCENT:,.2f} USDT ({GLOBAL_HARD_STOPLOSS_PERCENT*100:.1f}%)\n"
+                    f"   Max loss:    ${self.initial_balance * PROP_FIRM_MAX_LOSS_PERCENT:,.2f} USDT ({PROP_FIRM_MAX_LOSS_PERCENT*100:.1f}%)\n"
+                    f"   Target:      ${self.initial_balance * PROP_FIRM_PROFIT_TARGET_PERCENT:,.2f} USDT ({PROP_FIRM_PROFIT_TARGET_PERCENT*100:.1f}%)"
+                )
+                self._save_state()
+
+            # --- Initialize day_start_balance if missing ---
+            if self.day_start_balance is None:
+                self.day_start_balance = current_equity
+                self.day_peak_balance = current_equity
+                self.current_trading_day = today_str
+                self._save_state()
+
+            # --- 00:00 UTC Daily Reset tracking ---
+            if self.current_trading_day != today_str:
+                self.current_trading_day = today_str
+                self.day_start_balance = current_equity
+                self.day_peak_balance = current_equity
+                self.day_closed_profit = 0.0
+                logger.info(
+                    f"🌅 New UTC Trading Day: {today_str}. "
+                    f"Day open equity floor: ${self.day_start_balance:,.2f} USDT"
+                )
                 self._save_state()
 
             if self.peak_balance is None or current_equity > self.peak_balance:
                 self.peak_balance = current_equity
                 self._save_state()
 
-            if self.peak_balance <= 0:
+            if self.day_peak_balance is None or current_equity > self.day_peak_balance:
+                self.day_peak_balance = current_equity
+                self._save_state()
+
+            if self.initial_balance <= 0:
                 return False
 
-            drawdown = (self.peak_balance - current_equity) / self.peak_balance
-            drawdown_pct = drawdown * 100
+            # Update qualifying trading days (trade >= 5% initial balance & moved >= 1%)
+            # and track today's closed profit for the 40% cap
+            min_qualifying_size = self.initial_balance * 0.05
+            today_profit_sum = 0.0
+            for tr in recent_trades:
+                if tr.get("is_open") is False:
+                    close_raw = tr.get("close_date") or tr.get("close_timestamp")
+                    if close_raw:
+                        c_day = str(close_raw)[:10]
+                        stake = float(tr.get("stake_amount", 0.0))
+                        profit_ratio = abs(float(tr.get("close_profit", 0.0)))
+                        profit_abs = float(tr.get("close_profit_abs", 0.0))
+                        if stake >= min_qualifying_size and profit_ratio >= 0.01:
+                            self.trading_days_set.add(c_day)
+                        if c_day == today_str:
+                            today_profit_sum += profit_abs
+            self.day_closed_profit = today_profit_sum
 
-            if drawdown > 0:
+            # ============================================================
+            # HYROTRADER RULE 1: Static Daily Drawdown from 00:00 UTC Equity
+            # Daily Floor = day_start_balance - (initial_balance * daily_dd_limit)
+            # Hard stop at 4.5% of initial ($225 on $5K).
+            # ============================================================
+            daily_loss = self.day_start_balance - current_equity
+            daily_dd = daily_loss / self.initial_balance
+            daily_dd_pct = daily_dd * 100
+
+            # ============================================================
+            # HYROTRADER RULE 2: Max Overall Loss from INITIAL BALANCE
+            # Max Loss Floor = initial_balance - (initial_balance * max_loss_limit)
+            # Hard stop at 8.5% of initial ($425 on $5K).
+            # ============================================================
+            overall_loss = self.initial_balance - current_equity
+            overall_dd = overall_loss / self.initial_balance
+            overall_dd_pct = overall_dd * 100
+
+            # ============================================================
+            # HYROTRADER: Profit progress tracking
+            # ============================================================
+            total_profit_pct = ((current_equity - self.initial_balance) / self.initial_balance) * 100
+            profit_target_pct = PROP_FIRM_PROFIT_TARGET_PERCENT * 100
+            daily_profit_cap = self.initial_balance * PROP_FIRM_PROFIT_TARGET_PERCENT * PROP_FIRM_DAILY_PROFIT_CAP_PERCENT
+            trading_days_count = len(self.trading_days_set)
+
+            if total_profit_pct > 0 and not self.profit_target_reached:
+                # Check if profit target has been reached
+                if total_profit_pct >= profit_target_pct and trading_days_count >= PROP_FIRM_MIN_TRADING_DAYS:
+                    self.profit_target_reached = True
+                    self._save_state()
+                    logger.info(
+                        f"🏆 PROP FIRM PROFIT TARGET REACHED! {total_profit_pct:.2f}% >= {profit_target_pct:.1f}% "
+                        f"with {trading_days_count} qualifying trading days. READY TO CLAIM!"
+                    )
+                elif total_profit_pct >= profit_target_pct:
+                    logger.warning(
+                        f"⚠️  Profit target {total_profit_pct:.2f}% reached but only "
+                        f"{trading_days_count}/{PROP_FIRM_MIN_TRADING_DAYS} qualifying trading days. Keep trading!"
+                    )
+
+            # Status log (every cycle)
+            if daily_dd > 0 or overall_dd > 0:
                 logger.info(
-                    f"💰 Equity: ${current_equity:,.2f} | Peak: ${self.peak_balance:,.2f} | "
-                    f"Drawdown: {drawdown_pct:.2f}% (Limit: {GLOBAL_HARD_STOPLOSS_PERCENT * 100:.1f}%)"
+                    f"💰 Equity: ${current_equity:,.2f} | Initial: ${self.initial_balance:,.2f} | "
+                    f"Daily DD: {daily_dd_pct:.2f}% (Hard stop: {GLOBAL_HARD_STOPLOSS_PERCENT*100:.1f}%) | "
+                    f"Overall DD: {overall_dd_pct:.2f}% (Hard stop: {PROP_FIRM_MAX_LOSS_PERCENT*100:.1f}%) | "
+                    f"Trading days: {trading_days_count}/{PROP_FIRM_MIN_TRADING_DAYS}"
                 )
             else:
-                profit_pct = ((current_equity - self.initial_balance) / self.initial_balance) * 100
                 logger.info(
-                    f"💰 Equity: ${current_equity:,.2f} | Peak: ${self.peak_balance:,.2f} | "
-                    f"Total Profit: +{profit_pct:.2f}%"
+                    f"💰 Equity: ${current_equity:,.2f} | Total Profit: +{total_profit_pct:.2f}% "
+                    f"(Target: {profit_target_pct:.1f}%) | "
+                    f"Trading days: {trading_days_count}/{PROP_FIRM_MIN_TRADING_DAYS} | "
+                    f"Day profit cap used: ${self.day_closed_profit:.2f}/${daily_profit_cap:.2f}"
                 )
 
-            if drawdown > GLOBAL_HARD_STOPLOSS_PERCENT:
+            # Warn if today's closed profit is approaching the 40% daily cap
+            if self.day_closed_profit > (daily_profit_cap * 0.80):
+                logger.warning(
+                    f"⚠️  DAY PROFIT CAP WARNING: Today's closed profit ${self.day_closed_profit:.2f} "
+                    f"is {(self.day_closed_profit/daily_profit_cap*100):.0f}% of the "
+                    f"${daily_profit_cap:.2f} cap (40% of target). "
+                    f"Profits above cap don't count toward the target!"
+                )
+
+            # --- HYROTRADER RULE 1 CHECK: Daily Drawdown Hard Stop (4.5% of initial) ---
+            if daily_dd > GLOBAL_HARD_STOPLOSS_PERCENT:
+                should_trigger_nuclear = True
+                self.daily_nuclear_triggered = True
+                nuclear_reason = (
+                    f"🚨 HYROTRADER DAILY DRAWDOWN BREACHED: {daily_dd_pct:.2f}% of initial balance "
+                    f"exceeded the {GLOBAL_HARD_STOPLOSS_PERCENT*100:.1f}% safety stop "
+                    f"(HyroTrader limit: 5.0% of initial ${self.initial_balance:,.2f} USDT). "
+                    f"Current equity: ${current_equity:,.2f} USDT."
+                )
+            # --- HYROTRADER RULE 2 CHECK: Max Overall Loss Hard Stop (8.5% of initial) ---
+            elif overall_dd > PROP_FIRM_MAX_LOSS_PERCENT:
                 should_trigger_nuclear = True
                 nuclear_reason = (
-                    f"Global portfolio drawdown {drawdown_pct:.2f}% breached "
-                    f"the {GLOBAL_HARD_STOPLOSS_PERCENT * 100:.1f}% limit!"
+                    f"🚨 HYROTRADER MAX LOSS BREACHED: {overall_dd_pct:.2f}% of initial balance "
+                    f"exceeded the {PROP_FIRM_MAX_LOSS_PERCENT*100:.1f}% safety stop "
+                    f"(HyroTrader limit: 10.0% of initial ${self.initial_balance:,.2f} USDT). "
+                    f"Current equity: ${current_equity:,.2f} USDT."
                 )
 
         # Trigger Nuclear Option OUTSIDE the lock to prevent deadlock
@@ -1184,13 +1370,17 @@ class RiskManager:
     def run(self):
         """Main execution entry point."""
         logger.info("=" * 70)
-        logger.info("🚀 Zero-Burn AI Risk Sentinel — Active (Enterprise Edition)")
-        logger.info(f"   Freqtrade API:       {FREQTRADE_API_URL}")
-        logger.info(f"   Drawdown Limit:      {GLOBAL_HARD_STOPLOSS_PERCENT * 100:.1f}%")
-        logger.info(f"   Check Interval:      {CHECK_INTERVAL_SECONDS}s")
-        logger.info(f"   Hysteresis Cycles:   {BULL_CONFIRMATION_CYCLES} cycles")
-        logger.info(f"   Wake-Up Cooldown:    {WAKE_UP_COOLDOWN_MINUTES}m")
-        logger.info(f"   Daily Gemini Cap:    {MAX_DAILY_GEMINI_CALLS} calls")
+        logger.info("🚀 Zero-Burn AI Risk Sentinel — Active (HyroTrader Prop Firm Mode)")
+        logger.info(f"   Freqtrade API:           {FREQTRADE_API_URL}")
+        logger.info(f"   Daily DD Hard Stop:      {GLOBAL_HARD_STOPLOSS_PERCENT * 100:.1f}% of initial (HyroTrader limit: 5.0%)")
+        logger.info(f"   Max Loss Hard Stop:      {PROP_FIRM_MAX_LOSS_PERCENT * 100:.1f}% of initial (HyroTrader limit: 10.0%)")
+        logger.info(f"   Profit Target:           {PROP_FIRM_PROFIT_TARGET_PERCENT * 100:.1f}% of initial")
+        logger.info(f"   Daily Profit Cap:        {PROP_FIRM_DAILY_PROFIT_CAP_PERCENT * 100:.0f}% of target per day")
+        logger.info(f"   Min Trading Days:        {PROP_FIRM_MIN_TRADING_DAYS} days")
+        logger.info(f"   Check Interval:          {CHECK_INTERVAL_SECONDS}s")
+        logger.info(f"   Hysteresis Cycles:       {BULL_CONFIRMATION_CYCLES} cycles")
+        logger.info(f"   Wake-Up Cooldown:        {WAKE_UP_COOLDOWN_MINUTES}m")
+        logger.info(f"   Daily Gemini Cap:        {MAX_DAILY_GEMINI_CALLS} calls")
         logger.info("=" * 70)
 
         with self._state_lock:
