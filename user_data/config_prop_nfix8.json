@@ -10,7 +10,7 @@
     "trading_mode": "futures",
     "margin_mode": "isolated",
     "can_short": false,
-    "dry_run": true,
+    "dry_run": false,
     "dry_run_wallet": 5000,
     "initial_state": "running",
     "amend_last_stake_amount": true,
@@ -53,8 +53,9 @@
     },
     "exchange": {
         "name": "bybit",
-        "key": "",
-        "secret": "",
+        "key": "LGPkJfN8NAXn56vOJt",
+        "secret": "dnvZFfH1zZmsY0PKuqkm2gE0WdGeJvUp0meQ",
+        "demo_trading": true,
         "ccxt_config": {
             "enableRateLimit": true,
             "rateLimit": 200,
