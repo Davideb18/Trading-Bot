@@ -1,5 +1,5 @@
 {
-    "strategy": "NostalgiaForInfinityX8",
+    "strategy": "NostalgiaForInfinityX8_Prop",
     "max_open_trades": 6,
     "stake_currency": "USDT",
     "stake_amount": "unlimited",
