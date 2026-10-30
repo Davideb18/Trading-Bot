@@ -1,9 +1,9 @@
 {
     "strategy": "NostalgiaForInfinityX8_Prop",
-    "max_open_trades": 6,
+    "max_open_trades": 3,
     "stake_currency": "USDT",
     "stake_amount": "unlimited",
-    "tradable_balance_ratio": 0.85,
+    "tradable_balance_ratio": 0.24,
     "max_stake_amount": 50000,
     "fiat_display_currency": "USD",
     "timeframe": "5m",
@@ -59,12 +59,18 @@
         "ccxt_config": {
             "enableRateLimit": true,
             "rateLimit": 200,
-            "timeout": 30000
+            "timeout": 30000,
+            "has": {
+                "fetchCurrencies": false
+            }
         },
         "ccxt_async_config": {
             "enableRateLimit": true,
             "rateLimit": 200,
-            "timeout": 30000
+            "timeout": 30000,
+            "has": {
+                "fetchCurrencies": false
+            }
         },
         "pair_whitelist": [
             "BTC/USDT:USDT",
@@ -112,8 +118,7 @@
         "futures_mode_leverage": 1.0,
         "futures_mode_leverage_rebuy_mode": 1.0,
         "futures_mode_leverage_grind_mode": 1.0,
-        "futures_max_open_trades_short": 0,
-        "can_short": false
+        "futures_max_open_trades_short": 0
     },
     "telegram": {
         "enabled": false,

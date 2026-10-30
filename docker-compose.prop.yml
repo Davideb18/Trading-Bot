@@ -50,8 +50,8 @@ services:
       # Daily drawdown hard stop: 4.5% of INITIAL balance (static from 00:00 UTC)
       - GLOBAL_HARD_STOPLOSS_PERCENT=0.045
       - PROP_FIRM_DAILY_LIMIT_PERCENT=0.045
-      # Max overall loss hard stop: 8.5% of initial (HyroTrader limit is 10%)
-      - PROP_FIRM_MAX_LOSS_PERCENT=0.085
+      # Max overall loss hard stop: 9.0% of initial (HyroTrader limit is 10%)
+      - PROP_FIRM_MAX_LOSS_PERCENT=0.090
       # Profit target (default handled by phase if not set): 5% for trial/phase2, 10% for phase1
       - PROP_FIRM_PROFIT_TARGET_PERCENT=0.05
       # Daily profit cap for target counting: 40% of target per day

@@ -85,7 +85,7 @@ logger = logging.getLogger("HyroTrader.RiskManagerProp")
 # Configuration (Environment & Overrides)
 # ==================================================================================
 
-FREQTRADE_API_URL = os.getenv("FREQTRADE_API_URL", "http://127.0.0.1:8080/api/v1")
+FREQTRADE_API_URL = os.getenv("FREQTRADE_API_URL", "http://127.0.0.1:8088/api/v1")
 FREQTRADE_USERNAME = os.getenv("FREQTRADE_USERNAME", "freqtrade")
 FREQTRADE_PASSWORD = os.getenv("FREQTRADE_PASSWORD", "ZeroBurnPassword2026!")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
@@ -107,8 +107,8 @@ PROP_FIRM_PHASE = os.getenv("PROP_FIRM_PHASE", "trial").lower()
 
 # Daily loss limit: 5% of INITIAL balance (from 00:00 UTC day start). Hard stop at 4.5% for safety.
 GLOBAL_HARD_STOPLOSS_PERCENT = float(os.getenv("GLOBAL_HARD_STOPLOSS_PERCENT", os.getenv("PROP_FIRM_DAILY_LIMIT_PERCENT", "0.045")))
-# Max overall loss: 10% of initial balance. Hard stop at 8.5% for safety margin.
-PROP_FIRM_MAX_LOSS_PERCENT = float(os.getenv("PROP_FIRM_MAX_LOSS_PERCENT", "0.085"))
+# Max overall loss: 10% of initial balance. Hard stop at 9.0% for safety margin.
+PROP_FIRM_MAX_LOSS_PERCENT = float(os.getenv("PROP_FIRM_MAX_LOSS_PERCENT", "0.090"))
 # Profit target: Phase 1 = 10%, Phase 2 & Free Trial = 5% (overrideable via env)
 if "PROP_FIRM_PROFIT_TARGET_PERCENT" in os.environ:
     PROP_FIRM_PROFIT_TARGET_PERCENT = float(os.environ["PROP_FIRM_PROFIT_TARGET_PERCENT"])
@@ -412,17 +412,7 @@ class FreqtradeAPIClient:
         if not data:
             return None
 
-        # Prioritize total_bot (exact bot-allocated equity)
-        total_bot = data.get("total_bot")
-        if (
-            total_bot is not None
-            and isinstance(total_bot, (int, float))
-            and total_bot > 0
-            and not math.isnan(total_bot)
-        ):
-            return float(total_bot)
-
-        # Fallback to overall total if total_bot is not populated
+        # Prioritize total (overall account wallet equity for prop firm evaluation)
         total = data.get("total")
         if (
             total is not None
@@ -431,6 +421,16 @@ class FreqtradeAPIClient:
             and not math.isnan(total)
         ):
             return float(total)
+
+        # Fallback to total_bot if total is not populated
+        total_bot = data.get("total_bot")
+        if (
+            total_bot is not None
+            and isinstance(total_bot, (int, float))
+            and total_bot > 0
+            and not math.isnan(total_bot)
+        ):
+            return float(total_bot)
 
         return None
 
@@ -1167,21 +1167,21 @@ class RiskManager:
         self.api_client.stop_buying()
         logger.info("🛑 Bot buying permanently HALTED.")
 
-        # 2. Force exit all open trades
-        trades = self.api_client.get_open_trades()
-        if trades and len(trades) > 0:
-            logger.info(f"📤 Liquidating {len(trades)} open positions...")
-            for t in trades:
-                tid = t.get("trade_id") or t.get("tradeid") or t.get("id")
-                pair = t.get("pair")
-                if tid is not None:
-                    self.api_client.force_exit(tid)
-                    logger.warning(f"  ✅ Liquidated #{tid} ({pair})")
+        # 2. EMERGENCY LIQUIDATION: Market sell ALL open positions to freeze equity before HyroTrader 5%/10% breach
+        logger.critical("🔥 HYROTRADER EMERGENCY LIQUIDATION: Liquidating open positions to prevent account disqualification...")
+        open_trades = self.api_client.get_open_trades()
+        if open_trades:
+            for trade in open_trades:
+                trade_id = trade.get("trade_id")
+                pair = trade.get("pair")
+                if trade_id:
+                    logger.critical(f"   Liquidating position {trade_id} ({pair}) at market rate...")
+                    self.api_client.force_exit(trade_id)
                     time.sleep(0.3)
         else:
             logger.info("No open positions to liquidate.")
 
-        logger.critical("☢️  Nuclear option execution complete. Capital secured in USDT.")
+        logger.critical("☢️  Nuclear option execution complete. Equity frozen to protect HyroTrader account.")
         self._save_state()
 
     def _check_drawdown(self) -> bool:
@@ -1202,8 +1202,9 @@ class RiskManager:
         if current_equity is None or current_equity <= 0 or math.isnan(current_equity):
             return False
 
-        # Query recent trades outside lock to track qualifying days and daily cap
+        # Query recent and open trades outside lock to track qualifying days, inactivity, and daily cap
         recent_trades = self.api_client.get_trades(limit=100)
+        open_trades = self.api_client.get_open_trades()
 
         should_trigger_nuclear = False
         nuclear_reason = ""
@@ -1256,23 +1257,68 @@ class RiskManager:
             if self.initial_balance <= 0:
                 return False
 
-            # Update qualifying trading days (trade >= 5% initial balance & moved >= 1%)
-            # and track today's closed profit for the 40% cap
+            # Unified analysis of recent trades:
+            # 1. Qualifying trading days (trade >= 5% initial balance & moved >= 1%)
+            # 2. Today's closed profit for the 40% cap
+            # 3. Latest trade timestamp for 30-Day Inactivity Sentinel
             min_qualifying_size = self.initial_balance * 0.05
             today_profit_sum = 0.0
+            latest_trade_dt = None
+
             for tr in recent_trades:
                 if tr.get("is_open") is False:
                     close_raw = tr.get("close_date") or tr.get("close_timestamp")
                     if close_raw:
-                        c_day = str(close_raw)[:10]
-                        stake = float(tr.get("stake_amount", 0.0))
-                        profit_ratio = abs(float(tr.get("close_profit", 0.0)))
-                        profit_abs = float(tr.get("close_profit_abs", 0.0))
-                        if stake >= min_qualifying_size and profit_ratio >= 0.01:
-                            self.trading_days_set.add(c_day)
-                        if c_day == today_str:
-                            today_profit_sum += profit_abs
+                        try:
+                            if isinstance(close_raw, (int, float)):
+                                c_dt = datetime.fromtimestamp(close_raw / 1000.0, tz=timezone.utc)
+                            else:
+                                raw_str = str(close_raw).strip()
+                                if raw_str.endswith("Z"):
+                                    raw_str = raw_str[:-1] + "+00:00"
+                                c_dt = datetime.fromisoformat(raw_str)
+                                if c_dt.tzinfo is None:
+                                    c_dt = c_dt.replace(tzinfo=timezone.utc)
+
+                            c_day = str(c_dt.date())
+                            stake = float(tr.get("stake_amount", 0.0))
+                            profit_ratio = abs(float(tr.get("close_profit", 0.0)))
+                            profit_abs = float(tr.get("close_profit_abs", 0.0))
+
+                            if stake >= min_qualifying_size and profit_ratio >= 0.01:
+                                self.trading_days_set.add(c_day)
+                            if c_day == today_str:
+                                today_profit_sum += profit_abs
+
+                            if latest_trade_dt is None or c_dt > latest_trade_dt:
+                                latest_trade_dt = c_dt
+                        except Exception:
+                            pass
+
             self.day_closed_profit = today_profit_sum
+
+            # ============================================================
+            # HYROTRADER: 30-Day Inactivity Sentinel
+            # Rule: Account is breached if no trade is closed or open for > 30 days.
+            # Alert at >= 20 days, Critical alarm at >= 25 days.
+            # ============================================================
+            if open_trades and len(open_trades) > 0:
+                inactivity_days = 0
+            elif latest_trade_dt:
+                inactivity_days = (now_utc - latest_trade_dt).days
+            else:
+                inactivity_days = 0
+
+            if inactivity_days >= 25:
+                logger.critical(
+                    f"🚨 HYROTRADER 30-DAY INACTIVITY ALERT: {inactivity_days} days flat! "
+                    f"Must execute a trade within {30 - inactivity_days} days or HyroTrader account is forfeited!"
+                )
+            elif inactivity_days >= 20:
+                logger.warning(
+                    f"⚠️ HYROTRADER INACTIVITY WARNING: {inactivity_days} days without trades. "
+                    f"30-day limit approaching."
+                )
 
             # ============================================================
             # HYROTRADER RULE 1: Static Daily Drawdown from 00:00 UTC Equity
@@ -1286,7 +1332,7 @@ class RiskManager:
             # ============================================================
             # HYROTRADER RULE 2: Max Overall Loss from INITIAL BALANCE
             # Max Loss Floor = initial_balance - (initial_balance * max_loss_limit)
-            # Hard stop at 8.5% of initial ($425 on $5K).
+            # Hard stop at 9.0% of initial ($450 on $5K).
             # ============================================================
             overall_loss = self.initial_balance - current_equity
             overall_dd = overall_loss / self.initial_balance
@@ -1452,20 +1498,8 @@ class RiskManager:
                     for coin_id, info in flagged_coins.items():
                         act = info.get("action") if isinstance(info, dict) else str(info)
                         if act in ("EXIT_PAIR", "LIQUIDATE"):
-                            logger.warning(f"🚨 TARGETED EXIT for {coin_id}: adding to blacklist and closing position.")
+                            logger.warning(f"🚨 TARGETED DEFENSE for {coin_id}: adding to blacklist to prevent further buys. Open positions remain managed by strategy.")
                             self.api_client.add_to_blacklist([coin_id])
-                            trades = self.api_client.get_open_trades()
-                            if trades:
-                                for t in trades:
-                                    t_pair = t.get("pair", "")
-                                    if (
-                                        t_pair == coin_id
-                                        or t_pair.startswith(f"{coin_id}/")
-                                        or coin_id.startswith(t_pair.split("/")[0])
-                                    ):
-                                        tid = t.get("trade_id") or t.get("tradeid") or t.get("id")
-                                        if tid is not None:
-                                            self.api_client.force_exit(tid)
 
                 # 2. Emergency Black Swan (PANIC)
                 if regime == "PANIC":

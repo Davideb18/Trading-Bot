@@ -51,6 +51,7 @@ services:
       - FREQTRADE_PASSWORD=${FREQTRADE_PASSWORD}
       - FREQTRADE_JWT_TOKEN=${FREQTRADE_JWT_TOKEN}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GLOBAL_HARD_STOPLOSS_PERCENT=0.08
     volumes:
       - "./scripts:/app/scripts:ro"
       - "./user_data:/app/user_data:rw"

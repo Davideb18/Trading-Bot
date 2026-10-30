@@ -249,9 +249,9 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
   short_scalp_mode_name = "short_scalp"
 
   is_futures_mode = False
-  futures_mode_leverage = 3.0
-  futures_mode_leverage_rebuy_mode = 3.0
-  futures_mode_leverage_grind_mode = 3.0
+  futures_mode_leverage = 1.0
+  futures_mode_leverage_rebuy_mode = 1.0
+  futures_mode_leverage_grind_mode = 1.0
 
   # Limit the number of long/short trades for futures (0 for no limit)
   futures_max_open_trades_long = 0
@@ -5514,10 +5514,10 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
     long_rebuy_mode_tags = self.long_rebuy_mode_tags
     long_grind_mode_tags = self.long_grind_mode_tags
     if all(c in long_rebuy_mode_tags for c in enter_tags):
-      return self.futures_mode_leverage_rebuy_mode
+      return min(1.0, float(self.futures_mode_leverage_rebuy_mode))
     elif all(c in long_grind_mode_tags for c in enter_tags):
-      return self.futures_mode_leverage_grind_mode
-    return self.futures_mode_leverage
+      return min(1.0, float(self.futures_mode_leverage_grind_mode))
+    return min(1.0, float(self.futures_mode_leverage))
 
   # Correct Min Stake
   # ---------------------------------------------------------------------------------------------
