@@ -1157,11 +1157,14 @@ class RiskManager:
                 self.peak_balance = current_equity
                 self._save_state()
 
-            if current_equity > self.peak_balance:
+            if self.peak_balance is None or current_equity > self.peak_balance:
                 self.peak_balance = current_equity
                 self._save_state()
 
-            drawdown = (self.peak_balance - current_equity) / self.peak_balance
+            if self.peak_balance is not None and self.peak_balance > 0:
+                drawdown = (self.peak_balance - current_equity) / self.peak_balance
+            else:
+                drawdown = 0.0
             drawdown_pct = drawdown * 100
 
             logger.info(
