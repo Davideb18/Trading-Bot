@@ -1,150 +1,135 @@
-# MASTER PROMPT DEFINITIVO & DOSSIER STORICO ARCHITETTURALE
-### Per Claude Code Ultra, Ingegneri Quantitativi & Collaboratori Distribuiti
+# 🚨 ZERO-TRUST RED-TEAM AUDIT & MASTER PROMPT (CARTE BIANCA TOTALE)
+### Mandato Operativo per Claude Code Ultra — Verifica Forense e Ottimizzazione da Zero a Zeta
 
-> **VERSIONE**: 3.0 (Enterprise Institutional Edition — Consolidata su tutta la cronologia del progetto da Giugno a Novembre 2026)  
-> **APPLICAZIONE**: Esecuzione Locale su Repository GitHub (`Trading-Bot`) senza necessità di credenziali AWS di produzione.
-
----
-
-## 1. VISIONE GENERALE E FILOSOFIA ZERO-BURN
-Questo repository (`FreqtradeBot`) non è un semplice bot di trading open-source: è un **sistema quantitativo istituzionale resiliente a eventi Black Swan**, progettato per operare su due stack paralleli e rigorosamente disaccoppiati:
-
-1. **STACK SPOT BINANCE (Accumulazione & Long-Only DCA)**:
-   - **Obiettivo**: Crescita patrimoniale continua a rischio di rovina zero (Zero-Burn).
-   - **Configurazione**: `user_data/config.json` (Binance Spot, live trading).
-   - **Strategia**: `NostalgiaForInfinityX8` (DCA multi-livello ad alta frequenza).
-   - **Safe Box**: 20% del capitale totale bloccato come riserva intoccabile (`tradable_balance_ratio: 0.80`).
-   - **Gestione del Rischio**: Non si vende MAI in perdita a mercato per fluttuazioni ordinarie. L'accumulazione abbassa il prezzo medio di carico per uscire in profitto o pareggio sui rimbalzi.
-   - **Supervisore**: `scripts/llm_risk_manager.py` (interviene *esclusivamente* con `/stopbuy` in caso di allarme).
-
-2. **STACK FUTURES BYBIT (Prop Firm Challenge — HyroTrader 5K Two-Step)**:
-   - **Obiettivo**: Superare le sfide di valutazione proprietarie rispettando rigidamente i vincoli di drawdown giornaliero e trailing.
-   - **Configurazione**: `user_data/config_prop_nfix8.json` (Bybit Futures, Demo/Live).
-   - **Strategia**: `NostalgiaForInfinityX8_Prop` (leva hard-clamped a 1.0x).
-   - **Allocazione Capitale**: `tradable_balance_ratio: 0.24`, `max_open_trades: 3` (massimo ~8% di esposizione per singolo trade).
-   - **Supervisore**: `scripts/llm_risk_manager_prop.py` (sentinella tarata su soglie di Daily DD < 2.5% e Trailing DD < 3.8%).
+> **POSTURA OPERATIVA**: ZERO-TRUST ASSOLUTO & ADVERSARIAL AUDITING  
+> **AUTORITÀ**: CARTE BIANCA TOTALE (Totale libertà di vivisezione codice, download dati, esecuzione migliaia di simulazioni, stress-test e refactoring)  
+> **TARGET**: Repository locale `Trading-Bot` (branch: `feature/prop-firm-futures-validation`)  
+> **AMBIENTE**: Locale isolato (senza necessità di accessi AWS o chiavi di produzione)
 
 ---
 
-## 2. REGISTRO STORICO DEGLI ERRORI CRITICI, BUG E TRAPPOLE RISOLTE
-*(Chiunque lavori su questo codebase — che sia umano o IA — DEVE conoscere questi 10 errori storici per non reintrodurli mai più)*
+## 1. IL TUO MANDATO: AUDITOR AVVERSARIO & CARTE BIANCA
 
-### 🔴 TRAPPOLA 1: La "Nuclear Option" con Panic-Sell Forzato a Mercato
-- **Il Problema Storico**: Nelle prime versioni del Risk Manager, un drawdown dell'8% o un allarme di panic news innescava la vendita forzata a mercato (`/forceexit`) di tutte le posizioni aperte.
-- **La Conseguenza**: Nello spot, dove la strategia NFI stava accumulando sui minimi per mediare (DCA), il bot svendeva sui minimi locali trasformando un drawdown temporaneo non realizzato in una perdita reale devastante.
-- **La Soluzione Adottata**: 
-  - Nello Spot, la Nuclear Option è stata **disattivata**: il supervisore invia unicamente `/stopbuy` (mette in pausa i nuovi ingressi), lasciando che la strategia gestisca autonomamente gli exit in rimbalzo.
-  - Nei Futures, l'uscita forzata è consentita solo ed esclusivamente se confermata da crollo reale di prezzo (vedi Trappola 7) a protezione del conto prop.
+Non assumere **MAI** che qualcosa sia corretto solo perché è stato scritto o configurato nei mesi scorsi.  
+**Il tuo presupposto iniziale deve essere che ogni singolo file, algoritmo, parametro di trading, formula di drawdown, filtro di pairlist e script di sentinella contenga bug latenti, presupposti fragili o trappole silenti pronte a liquidare il conto o causare la squalifica immediata dalla Prop Firm.**
 
-### 🔴 TRAPPOLA 2: Il Bug del Doppio Conteggio in `get_equity()`
-- **Il Problema Storico**: La funzione `get_equity()` interrogava `/balance` e poi sottraeva manualmente il floating PnL delle posizioni aperte da `/status`.
-- **La Conseguenza**: L'endpoint `/balance` di Freqtrade calcola già il valore `total` e `total_bot` includendo le perdite/profitti non realizzati. Sottraendoli una seconda volta, il drawdown a schermo risultava **raddoppiato fittiziamente**, facendo scattare allarmi ingiustificati.
-- **La Soluzione Adottata**: 
-  - `get_equity()` legge prioritariamente `total_bot` o `total`.
-  - Introdotti controlli contro divisione per zero e gestione valori `NaN` o `None` (commit `d94d86c38`).
-
-### 🔴 TRAPPOLA 3: Il Caso OGN / ERA e la Corruzione del Database (`tradesv3.sqlite`)
-- **Il Problema Storico**: Durante il cambio a caldo della strategia da X7 a X8 su server live, il Trade #15 (ERA/USDT) è stato chiuso in modo anomalo con perdita a codice (-20.97 USDT). Inoltre, posizioni come OGN/USDT subirono drawdown prolungati, spingendo a tentativi scorretti di svendita.
-- **La Soluzione Adottata**:
-  - Creato lo script `scripts/sanitize_spot_database.py` per ripulire con backup il DB SQLite, eliminando le anomalie infrastrutturali e preservando l'integrità matematica delle posizioni reali (35 vinte / 0 perse).
-  - Regola ferrea: mai riavviare o cambiare strategia a caldo senza prima svuotare o sincronizzare lo stato.
-
-### 🔴 TRAPPOLA 4: L'Exit Prematuro "Structure Break" di NostalgiaForInfinity
-- **Il Problema Storico**: NFI X8 possiede una funzione interna chiamata `bad_trade_controller_structure_break_exit_enable`. Quando il prezzo rompeva la struttura tecnica (EMA gap > 35%), la strategia vendeva la coin a perdita.
-- **La Soluzione Adottata**: 
-  - Disattivato categoricamente: `bad_trade_controller_structure_break_exit_enable = False` (commit `064667dc2`). La strategia deve completare i suoi cicli di safety orders senza svendere sui breakdown.
-
-### 🔴 TRAPPOLA 5: Il Rischio Leva nei Contratti Futures su Bybit
-- **Il Problema Storico**: Freqtrade in modalità futures può ereditare leve superiori o modalità cross-margin dall'exchange, rischiando la liquidazione forzata o la squalifica immediata da HyroTrader.
-- **La Soluzione Adottata**:
-  - In `user_data/strategies/NostalgiaForInfinityX8_Prop.py`, la leva è **hard-clamped a 1.0x**:
-    `return min(1.0, float(self.futures_mode_leverage))`
-  - Nel config: `margin_mode: "isolated"`, `can_short: false`. Zero rischio di liquidazione incrociata.
-
-### 🔴 TRAPPOLA 6: Il Crash-Loop da Riavvio Continuo (`nuclear_triggered: true`)
-- **Il Problema Storico**: Quando il Risk Manager attivava lo stato di emergenza, scriveva `nuclear_triggered: true` sul file di stato persistente (`risk_manager_state.json`). Al riavvio del container Docker, lo script leggeva il file e si rimetteva istantaneamente in pausa a ciclo infinito.
-- **La Soluzione Adottata**:
-  - Ricalibrato il meccanismo di recovery con reset controllato dello stato e auto-healing quando i parametri macro tornano nella norma.
-
-### 🔴 TRAPPOLA 7: I Falsi Allarmi LLM basati su News senza Crollo Reale di Prezzo
-- **Il Problema Storico**: L'IA (Google Gemini) analizzava feed RSS e leggeva titoli allarmistici (es. vecchi fallimenti, cause SEC o dichiarazioni macro) classificando il mercato come `PANIC`, anche se Bitcoin era stabile o in salita.
-- **La Soluzione Adottata**:
-  - Introdotto il controllo quantitativo multi-fattoriale **`is_market_crash`**:
-    Nessun allarme PANIC viene accettato dall'IA a meno che non sia matematicamente confermato da un crollo effettivo su Binance: **BTC in calo > 8% nelle 24h o > 4% nell'ultima ora** (commit `2ac355b4d`).
-
-### 🔴 TRAPPOLA 8: Esaurimento Quota Gemini Free Tier (Errori 429)
-- **Il Problema Storico**: Chiamate individuali per ogni singola coppia della whitelist esaurivano la quota gratuita dell'API di Google in pochi minuti.
-- **La Soluzione Adottata**:
-  - **Batch Scanning**: Una singola richiesta strutturata ogni 15 minuti per tutta la whitelist.
-  - **Cascata Multi-Modello**: `gemini-3.1-flash-lite` → `gemini-3.5-flash-lite` → `gemini-3.8-flash` → fallback deterministico sull'Indice Fear & Greed.
-  - **Circuit Breaker**: Cooldown di 30 minuti dopo 3 errori consecutivi per evitare ban dell'endpoint.
-
-### 🔴 TRAPPOLA 9: Incompatibilità Python 3.12 e Fuso Orario UTC
-- **Il Problema Storico**: L'uso di `datetime.UTC` generava crash sui runtime Python precedenti al 3.11.
-- **La Soluzione Adottata**: Dockerfile aggiornato a Python 3.12 e normalizzazione di tutti i timestamp in UTC esplicito (commit `138a025c9`).
-
-### 🔴 TRAPPOLA 10: La Whitelist Statica vs Illiquidità Altcoin
-- **Il Problema Storico**: Le liste statiche perdevano le migliori opportunità, ma le VolumePairList non filtrate acquistavano token a bassa liquidità soggetti a pump-and-dump.
-- **La Soluzione Adottata**:
-  - Implementata `VolumePairList` istituzionale con filtro di liquidità minimo a **$15.000.000 di volume 24h** e blacklist rigorosa di token con leva e stablecoin de-peggate (commit `3ce8bcd22`).
+Hai **carta bianca totale** per:
+1. **Ripartire idealmente da zero** e ricontrollare ogni singolo componente dalla A alla Z, analizzando ogni possibile variazione ed edge-case in migliaia di scenari di mercato.
+2. **Scaricare qualsiasi dato storico** (giorni, mesi, anni su qualsiasi timeframe e coppia) per sottoporre le strategie a backtest massivi e stress-test estremi.
+3. **Scrivere qualsiasi script di verifica ad-hoc**, fuzzer, simulatore Monte Carlo o test di robustezza matematica per toglierti qualsiasi dubbio.
+4. **Modificare, rifattorizzare o riscrivere** qualsiasi parte di codice della strategia (`NostalgiaForInfinityX8_Prop.py`), della configurazione (`config_prop_nfix8.json`) o dei supervisori di rischio (`llm_risk_manager_prop.py`) per garantire che l'ecosistema sia **matematicamente inattaccabile e sicuro al 100%**.
 
 ---
 
-## 3. MASTER PROMPT OPERATIVO PER CLAUDE CODE ULTRA (AMBIENTE LOCALE)
+## 2. L'OBIETTIVO SUPREMO: HYROTRADER 5K TWO-STEP (ZERO VIOLAZIONI)
 
-```text
-Agisci come Principal Quantitative Systems Architect, Institutional Crypto Fund Auditor e Senior Algorithmic Risk Engineer.
+La sfida Prop Firm HyroTrader Futures 5.000$ ha regole inflessibili. Una sola violazione di un singolo tick equivale alla squalifica immediata:
 
-### CONTESTO AMBIENTE
-Stai operando in ambiente locale isolato sul repository clonato da GitHub (branch: feature/prop-firm-futures-validation). Non hai accesso né bisogno di chiavi SSH AWS di produzione. Il tuo compito è l'analisi matematica, lo stress-testing, l'ottimizzazione e la validazione del codice prima che venga promosso in produzione.
-
-### REGOLE TASSATIVE DI SVILUPPO E ZERO-TRUST
-1. NON REINTRODURRE NESSUNO DEI 10 ERRORI STORICI DOCUMENTATI NEL FILE CLAUDE_LOCAL_PROMPT.md:
-   - Mai forzare vendite a mercato ingiustificate (panic-sell).
-   - Mai consentire leva > 1.0x nei contratti futures (hard-clamped a 1.0x).
-   - Mai alterare la formula di get_equity() introducendo doppi conteggi di PnL non realizzato.
-   - Preservare sempre la disattivazione del structure break exit su NFIX8.
-2. VINCOLI HYROTRADER 5K TWO-STEP CHALLENGE:
-   - Max Daily Drawdown consentito: 5.0% ($250). Target di sicurezza strategia: < 2.5%.
-   - Max Overall Trailing Drawdown consentito: 8.0% ($400). Target di sicurezza strategia: < 3.8%.
-   - Profit Target: +8% (Step 1) / +5% (Step 2).
-   - Rapporto tradable balance: max 0.24 (3 trade concorrenti da ~8% ciascuno).
-3. WORKFLOW OPERATIVO LOCALE:
-   - Scarica i dati storici necessari per le coppie attive in config_prop_nfix8.json:
-     freqtrade download-data --config user_data/config_prop_nfix8.json --timeframe 5m 15m 1h --timerange 20240101-20241101
-   - Esegui backtest e stress test sulle finestre di crash del 2024 (es. 12-14 Aprile 2024, 5 Agosto 2024):
-     freqtrade backtesting --config user_data/config_prop_nfix8.json --strategy NostalgiaForInfinityX8_Prop --timerange 20240101-20241101
-   - Verifica i risultati con gli auditor istituzionali:
-     python3 scripts/check_prop_firm_rules.py
-     python3 scripts/prop_firm_deep_auditor.py
-4. CONSEGNA:
-   - Ogni ottimizzazione deve essere documentata con parametri 'prima vs dopo', Win Rate, Max Drawdown e Profit Factor.
-   - Crea un branch git dedicato (es. feature/prop-firm-optimization) e prepara commit puliti secondo Semantic Commits (feat:, perf:, fix:).
-```
+| Parametro Regola | Limite HyroTrader (Hard Breach) | Tuo Target di Sicurezza Ingegneristica |
+|---|---|---|
+| **Max Daily Drawdown** | **5.00% ($250 su $5.000)** | **Max Daily DD < 2.0% - 2.5% ($100 - $125)** |
+| **Max Overall Trailing DD** | **8.0% ($400 su $5.000)** | **Max Trailing DD < 3.5% ($175)** |
+| **Profit Target Step 1** | **+8.0% ($400)** | Conseguibile in 15-45 giorni con Win Rate > 70% |
+| **Profit Target Step 2** | **+5.0% ($250)** | Conseguibile con massima stabilità |
+| **Leva Finanziaria** | Non vietata, ma ad altissimo rischio | **Hard-clamped a 1.0x (Nessuna leva/liquidazione)** |
+| **Margine Posizioni** | Isolato obbligatorio | **`margin_mode: "isolated"` (Zero cross-contagion)** |
+| **Rischio per Trade** | - | **Max ~8% capitale per slot (3 trade max = 24%)** |
 
 ---
 
-## 4. SCHEMA COLLABORAZIONE DISTRIBUITA (DEV -> STAGING -> PROD)
+## 3. CHECKLIST FORENSE DALLA A ALLA Z: COSA DEVI VIVISEZIONARE
 
-```mermaid
-graph TD
-    subgraph AMBIENTE LOCALE (Amico & Claude Code)
-        A[Git Clone da GitHub] --> B[Download Data Storici Gratuiti]
-        B --> C[Backtest su Crash 2024]
-        C --> D[Ottimizzazione Parametri NFIX8_Prop]
-        D --> E[Verifica Scripts Audit HyroTrader]
-        E --> F[Git Push su Branch dedicato]
-    end
+### A. STRATEGIA (`user_data/strategies/NostalgiaForInfinityX8_Prop.py` & spot `X8`)
+- [ ] **Lookahead Bias & Data Leakage**: Ispeziona riga per riga il caricamento delle candele informative (`15m`, `1h`, `4h`, `1d`). C'è anche solo una riga in cui un indicatore su timeframe superiore guarda al futuro (`close` invece di `shift(1)`)?
+- [ ] **Matematica delle Safety Orders (DCA / Grind Mode)**:
+  - Quanti ordini di acquisto successivi può fare una posizione?
+  - Qual è l'assorbimento cumulativo di capitale nel caso peggiore (worst-case scenario)?
+  - **Scenario Apocalittico**: Cosa succede se tutti e 3 i trade aperti scendono contemporaneamente al livello massimo di DCA durante un crash sistemico? Il capitale residuo copre gli ordini o si va in margin call / violazione del daily drawdown?
+- [ ] **Hard-Clamping della Leva**:
+  - Verifica che la funzione `leverage()` restituisca **sempre e in ogni condizione `1.0`**, ignorando qualsiasi parametro proposto o ereditato.
+  - Verifica che `correct_min_stake()` non generi mai stake sovradimensionate.
+- [ ] **Logica di Uscita e Stoploss**:
+  - La strategia usa soft-stop o ordini a mercato?
+  - Se il prezzo crolla del 20% in una singola candela da 5 minuti senza ritracciare, la strategia quando e come taglia la perdita?
+  - Verifica che i parametri di uscita prematura (es. `bad_trade_controller_structure_break_exit_enable`) siano disattivati per non svendere sui minimi.
 
-    subgraph REPOSITORY GITHUB
-        F --> G[Pull Request / Review Modifiche]
-    end
+### B. CONFIGURAZIONE & MERCATO (`user_data/config_prop_nfix8.json` e `config.json`)
+- [ ] **Esecuzione Ordini e Slippage**:
+  - `entry_pricing`: Gli ordini `limit` con `use_order_book: true` e `order_book_top: 1` vengono fillati realisticamente nei backtest o soffrono di un fill rate illusorio (unmodeled fill latency)?
+  - `unfilledtimeout`: Se un ordine di acquisto o di vendita resta appeso oltre 2-3 minuti, il bot lo cancella correttamente senza rimanere in stati di locking?
+- [ ] **Filtri di Liquidità e Whitelist Dinamica**:
+  - `VolumePairList`: Il floor di volume a **$15.000.000 - $25.000.000** esclude al 100% monete a rischio pump-and-dump come il caso storico di OGN?
+  - `AgeFilter`: Il filtro a 60 giorni impedisce l'acquisto di coin appena listate prive di storico?
+  - `blacklist`: Sono escluse tutte le stablecoin, le commodity sintetiche, i token a leva (`*UP`, `*DOWN`, `*BULL`, `*BEAR`)?
+- [ ] **Sizing del Capitale**:
+  - Con `tradable_balance_ratio: 0.24` e `max_open_trades: 3`, se il wallet subisce una fluttuazione, come si comporta la stake size? È proporzionale o fissa?
 
-    subgraph AMBIENTE LIVE AWS EC2 (Solo Davide)
-        G --> H[Merge approvato]
-        H --> I[Git Pull sul server 51.21.243.61]
-        I --> J[Docker Compose Restart Zero-Downtime]
-    end
-```
+### C. RISK SENTINEL & ACCOUNTING (`scripts/llm_risk_manager_prop.py`)
+- [ ] **Formula di `get_equity()` (Audit Matematico al Centesimo)**:
+  - Ispeziona il codice che legge i saldi da `/balance` e `/status`.
+  - Assicurati che **NON esista alcun doppio conteggio** di PnL non realizzato.
+  - Verifica la gestione di `NaN`, `None`, chiavi mancanti e divisione per zero quando il saldo di picco è nullo.
+- [ ] **Calcolo del Daily Drawdown (Regola Fuso Orario 00:00 UTC)**:
+  - Il reset giornaliero avviene esattamente alle 00:00 UTC?
+  - Il broker di HyroTrader calcola il Daily Drawdown basandosi su UTC o sul fuso orario della piattaforma? C'è rischio di sfasamento temporale?
+- [ ] **Tracciamento dell'High-Water Mark (Trailing Drawdown)**:
+  - Il peak balance tiene conto del floating equity massimo intraday o solo dei trade chiusi?
+  - Lo stato persistente su disco (`risk_manager_prop_state.json`) sopravvive a crash, riavvii o interruzioni di rete senza corrompersi o innescare loop infiniti?
+- [ ] **Disaccoppiamento LLM e Circuit Breakers**:
+  - La sentinella AI (Gemini) è completamente isolata dal thread deterministico di salvaguardia del capitale (0ms di latenza sul blocco drawdown)?
+  - Se Gemini restituisce errore 429 (quota esaurita), 500 o timeout, la sentinella si appoggia a fallback deterministici (Fear & Greed Index, variazione prezzo BTC) senza mai bloccarsi?
+  - Verifica che la condizione `is_market_crash` (calo BTC > 8% in 24h o > 4% in 1h) sia matematicamente robusta e non bypassabile da titoli di news.
 
-Con questa architettura, la sicurezza è totale: nessuna credenziale critica viene condivisa, il server live non rischia interruzioni e il team di sviluppo quantitativo opera con i più alti standard istituzionali.
+---
+
+## 4. IL REGISTRO DEI 10 ERRORI STORICI (DA NON REINTRODURRE MAI)
+
+Prima di effettuare qualsiasi modifica, memorizza i 10 errori già affrontati e risolti nei mesi passati:
+
+1. **Il Crollo OGN / Derisking e Discrepanza UI**: Token a bassa liquidità comprato su volume fasullo; la strategia ha gestito il derisking incassando -$37.79. Risolto con VolumePairList rigida > $20M/$25M.
+2. **Il Doppio Conteggio in `get_equity()`**: Sottraeva due volte il PnL non realizzato, raddoppiando fittiziamente il drawdown a schermo. Risolto leggendo direttamente `total_bot`/`total`.
+3. **Corruzione DB Trade #15 (ERA)**: Chiuso in perdita per riavvio a caldo durante upgrade X7->X8. Risolto con lo script `sanitize_spot_database.py`.
+4. **Structure Break Exit Prematuro**: Parametro NFIX8 che vendeva in perdita a mercato quando EMA gap > 35%. Risolto disattivando `bad_trade_controller_structure_break_exit_enable`.
+5. **Rischio Leva Futures**: Rischio di leva ereditata dall'exchange. Risolto con leva hard-clamped a 1.0x in `NostalgiaForInfinityX8_Prop.py` e margine isolato.
+6. **Crash-Loop da `nuclear_triggered: true`**: Container in restart continuo per lettura di stato di emergenza non resettato. Risolto con auto-healing e reset controllato.
+7. **Falsi Allarmi LLM da News senza Crollo di Prezzo**: Gemini leggeva news FUD e attivava la Nuclear Option con BTC in rialzo. Risolto richiedendo la conferma quantitativa di crollo reale `is_market_crash`.
+8. **Esaurimento Quota Gemini (429)**: Richieste singole per ogni moneta della whitelist. Risolto con batch scanning ogni 15 minuti, cascata a 4 modelli e circuit breaker.
+9. **Incompatibilità Python 3.12 UTC**: Crash da `datetime.UTC`. Risolto con aggiornamento Dockerfile a Python 3.12 e gestione esplicita fusi orari.
+10. **OOM Freeze su AWS EC2**: Memoria saturata su t3.micro (1 GB). Risolto con 2.0 GB di Swap file su SSD EBS.
+
+---
+
+## 5. LA TUA METODOLOGIA DI STRESS-TESTING (MIGLIAIA DI SCENARI)
+
+Non limitarti a un singolo backtest veloce. Con la tua totale libertà d'azione:
+1. **Scarica i dati storici**:
+   ```bash
+   freqtrade download-data --config user_data/config_prop_nfix8.json --timeframe 5m 15m 1h --timerange 20230101-20241101
+   ```
+2. **Testa i grandi eventi di crash della storia**:
+   - **Flash Crash 12-14 Aprile 2024** (Geopolitica e crollo altcoin del 30-40%)
+   - **Flash Crash 5 Agosto 2024** (Black Monday del mercato globale)
+   - **Periodi di prolungato trend ribassista o chop estivo** (Giugno-Luglio 2024)
+   - **Periodi di rally parabolico** (Q1 2024)
+3. **Simulazione Monte Carlo & Worst-Case Permutations**:
+   - Esegui simulazioni con slippage maggiorato (0.1% - 0.3%) e commissioni di mercato reali Bybit (taker fee 0.055%).
+   - Simula l'ingresso contemporaneo su 3 altcoin che perdono il 10% nelle successive 2 ore.
+   - Verifica che in **nessun singolo giorno** il Max Daily Drawdown superi il 2.5%, e in **nessun punto della curva** il Trailing Drawdown superi il 3.8%.
+4. **Scrivi Script di Validazione Dedicati**:
+   - Se gli script esistenti (`check_prop_firm_rules.py`, `prop_firm_deep_auditor.py`) non coprono uno scenario che ritieni critico, **scrivi tu nuovi script di test e audit** nella cartella `scripts/` e documentane l'esito.
+
+---
+
+## 6. DELIVERABLE FINALI RICHIESTI
+
+Al termine della tua indagine ed esecuzione:
+1. **Dossier di Audit Forense**:
+   - Quali falle, inefficienze o rischi nascosti hai scoperto nel codice o nei parametri?
+   - Quali modifiche hai apportato e perché sono matematicamente superiori?
+2. **Matrice di Validazione Empirica**:
+   - Tabella comparativa Prima vs Dopo su almeno 3 timeframe di backtest differenti (Bull, Bear, Flash Crash).
+   - Metriche tassative: Win Rate %, Profit Factor, Max Daily Drawdown %, Max Overall Drawdown %, Trade Totali, Ratio Guadagno/Rischio.
+3. **Commit & Branch Git**:
+   - Crea un branch dedicato: `git checkout -b feature/prop-firm-forensic-hardening`
+   - Committa tutte le migliorie con messaggi semantici puliti (`feat:`, `fix:`, `perf:`, `test:`).
+   - Assicurati che il codice sia immediatamente pronto per essere integrato nel server di produzione live.

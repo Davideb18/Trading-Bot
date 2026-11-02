@@ -58,44 +58,54 @@ Durante i mesi di sviluppo, testing e deploy continuo su AWS EC2, il sistema ha 
 
 ---
 
-## PARTE 2: MASTER PROMPT PER CLAUDE CODE ULTRA (ESECUZIONE LOCALE SU REPO GITHUB)
+## PARTE 2: MASTER PROMPT PER CLAUDE CODE ULTRA (CARTE BIANCA & ZERO-TRUST RADICALE)
 
 > **Istruzioni per l'utente**: Copia questo prompt e passalo al tuo amico o inseriscilo in Claude Code Ultra sul computer locale. Non richiede credenziali AWS né accessi di produzione.
 
 ```markdown
-Agisci come Principal Quantitative Systems Architect, Institutional Crypto Fund Auditor e Senior Algorithmic Risk Engineer.
+Agisci come Principal Quantitative Systems Architect, Institutional Crypto Fund Auditor e Lead Algorithmic Risk Engineer.
 
-### CONTESTO AMBIENTE
-Lavori in un ambiente locale isolato sul repository clonato da GitHub (branch: feature/prop-firm-futures-validation).
-Tutto il codice della strategia NostalgiaForInfinityX8_Prop, le configurazioni, i benchmark e gli script di audit sono già presenti nel repository.
-Non hai accesso né bisogno di chiavi SSH AWS di produzione. Il tuo compito è l'analisi quantitativa, il backtesting, lo stress-testing e l'ottimizzazione matematica della strategia.
+### MANDATO ZERO-TRUST & CARTE BIANCA TOTALE
+Stai operando in ambiente locale isolato sul repository clonato da GitHub (branch: feature/prop-firm-futures-validation). Non hai accesso né bisogno di chiavi SSH AWS di produzione.
 
-### REGOLE TASSATIVE DI SVILUPPO ZERO-TRUST
-1. REGISTRO DEI 10 ERRORI STORICI (DA NON REINTRODURRE MAI):
-   - Mai forzare panic-sell a mercato (la DCA abbassa il prezzo medio per uscire in profitto/breakeven).
-   - Mai consentire leva > 1.0x nei contratti futures (leva hard-clamped a 1.0x).
-   - Mai alterare la formula di get_equity() introducendo doppi conteggi di PnL non realizzato.
-   - Preservare categoricamente la disattivazione dello structure break exit (bad_trade_controller_structure_break_exit_enable = False).
-   - Non fidarsi mai di allarmi di news testuali senza conferma quantitativa di crollo reale di prezzo (is_market_crash).
+Non assumere MAI che qualcosa funzioni a priori o sia corretto solo perché è stato scritto nei mesi scorsi.
+Il tuo presupposto iniziale deve essere che ogni singolo file, logica di trading, formula di drawdown, filtro di pairlist o script di rischio possa contenere bug latenti, assunzioni deboli o edge-case distruttivi in grado di causare perdite o squalifica dalla Prop Firm.
 
-2. REGOLE DELLA PROP FIRM HYROTRADER 5K TWO-STEP (NON NEGOZIABILI):
-   - Max Daily Drawdown: limite 5.0% ($250). Target di sicurezza algoritmica: < 2.5%.
-   - Max Overall Trailing Drawdown: limite 8.0% ($400). Target di sicurezza algoritmica: < 3.8%.
-   - Profit Target: +8% Step 1 ($400), +5% Step 2 ($250).
-   - Allocazione capitale: tradable_balance_ratio = 0.24, max_open_trades = 3.
+HAI CARTA BIANCA TOTALE PER:
+1. Ripartire da zero e vivisezionare ogni singolo componente dalla A alla Z, analizzando ogni singola variazione ed edge-case in migliaia di scenari possibili.
+2. Scaricare qualsiasi dato storico di mercato (giorni, mesi, anni) per testare la strategia su bull run, bear grinds e flash crash storici.
+3. Scrivere qualsiasi script di verifica, audit, fuzzer o simulazione Monte Carlo per toglierti qualsiasi dubbio.
+4. Modificare o riscrivere qualsiasi parte di codice della strategia (NostalgiaForInfinityX8_Prop.py), dei config o dei risk manager per garantire che l'ecosistema sia matematicamente inattaccabile e sicuro al 100%.
 
-3. WORKFLOW OPERATIVO LOCALE:
-   a. Scarica i dati storici delle coppie futures con Freqtrade (pubblici e gratuiti):
-      freqtrade download-data --config user_data/config_prop_nfix8.json --timeframe 5m 15m 1h --timerange 20240101-20241101
-   b. Esegui backtest e stress test sulle finestre di crash del 2024 (12-14 Aprile 2024, 5 Agosto 2024):
-      freqtrade backtesting --config user_data/config_prop_nfix8.json --strategy NostalgiaForInfinityX8_Prop --timerange 20240101-20241101
-   c. Esegui gli auditor matematici istituzionali:
-      python3 scripts/check_prop_firm_rules.py
-      python3 scripts/prop_firm_deep_auditor.py
+### VINCOLI TASSATIVI PROP FIRM (HYROTRADER 5K TWO-STEP):
+- Max Daily Drawdown: limite hard 5.0% ($250). Target di sicurezza ingegneristica: < 2.0% - 2.5% ($100-$125).
+- Max Overall Trailing Drawdown: limite hard 8.0% ($400). Target di sicurezza: < 3.5% ($175).
+- Profit Target: +8% Step 1 ($400), +5% Step 2 ($250).
+- Leva finanziaria: rigidamente fissata a 1.0x (unleveraged futures, isolated margin, zero short).
+- Allocazione capitale: tradable_balance_ratio = 0.24, max_open_trades = 3 (max ~8% capitale per slot).
 
-4. CONSEGNA:
-   - Fornisci un report con confronto parametri 'Prima vs Dopo', Max Drawdown %, Win Rate % e Profit Factor.
-   - Committa le modifiche su un branch git dedicato (es. feature/prop-firm-optimization) secondo convenzione Semantic Commits.
+### AREE DI VIVISEZIONE OBBLIGATORIE DALLA A ALLA Z:
+1. Strategia (NostalgiaForInfinityX8_Prop.py):
+   - Verifica assenza di lookahead bias nelle informative 15m/1h/4h/1d (shift(1)).
+   - Verifica assorbimento capitale safety orders/DCA nel caso peggiore (3 posizioni che mediano contemporaneamente fino all'ultimo livello).
+   - Verifica che la leva sia hard-clamped a 1.0x (min(1.0, float(leverage))).
+   - Verifica disattivazione dello structure break exit prematuro.
+2. Configurazione & Pairlist (config_prop_nfix8.json):
+   - Verifica fill rate ordini limit e gestione ordini appesi (unfilledtimeout).
+   - Verifica filtri VolumePairList ($15M-$25M floor, age filter 60d, spread 0.003) e blacklist completa.
+3. Risk Manager & Accounting (llm_risk_manager_prop.py):
+   - Verifica al centesimo di get_equity(): zero doppi conteggi di floating PnL, gestione NaN/None/zero.
+   - Verifica calcolo Daily Drawdown (allineamento fuso 00:00 UTC) e Trailing Drawdown su peak equity.
+   - Verifica isolamento thread tra controllo deterministico drawdown (0ms latenza) e sentinella LLM.
+   - Verifica che l'allarme PANIC esiga tassativamente la condizione quantitativa is_market_crash (crollo reale BTC).
+4. Stress-Testing su Scenari Estremi:
+   - Crash storici (12-14 Aprile 2024, 5 Agosto 2024, bear market 2022).
+   - Simulazioni con slippage maggiorato (0.2%-0.3%) e taker fee reali Bybit.
+
+### CONSEGNA:
+- Fornisci un report forense con vulnerabilità identificate e risolte.
+- Mostra matrice di validazione Prima vs Dopo con Win Rate %, Profit Factor, Max Daily DD % e Trailing DD %.
+- Committa le migliorie su un branch dedicato (feature/prop-firm-forensic-hardening) con convenzione Semantic Commits.
 ```
 
 ---
