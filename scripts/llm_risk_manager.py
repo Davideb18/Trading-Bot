@@ -878,14 +878,14 @@ class SentimentAnalyzer:
                     )
                     has_price_collapse = (macro["btc_1h_pct"] <= -3.0 or macro["btc_24h_pct"] <= -6.0)
 
-                    if not has_catastrophic_headline and not has_price_collapse:
+                    if not has_price_collapse:
                         logger.warning(
-                            f"⚠️ Anti-Hallucination: Gemini signaled PANIC, but market price momentum is calm "
-                            f"(BTC 1h={macro['btc_1h_pct']:+}%, 24h={macro['btc_24h_pct']:+}%) and no catastrophic "
-                            f"headlines were detected. Downgrading to BEAR."
+                            f"⚠️ Anti-Hallucination: Gemini signaled PANIC based on news headlines, but market prices are calm "
+                            f"(BTC 1h={macro['btc_1h_pct']:+}%, 24h={macro['btc_24h_pct']:+}%). "
+                            f"Systemic panic requires confirmed price collapse. Downgrading to BEAR."
                         )
                         llm_result["regime"] = "BEAR"
-                        llm_result["reason"] = f"[Downgraded from PANIC] {llm_result.get('reason')}"
+                        llm_result["reason"] = f"[Downgraded from PANIC: Market prices calm] {llm_result.get('reason')}"
 
                 return llm_result
 
@@ -1320,8 +1320,21 @@ class RiskManager:
 
                 # 2. Emergency Black Swan (PANIC)
                 if regime == "PANIC":
-                    self.trigger_nuclear_option(f"AI Sentinel Black Swan Panic: {reason}")
-                    break
+                    is_market_crash = (
+                        macro.get("is_flash_crash", False)
+                        or macro.get("is_heavy_bear", False)
+                        or btc_1h <= -3.0
+                        or btc_24h <= -6.0
+                    )
+                    if is_market_crash:
+                        self.trigger_nuclear_option(f"Confirmed Black Swan Panic: {reason} (BTC 1h={btc_1h:+}%, 24h={btc_24h:+}%)")
+                        break
+                    else:
+                        logger.warning(
+                            f"⚠️ Sentinel received PANIC ({reason}), but market prices remain calm "
+                            f"(BTC 1h={btc_1h:+}%, 24h={btc_24h:+}%). Downgrading to defensive BEAR mode."
+                        )
+                        regime = "BEAR"
 
                 # 3. WAKE-UP LOCK LOGIC (Guarded Cooldown Expiry)
                 if wake_up_locked:
