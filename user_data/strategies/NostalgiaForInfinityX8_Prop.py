@@ -1,4 +1,6 @@
 import copy
+import json
+import math
 import logging
 import pathlib
 import rapidjson
@@ -73,7 +75,7 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
   def version(self) -> str:
     return "v18.0.124"
 
-  stoploss = -0.99
+  stoploss = -0.06
 
   # Trailing stoploss (not used)
   trailing_stop = False
@@ -277,10 +279,11 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
   rebuy_mode_min_free_slots = 2
 
   # Position adjust feature
-  position_adjustment_enable = True
+  position_adjustment_enable = False
+  max_entry_position_adjustment = 0
 
   # Grinding feature
-  grinding_enable = True
+  grinding_enable = False
   derisk_enable = True
   stops_enable = True
   doom_stops_enable = True
@@ -2459,7 +2462,42 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
 
   # Custom Stake Amount
   # ---------------------------------------------------------------------------------------------
-  def custom_stake_amount(
+  def bot_start(self, **kwargs) -> None:
+    """Reject overrides which would weaken the audited prop profile."""
+    if (self.config.get("trading_mode") != "futures"
+        or self.config.get("margin_mode") != "isolated"
+        or not 0 < self.config.get("max_open_trades", 0) <= 3
+        or not 0 < self.config.get("tradable_balance_ratio", 0) <= 0.24
+        or self.position_adjustment_enable
+        or self.can_short
+        or not -0.06 <= self.stoploss < 0
+        or (self.config["runmode"].value in ("live", "dry_run")
+            and not self.order_types.get("stoploss_on_exchange"))
+        or self.order_types.get("stoploss") != "market"
+        or self.order_types.get("force_exit") != "market"
+        or self.bad_trade_controller_structure_break_exit_enable):
+      raise ValueError("Unsafe override of the forensic prop risk profile")
+
+  def _prop_slot_cap(self) -> float:
+    # get_total_stake_amount already includes tradable_balance_ratio.
+    try:
+      budget = self.wallets.get_total_stake_amount()
+      return min(400.0, budget / 3.0) if math.isfinite(budget) and budget > 0 else 0.0
+    except (TypeError, ValueError, AttributeError, RuntimeError):
+      return 0.0
+
+  def custom_stake_amount(self, pair, current_time, current_rate, proposed_stake,
+                          min_stake, max_stake, leverage, entry_tag, side, **kwargs) -> float:
+    if side != "long" or leverage != 1.0:
+      return 0.0
+    values = (proposed_stake, max_stake, min_stake if min_stake is not None else 0.0)
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0
+           for v in values):
+      return 0.0
+    stake = min(proposed_stake, max_stake, self._prop_slot_cap())
+    return stake if min_stake is None or stake >= min_stake else 0.0
+
+  def _nfi_custom_stake_amount(
     self,
     pair: str,
     current_time: datetime,
@@ -2697,7 +2735,12 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
 
   # Adjust Trade Position
   # ---------------------------------------------------------------------------------------------
-  def adjust_trade_position(
+  def adjust_trade_position(self, trade, current_time, current_rate, current_profit,
+                            min_stake, max_stake, **kwargs):
+    """No averaging down or additional exposure, including after config overrides."""
+    return None
+
+  def _nfi_adjust_trade_position(
     self,
     trade: Trade,
     current_time: datetime,
@@ -5321,7 +5364,24 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
     side: str,
     **kwargs,
   ) -> bool:
-    # Force Entry
+    if (side != "long" or any(isinstance(v, bool) or not isinstance(v, (float, int))
+        or not math.isfinite(v) or v <= 0 for v in (amount, rate))):
+      return False
+    if amount * rate > self._prop_slot_cap() + 1e-8:
+      return False
+    if self.config["runmode"].value in ("live", "dry_run"):
+      try:
+        state_path = pathlib.Path(self.config["user_data_dir"]) / "risk_manager_prop_state.json"
+        state = json.loads(state_path.read_text())
+        updated = datetime.fromisoformat(state["last_updated"])
+        age = current_time.timestamp() - updated.timestamp()
+        if (state.get("schema_version") != 1 or updated.tzinfo is None
+            or not 0 <= age <= 15 or state.get("nuclear_triggered") is not False
+            or state.get("data_fault") is not False or state.get("wake_up_lock") is not False):
+          return False
+      except (OSError, ValueError, KeyError, TypeError):
+        return False
+    # Force Entry still passes the capital and sentinel checks above.
     if entry_tag == "force_entry":
       return True
 
@@ -5419,6 +5479,9 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
     current_time: datetime,
     **kwargs,
   ) -> bool:
+    if exit_reason in {"stop_loss", "stoploss_on_exchange", "trailing_stop_loss",
+                       "emergency_exit", "force_exit", "liquidation"}:
+      return True
     trade_realized_profit = trade.realized_profit
     trade_stake_amount = trade.stake_amount
     trade_is_short = trade.is_short
@@ -5510,20 +5573,15 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
     side: str,
     **kwargs,
   ) -> float:
-    enter_tags = entry_tag.split() if entry_tag else []
-    long_rebuy_mode_tags = self.long_rebuy_mode_tags
-    long_grind_mode_tags = self.long_grind_mode_tags
-    if all(c in long_rebuy_mode_tags for c in enter_tags):
-      return min(1.0, float(self.futures_mode_leverage_rebuy_mode))
-    elif all(c in long_grind_mode_tags for c in enter_tags):
-      return min(1.0, float(self.futures_mode_leverage_grind_mode))
-    return min(1.0, float(self.futures_mode_leverage))
+    return 1.0
 
   # Correct Min Stake
   # ---------------------------------------------------------------------------------------------
   def correct_min_stake(self, min_stake: Optional[float], trade_leverage: Optional[float] = None) -> Optional[float]:
+    if min_stake is not None and (isinstance(min_stake, bool) or not math.isfinite(min_stake) or min_stake < 0):
+      raise ValueError("Invalid minimum stake")
     if self.is_futures_mode and self.config["exchange"]["name"] in ("binance", "bybit", "krakenfutures"):
-      min_futures_stake = 5.0 / (trade_leverage if trade_leverage is not None else self.futures_mode_leverage)
+      min_futures_stake = 5.0  # The only supported leverage is 1x.
       if (min_stake is None) or (min_stake < min_futures_stake):
         min_stake = min_futures_stake
     return min_stake

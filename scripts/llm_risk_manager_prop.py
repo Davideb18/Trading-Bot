@@ -1,24 +1,9 @@
 #!/usr/bin/env python3
-"""
-Zero-Burn LLM Risk Manager — Production Sentinel (Enterprise Edition)
-=====================================================================
+"""Prop supervisor: deterministic equity/crash guards with advisory Gemini analysis.
 
-Autonomous institutional-grade risk supervisor for Freqtrade.
-Continuously audits the Freqtrade REST API, calculates true floating equity,
-and combines:
-  1. Live Breaking Crypto News (CoinDesk, CoinTelegraph, Decrypt RSS + Atom)
-     - Explicit Memory Eviction (<2 hours TTL / max 50 entries)
-     - Isolated Per-Source Exception Sandboxing (Cloudflare 403 & XML fault tolerant)
-  2. Live Binance Macro Market Metrics (BTC & ETH 1h/24h Price Action + Fallback Vision API)
-  3. Fear & Greed Index (Macro Sentiment)
-  4. Google Gemini AI Multi-Tier Cascade (gemini-3.1-flash-lite / 3.5-flash-lite / 3.8-flash)
-  5. Deterministic Flash-Crash Circuit Breakers & 8% True Equity Hard Stop
-  6. Strict API Quota Management & Anti-Hallucination Dual-Factor Cross-Validation
-  7. Red-Team Hardening:
-     - Anti-Whipsaw Hysteresis State Machine (BULL confirmation cycles)
-     - Guarded Wake-Up Lock (prevent blind cooldown reactivations during crashes)
-     - Critical Command Retry with Exponential Backoff & State Verification
-     - Zero Network Calls inside Thread State Locks (Deadlock-Free 24/7/365)
+Safety policy and durable halt state live in prop_risk_guard.py. The LLM has no
+trading authority. No automatic resume after emergency or data-integrity faults.
+HTTP polling and exchange orders have nonzero latency; this is not a tick guarantee.
 """
 
 import html
@@ -58,7 +43,8 @@ def load_env_file():
         except Exception:
             pass
 
-load_env_file()
+if os.getenv("PROP_LOAD_ENV_FILE") == "1":
+    load_env_file()
 
 # ==================================================================================
 # Logging Setup
@@ -87,7 +73,7 @@ logger = logging.getLogger("HyroTrader.RiskManagerProp")
 
 FREQTRADE_API_URL = os.getenv("FREQTRADE_API_URL", "http://127.0.0.1:8088/api/v1")
 FREQTRADE_USERNAME = os.getenv("FREQTRADE_USERNAME", "freqtrade")
-FREQTRADE_PASSWORD = os.getenv("FREQTRADE_PASSWORD", "ZeroBurnPassword2026!")
+FREQTRADE_PASSWORD = os.getenv("FREQTRADE_PASSWORD", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 # Prioritize high-quota lite models for Free-Tier stability
@@ -105,10 +91,10 @@ GEMINI_FALLBACK_MODELS = list(dict.fromkeys([
 # Phase support: 'trial' (5%), '1' / 'phase1' (10%), '2' / 'phase2' (5%)
 PROP_FIRM_PHASE = os.getenv("PROP_FIRM_PHASE", "trial").lower()
 
-# Daily loss limit: 5% of INITIAL balance (from 00:00 UTC day start). Hard stop at 4.5% for safety.
-GLOBAL_HARD_STOPLOSS_PERCENT = float(os.getenv("GLOBAL_HARD_STOPLOSS_PERCENT", os.getenv("PROP_FIRM_DAILY_LIMIT_PERCENT", "0.045")))
-# Max overall loss: 10% of initial balance. Hard stop at 9.0% for safety margin.
-PROP_FIRM_MAX_LOSS_PERCENT = float(os.getenv("PROP_FIRM_MAX_LOSS_PERCENT", "0.090"))
+# Internal daily high-water loss budget: 2% of the original allocation.
+GLOBAL_HARD_STOPLOSS_PERCENT = float(os.getenv("GLOBAL_HARD_STOPLOSS_PERCENT", os.getenv("PROP_FIRM_DAILY_LIMIT_PERCENT", "0.02")))
+# Internal trailing loss budget: 3.5% of the original allocation.
+PROP_FIRM_MAX_LOSS_PERCENT = float(os.getenv("PROP_FIRM_MAX_LOSS_PERCENT", "0.035"))
 # Profit target: Phase 1 = 10%, Phase 2 & Free Trial = 5% (overrideable via env)
 if "PROP_FIRM_PROFIT_TARGET_PERCENT" in os.environ:
     PROP_FIRM_PROFIT_TARGET_PERCENT = float(os.environ["PROP_FIRM_PROFIT_TARGET_PERCENT"])
@@ -120,7 +106,7 @@ PROP_FIRM_DAILY_PROFIT_CAP_PERCENT = float(os.getenv("PROP_FIRM_DAILY_PROFIT_CAP
 PROP_FIRM_MIN_TRADING_DAYS = int(os.getenv("PROP_FIRM_MIN_TRADING_DAYS", "5"))
 
 # Timing
-CHECK_INTERVAL_SECONDS = int(os.getenv("CHECK_INTERVAL_SECONDS", "30"))
+CHECK_INTERVAL_SECONDS = int(os.getenv("CHECK_INTERVAL_SECONDS", "5"))
 LLM_CHECK_INTERVAL_CYCLES = int(os.getenv("LLM_CHECK_INTERVAL_CYCLES", "5"))
 
 # LLM Settings & Quota Limits
@@ -401,44 +387,24 @@ class FreqtradeAPIClient:
         return None
 
     def get_equity(self) -> float | None:
-        """
-        True real-time portfolio equity in stake currency (USDT).
-        Freqtrade's /balance endpoint already computes the total valuation:
-          - 'total_bot': bot-managed free stake + market value of all held assets.
-          - 'total': total wallet stake across all assets.
-        We strictly avoid double-counting unrealized PnL while guarding against NaN.
-        """
+        """Fresh authoritative account snapshot; no fallback to estimated totals."""
         data = self.get_balance()
-        if not data:
+        snapshot = data.get("account_equity") if data else None
+        if not isinstance(snapshot, dict):
             return None
+        value, timestamp = snapshot.get("value"), snapshot.get("timestamp")
+        if (not finite_number(value) or not finite_number(timestamp)
+                or snapshot.get("currency") != "USDT"
+                or snapshot.get("source") not in {"bybit_wallet_coin_equity", "freqtrade_dry_run"}
+                or not -2000 <= time.time() * 1000 - timestamp <= 15000):
+            return None
+        return float(value)
 
-        # Prioritize total (overall account wallet equity for prop firm evaluation)
-        total = data.get("total")
-        if (
-            total is not None
-            and isinstance(total, (int, float))
-            and total > 0
-            and not math.isnan(total)
-        ):
-            return float(total)
-
-        # Fallback to total_bot if total is not populated
-        total_bot = data.get("total_bot")
-        if (
-            total_bot is not None
-            and isinstance(total_bot, (int, float))
-            and total_bot > 0
-            and not math.isnan(total_bot)
-        ):
-            return float(total_bot)
-
-        return None
-
-    def get_open_trades(self) -> list:
+    def get_open_trades(self) -> list | None:
         data = self.get("/status")
         if isinstance(data, list):
             return data
-        return []
+        return None
 
     def get_trades(self, limit: int = 100) -> list:
         """Fetch closed/recent trades from Freqtrade REST API."""
@@ -480,7 +446,7 @@ class FreqtradeAPIClient:
             command_name=f"FORCE_EXIT_{trade_id}",
             method="POST",
             endpoint="/forceexit",
-            payload={"tradeid": str(trade_id)},
+            payload={"tradeid": str(trade_id), "ordertype": "market"},
             expected_state=None,
         )
 
@@ -689,8 +655,8 @@ class BinanceMacroMonitor:
 
         metrics = {
             "btc_price": 0.0,
-            "btc_1h_pct": 0.0,
-            "btc_24h_pct": 0.0,
+            "btc_1h_pct": None,
+            "btc_24h_pct": None,
             "eth_24h_pct": 0.0,
             "is_flash_crash": False,
             "is_heavy_bear": False,
@@ -703,10 +669,13 @@ class BinanceMacroMonitor:
                     f"{base_url}/api/v3/ticker/24hr?symbol=BTCUSDT",
                     timeout=(2.0, 3.0),
                 )
+                r_btc.raise_for_status()
                 if r_btc.status_code == 200:
                     d = r_btc.json()
                     metrics["btc_price"] = float(d.get("lastPrice", 0.0))
-                    metrics["btc_24h_pct"] = round(float(d.get("priceChangePercent", 0.0)), 2)
+                    metrics["btc_24h_pct"] = float(d["priceChangePercent"])
+                    if abs(time.time() * 1000 - float(d["closeTime"])) > 120000:
+                        raise ValueError("Stale BTC ticker")
 
                 # 2. ETH 24h Ticker
                 r_eth = requests.get(
@@ -719,16 +688,23 @@ class BinanceMacroMonitor:
 
                 # 3. BTC 1h Momentum
                 r_kline = requests.get(
-                    f"{base_url}/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=2",
+                    f"{base_url}/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=61",
                     timeout=(2.0, 3.0),
                 )
+                r_kline.raise_for_status()
                 if r_kline.status_code == 200:
                     k = r_kline.json()
-                    if k and len(k) > 0 and len(k[-1]) >= 5:
-                        open_p = float(k[-1][1])
+                    if len(k) == 61 and len(k[-1]) >= 5:
+                        open_p = float(k[0][4])
                         close_p = float(k[-1][4])
+                        if (int(k[-1][0]) - int(k[0][0]) != 3600000
+                                or abs(time.time() * 1000 - int(k[-1][0])) > 120000):
+                            raise ValueError("Stale/noncontiguous BTC candles")
                         if open_p > 0:
-                            metrics["btc_1h_pct"] = round((close_p - open_p) / open_p * 100, 2)
+                            metrics["btc_1h_pct"] = (close_p - open_p) / open_p * 100
+
+                if not all(finite_number(metrics.get(key)) for key in ("btc_1h_pct", "btc_24h_pct")):
+                    raise ValueError("Incomplete BTC metrics")
 
                 if metrics["btc_1h_pct"] <= -5.0:
                     metrics["is_flash_crash"] = True
@@ -749,7 +725,9 @@ class BinanceMacroMonitor:
                 logger.debug(f"Binance macro fetch error from {base_url}: {e}")
                 continue
 
-        return self._cached_metrics if self._cached_metrics else metrics
+        # Expired cached data must never look like a fresh, calm market.
+        return {"btc_1h_pct": None, "btc_24h_pct": None, "is_flash_crash": False,
+                "is_heavy_bear": False}
 
 
 # ==================================================================================
@@ -1004,6 +982,9 @@ Evaluate current market regime.
 
     def _deterministic_fallback(self, fgi_val: int, macro: dict) -> dict:
         """Deterministic mathematical safety net when LLM is unavailable or quota-capped."""
+        if not finite_number(macro.get("btc_24h_pct")):
+            return {"regime": "BEAR", "confidence": 0.0, "reason": "Macro data unavailable",
+                    "cooldown_minutes": 60, "flagged_coins": {}}
         if macro.get("is_heavy_bear") or fgi_val <= 15:
             regime = "BEAR"
             reason = f"Deterministic heavy bear defense: FGI={fgi_val}, BTC 24h={macro.get('btc_24h_pct', 0)}%."
@@ -1031,627 +1012,53 @@ Evaluate current market regime.
 # Risk Manager (Main Orchestrator with Hysteresis & Wake-Up Lock)
 # ==================================================================================
 
-class RiskManager:
-    """
-    Main orchestrator for the Zero-Burn risk management architecture.
-    Runs:
-      1. Main Thread: Dedicated High-Priority Drawdown Guard on true floating equity.
-      2. Background Thread: Live News + Binance Macro + Gemini AI Sentinel.
-    Protected by:
-      - Anti-Whipsaw Hysteresis State Machine (BULL_CONFIRMATION_CYCLES)
-      - Guarded Wake-Up Lock on cooldown expiration
-      - Critical Command Retry with Exponential Backoff and State Verification
-      - Deadlock-Free Architecture: Zero network calls inside _state_lock
-    """
+from prop_risk_guard import RiskGuard, finite_number, market_crash
 
+
+class RiskManager(RiskGuard):
+    """Independent deterministic guard; Gemini is advisory and cannot send bot commands."""
     def __init__(self):
-        self.api_client = FreqtradeAPIClient(
-            FREQTRADE_API_URL,
-            FREQTRADE_USERNAME,
-            FREQTRADE_PASSWORD,
+        api = FreqtradeAPIClient(FREQTRADE_API_URL, FREQTRADE_USERNAME, FREQTRADE_PASSWORD)
+        super().__init__(
+            api, STATE_FILE,
+            initial=float(os.getenv("PROP_FIRM_INITIAL_BALANCE", "5000")),
+            daily_limit=GLOBAL_HARD_STOPLOSS_PERCENT,
+            trailing_limit=PROP_FIRM_MAX_LOSS_PERCENT,
+            interval=CHECK_INTERVAL_SECONDS,
         )
         self.sentiment = SentimentAnalyzer(GEMINI_API_KEY)
-
-        self._state_lock = threading.RLock()
-        self.initial_balance: float | None = None
-        self.peak_balance: float | None = None
-        self.current_trading_day: str | None = None
-        self.day_start_balance: float | None = None
-        self.day_peak_balance: float | None = None
-        self.daily_nuclear_triggered = False
-        self.nuclear_triggered = False
-        self.current_regime = "BULL"
-        self.cooldown_until: datetime | None = None
-        self.wake_up_lock = False
-        self.consecutive_bull_cycles = 0
-        self.cycle_count = 0
-        self._shutdown_requested = False
-
-        # --- HyroTrader Prop Firm Trackers ---
-        # Set of UTC date strings (e.g. '2026-10-28') that counted as trading days
-        self.trading_days_set: set[str] = set()
-        # Per-day closed profit tracking for 40% cap enforcement
-        self.day_closed_profit: float = 0.0
-        self.profit_target_reached: bool = False
-
-        self._load_state()
-
+        self.macro_monitor = BinanceMacroMonitor()
         signal.signal(signal.SIGTERM, self._handle_shutdown)
         signal.signal(signal.SIGINT, self._handle_shutdown)
 
-    def _handle_shutdown(self, signum, frame):
-        sig_name = signal.Signals(signum).name
-        logger.info(f"🛑 Received {sig_name}, shutting down Risk Manager gracefully...")
-        self._shutdown_requested = True
-        self._save_state()
-
-    def _load_state(self):
-        with self._state_lock:
-            if STATE_FILE.exists():
-                try:
-                    with open(STATE_FILE) as f:
-                        state = json.load(f)
-                    self.initial_balance = state.get("initial_balance")
-                    self.peak_balance = state.get("peak_balance", self.initial_balance)
-                    self.current_trading_day = state.get("current_trading_day")
-                    self.day_start_balance = state.get("day_start_balance")
-                    self.day_peak_balance = state.get("day_peak_balance", self.day_start_balance)
-                    self.daily_nuclear_triggered = state.get("daily_nuclear_triggered", False)
-                    self.nuclear_triggered = state.get("nuclear_triggered", False)
-                    self.current_regime = state.get("current_regime", "BULL")
-                    self.wake_up_lock = state.get("wake_up_lock", False)
-                    self.consecutive_bull_cycles = state.get("consecutive_bull_cycles", 0)
-                    cooldown_str = state.get("cooldown_until")
-                    if cooldown_str:
-                        self.cooldown_until = datetime.fromisoformat(cooldown_str)
-                    # HyroTrader Prop Firm state
-                    self.trading_days_set = set(state.get("trading_days_set", []))
-                    self.day_closed_profit = float(state.get("day_closed_profit", 0.0))
-                    self.profit_target_reached = bool(state.get("profit_target_reached", False))
-                    if self.initial_balance:
-                        logger.info(
-                            f"📁 Restored state from disk: initial={self.initial_balance:.2f} USDT, "
-                            f"peak={self.peak_balance:.2f} USDT, day_start={self.day_start_balance}, "
-                            f"day={self.current_trading_day}, regime={self.current_regime}, "
-                            f"wake_up_lock={self.wake_up_lock}, bull_confirmations={self.consecutive_bull_cycles}, "
-                            f"trading_days={len(self.trading_days_set)}/{PROP_FIRM_MIN_TRADING_DAYS}"
-                        )
-                except Exception as e:
-                    logger.warning(f"Failed to load state file: {e}")
-
-    def _save_state(self):
-        with self._state_lock:
-            state = {
-                "initial_balance": self.initial_balance,
-                "peak_balance": self.peak_balance,
-                "current_trading_day": self.current_trading_day,
-                "day_start_balance": self.day_start_balance,
-                "day_peak_balance": self.day_peak_balance,
-                "daily_nuclear_triggered": self.daily_nuclear_triggered,
-                "nuclear_triggered": self.nuclear_triggered,
-                "current_regime": self.current_regime,
-                "wake_up_lock": self.wake_up_lock,
-                "consecutive_bull_cycles": self.consecutive_bull_cycles,
-                "cooldown_until": self.cooldown_until.isoformat() if self.cooldown_until else None,
-                # HyroTrader Prop Firm state
-                "trading_days_set": sorted(list(self.trading_days_set)),
-                "day_closed_profit": self.day_closed_profit,
-                "profit_target_reached": self.profit_target_reached,
-                "last_updated": datetime.now(timezone.utc).isoformat(),
-            }
+    def _macro_loop(self):
+        while not self._shutdown.is_set():
             try:
-                tmp_file = STATE_FILE.with_suffix(".tmp")
-                with open(tmp_file, "w") as f:
-                    json.dump(state, f, indent=2)
-                tmp_file.replace(STATE_FILE)
-            except Exception as e:
-                logger.error(f"Failed to save state: {e}")
-
-    def trigger_nuclear_option(self, reason: str):
-        """Emergency hard liquidation (Nuclear Option). Zero network calls inside lock."""
-        with self._state_lock:
-            if self.nuclear_triggered:
-                return
-
-            logger.critical("=" * 70)
-            logger.critical("☢️  NUCLEAR OPTION TRIGGERED!")
-            logger.critical(f"   Reason: {reason}")
-            logger.critical("=" * 70)
-
-            self.nuclear_triggered = True
-            self.wake_up_lock = True
-            self._save_state()
-
-        # ALL NETWORK OPERATIONS ARE 100% OUTSIDE _STATE_LOCK
-        # 1. Stop all buying immediately with verified critical executor
-        self.api_client.stop_buying()
-        logger.info("🛑 Bot buying permanently HALTED.")
-
-        # 2. EMERGENCY LIQUIDATION: Market sell ALL open positions to freeze equity before HyroTrader 5%/10% breach
-        logger.critical("🔥 HYROTRADER EMERGENCY LIQUIDATION: Liquidating open positions to prevent account disqualification...")
-        open_trades = self.api_client.get_open_trades()
-        if open_trades:
-            for trade in open_trades:
-                trade_id = trade.get("trade_id")
-                pair = trade.get("pair")
-                if trade_id:
-                    logger.critical(f"   Liquidating position {trade_id} ({pair}) at market rate...")
-                    self.api_client.force_exit(trade_id)
-                    time.sleep(0.3)
-        else:
-            logger.info("No open positions to liquidate.")
-
-        logger.critical("☢️  Nuclear option execution complete. Equity frozen to protect HyroTrader account.")
-        self._save_state()
-
-    def _check_drawdown(self) -> bool:
-        """
-        HyroTrader Prop Firm Drawdown Guard.
-
-        Rules enforced:
-          - Daily drawdown: (initial_balance - current_equity) / initial_balance <= 5%
-            HyroTrader measures from INITIAL BALANCE (fixed), not from day_start_balance.
-            Hard stop fires at 4.5% to leave 0.5% safety margin.
-          - Max overall loss: (initial_balance - current_equity) / initial_balance <= 10%
-            Hard stop fires at 8.5% to leave 1.5% safety margin.
-          - Tracks cumulative profit progress toward 5% target.
-          - Tracks qualifying trading days (min 5 required).
-          - Warns when daily closed profit approaches 40% cap ($100 on $5K).
-        """
-        current_equity = self.api_client.get_equity()
-        if current_equity is None or current_equity <= 0 or math.isnan(current_equity):
-            return False
-
-        # Query recent and open trades outside lock to track qualifying days, inactivity, and daily cap
-        recent_trades = self.api_client.get_trades(limit=100)
-        open_trades = self.api_client.get_open_trades()
-
-        should_trigger_nuclear = False
-        nuclear_reason = ""
-        now_utc = datetime.now(timezone.utc)
-        today_str = str(now_utc.date())
-
-        with self._state_lock:
-            # --- Lock Initial Balance (never changes for the lifetime of the prop trial) ---
-            if self.initial_balance is None:
-                self.initial_balance = current_equity
-                self.peak_balance = current_equity
-                self.day_start_balance = current_equity
-                self.day_peak_balance = current_equity
-                self.current_trading_day = today_str
-                logger.info(
-                    f"🔒 PROP FIRM INITIAL BALANCE LOCKED: ${self.initial_balance:,.2f} USDT (Phase: {PROP_FIRM_PHASE})\n"
-                    f"   Daily limit: ${self.initial_balance * GLOBAL_HARD_STOPLOSS_PERCENT:,.2f} USDT ({GLOBAL_HARD_STOPLOSS_PERCENT*100:.1f}%)\n"
-                    f"   Max loss:    ${self.initial_balance * PROP_FIRM_MAX_LOSS_PERCENT:,.2f} USDT ({PROP_FIRM_MAX_LOSS_PERCENT*100:.1f}%)\n"
-                    f"   Target:      ${self.initial_balance * PROP_FIRM_PROFIT_TARGET_PERCENT:,.2f} USDT ({PROP_FIRM_PROFIT_TARGET_PERCENT*100:.1f}%)"
-                )
-                self._save_state()
-
-            # --- Initialize day_start_balance if missing ---
-            if self.day_start_balance is None:
-                self.day_start_balance = current_equity
-                self.day_peak_balance = current_equity
-                self.current_trading_day = today_str
-                self._save_state()
-
-            # --- 00:00 UTC Daily Reset tracking ---
-            if self.current_trading_day != today_str:
-                self.current_trading_day = today_str
-                self.day_start_balance = current_equity
-                self.day_peak_balance = current_equity
-                self.day_closed_profit = 0.0
-                logger.info(
-                    f"🌅 New UTC Trading Day: {today_str}. "
-                    f"Day open equity floor: ${self.day_start_balance:,.2f} USDT"
-                )
-                self._save_state()
-
-            if self.peak_balance is None or current_equity > self.peak_balance:
-                self.peak_balance = current_equity
-                self._save_state()
-
-            if self.day_peak_balance is None or current_equity > self.day_peak_balance:
-                self.day_peak_balance = current_equity
-                self._save_state()
-
-            if self.initial_balance <= 0:
-                return False
-
-            # Unified analysis of recent trades:
-            # 1. Qualifying trading days (trade >= 5% initial balance & moved >= 1%)
-            # 2. Today's closed profit for the 40% cap
-            # 3. Latest trade timestamp for 30-Day Inactivity Sentinel
-            min_qualifying_size = self.initial_balance * 0.05
-            today_profit_sum = 0.0
-            latest_trade_dt = None
-
-            for tr in recent_trades:
-                if tr.get("is_open") is False:
-                    close_raw = tr.get("close_date") or tr.get("close_timestamp")
-                    if close_raw:
-                        try:
-                            if isinstance(close_raw, (int, float)):
-                                c_dt = datetime.fromtimestamp(close_raw / 1000.0, tz=timezone.utc)
-                            else:
-                                raw_str = str(close_raw).strip()
-                                if raw_str.endswith("Z"):
-                                    raw_str = raw_str[:-1] + "+00:00"
-                                c_dt = datetime.fromisoformat(raw_str)
-                                if c_dt.tzinfo is None:
-                                    c_dt = c_dt.replace(tzinfo=timezone.utc)
-
-                            c_day = str(c_dt.date())
-                            stake = float(tr.get("stake_amount", 0.0))
-                            profit_ratio = abs(float(tr.get("close_profit", 0.0)))
-                            profit_abs = float(tr.get("close_profit_abs", 0.0))
-
-                            if stake >= min_qualifying_size and profit_ratio >= 0.01:
-                                self.trading_days_set.add(c_day)
-                            if c_day == today_str:
-                                today_profit_sum += profit_abs
-
-                            if latest_trade_dt is None or c_dt > latest_trade_dt:
-                                latest_trade_dt = c_dt
-                        except Exception:
-                            pass
-
-            self.day_closed_profit = today_profit_sum
-
-            # ============================================================
-            # HYROTRADER: 30-Day Inactivity Sentinel
-            # Rule: Account is breached if no trade is closed or open for > 30 days.
-            # Alert at >= 20 days, Critical alarm at >= 25 days.
-            # ============================================================
-            if open_trades and len(open_trades) > 0:
-                inactivity_days = 0
-            elif latest_trade_dt:
-                inactivity_days = (now_utc - latest_trade_dt).days
-            else:
-                inactivity_days = 0
-
-            if inactivity_days >= 25:
-                logger.critical(
-                    f"🚨 HYROTRADER 30-DAY INACTIVITY ALERT: {inactivity_days} days flat! "
-                    f"Must execute a trade within {30 - inactivity_days} days or HyroTrader account is forfeited!"
-                )
-            elif inactivity_days >= 20:
-                logger.warning(
-                    f"⚠️ HYROTRADER INACTIVITY WARNING: {inactivity_days} days without trades. "
-                    f"30-day limit approaching."
-                )
-
-            # ============================================================
-            # HYROTRADER RULE 1: Static Daily Drawdown from 00:00 UTC Equity
-            # Daily Floor = day_start_balance - (initial_balance * daily_dd_limit)
-            # Hard stop at 4.5% of initial ($225 on $5K).
-            # ============================================================
-            daily_loss = self.day_start_balance - current_equity
-            daily_dd = daily_loss / self.initial_balance
-            daily_dd_pct = daily_dd * 100
-
-            # ============================================================
-            # HYROTRADER RULE 2: Max Overall Loss from INITIAL BALANCE
-            # Max Loss Floor = initial_balance - (initial_balance * max_loss_limit)
-            # Hard stop at 9.0% of initial ($450 on $5K).
-            # ============================================================
-            overall_loss = self.initial_balance - current_equity
-            overall_dd = overall_loss / self.initial_balance
-            overall_dd_pct = overall_dd * 100
-
-            # ============================================================
-            # HYROTRADER: Profit progress tracking
-            # ============================================================
-            total_profit_pct = ((current_equity - self.initial_balance) / self.initial_balance) * 100
-            profit_target_pct = PROP_FIRM_PROFIT_TARGET_PERCENT * 100
-            daily_profit_cap = self.initial_balance * PROP_FIRM_PROFIT_TARGET_PERCENT * PROP_FIRM_DAILY_PROFIT_CAP_PERCENT
-            trading_days_count = len(self.trading_days_set)
-
-            if total_profit_pct > 0 and not self.profit_target_reached:
-                # Check if profit target has been reached
-                if total_profit_pct >= profit_target_pct and trading_days_count >= PROP_FIRM_MIN_TRADING_DAYS:
-                    self.profit_target_reached = True
-                    self._save_state()
-                    logger.info(
-                        f"🏆 PROP FIRM PROFIT TARGET REACHED! {total_profit_pct:.2f}% >= {profit_target_pct:.1f}% "
-                        f"with {trading_days_count} qualifying trading days. READY TO CLAIM!"
-                    )
-                elif total_profit_pct >= profit_target_pct:
-                    logger.warning(
-                        f"⚠️  Profit target {total_profit_pct:.2f}% reached but only "
-                        f"{trading_days_count}/{PROP_FIRM_MIN_TRADING_DAYS} qualifying trading days. Keep trading!"
-                    )
-
-            # Status log (every cycle)
-            if daily_dd > 0 or overall_dd > 0:
-                logger.info(
-                    f"💰 Equity: ${current_equity:,.2f} | Initial: ${self.initial_balance:,.2f} | "
-                    f"Daily DD: {daily_dd_pct:.2f}% (Hard stop: {GLOBAL_HARD_STOPLOSS_PERCENT*100:.1f}%) | "
-                    f"Overall DD: {overall_dd_pct:.2f}% (Hard stop: {PROP_FIRM_MAX_LOSS_PERCENT*100:.1f}%) | "
-                    f"Trading days: {trading_days_count}/{PROP_FIRM_MIN_TRADING_DAYS}"
-                )
-            else:
-                logger.info(
-                    f"💰 Equity: ${current_equity:,.2f} | Total Profit: +{total_profit_pct:.2f}% "
-                    f"(Target: {profit_target_pct:.1f}%) | "
-                    f"Trading days: {trading_days_count}/{PROP_FIRM_MIN_TRADING_DAYS} | "
-                    f"Day profit cap used: ${self.day_closed_profit:.2f}/${daily_profit_cap:.2f}"
-                )
-
-            # Warn if today's closed profit is approaching the 40% daily cap
-            if self.day_closed_profit > (daily_profit_cap * 0.80):
-                logger.warning(
-                    f"⚠️  DAY PROFIT CAP WARNING: Today's closed profit ${self.day_closed_profit:.2f} "
-                    f"is {(self.day_closed_profit/daily_profit_cap*100):.0f}% of the "
-                    f"${daily_profit_cap:.2f} cap (40% of target). "
-                    f"Profits above cap don't count toward the target!"
-                )
-
-            # --- HYROTRADER RULE 1 CHECK: Daily Drawdown Hard Stop (4.5% of initial) ---
-            if daily_dd > GLOBAL_HARD_STOPLOSS_PERCENT:
-                should_trigger_nuclear = True
-                self.daily_nuclear_triggered = True
-                nuclear_reason = (
-                    f"🚨 HYROTRADER DAILY DRAWDOWN BREACHED: {daily_dd_pct:.2f}% of initial balance "
-                    f"exceeded the {GLOBAL_HARD_STOPLOSS_PERCENT*100:.1f}% safety stop "
-                    f"(HyroTrader limit: 5.0% of initial ${self.initial_balance:,.2f} USDT). "
-                    f"Current equity: ${current_equity:,.2f} USDT."
-                )
-            # --- HYROTRADER RULE 2 CHECK: Max Overall Loss Hard Stop (8.5% of initial) ---
-            elif overall_dd > PROP_FIRM_MAX_LOSS_PERCENT:
-                should_trigger_nuclear = True
-                nuclear_reason = (
-                    f"🚨 HYROTRADER MAX LOSS BREACHED: {overall_dd_pct:.2f}% of initial balance "
-                    f"exceeded the {PROP_FIRM_MAX_LOSS_PERCENT*100:.1f}% safety stop "
-                    f"(HyroTrader limit: 10.0% of initial ${self.initial_balance:,.2f} USDT). "
-                    f"Current equity: ${current_equity:,.2f} USDT."
-                )
-
-        # Trigger Nuclear Option OUTSIDE the lock to prevent deadlock
-        if should_trigger_nuclear:
-            self.trigger_nuclear_option(nuclear_reason)
-            return True
-
-        return False
-
-    def run(self):
-        """Main execution entry point."""
-        logger.info("=" * 70)
-        logger.info("🚀 Zero-Burn AI Risk Sentinel — Active (HyroTrader Prop Firm Mode)")
-        logger.info(f"   Freqtrade API:           {FREQTRADE_API_URL}")
-        logger.info(f"   Daily DD Hard Stop:      {GLOBAL_HARD_STOPLOSS_PERCENT * 100:.1f}% of initial (HyroTrader limit: 5.0%)")
-        logger.info(f"   Max Loss Hard Stop:      {PROP_FIRM_MAX_LOSS_PERCENT * 100:.1f}% of initial (HyroTrader limit: 10.0%)")
-        logger.info(f"   Profit Target:           {PROP_FIRM_PROFIT_TARGET_PERCENT * 100:.1f}% of initial")
-        logger.info(f"   Daily Profit Cap:        {PROP_FIRM_DAILY_PROFIT_CAP_PERCENT * 100:.0f}% of target per day")
-        logger.info(f"   Min Trading Days:        {PROP_FIRM_MIN_TRADING_DAYS} days")
-        logger.info(f"   Check Interval:          {CHECK_INTERVAL_SECONDS}s")
-        logger.info(f"   Hysteresis Cycles:       {BULL_CONFIRMATION_CYCLES} cycles")
-        logger.info(f"   Wake-Up Cooldown:        {WAKE_UP_COOLDOWN_MINUTES}m")
-        logger.info(f"   Daily Gemini Cap:        {MAX_DAILY_GEMINI_CALLS} calls")
-        logger.info("=" * 70)
-
-        with self._state_lock:
-            if self.nuclear_triggered:
-                logger.critical("☢️  Nuclear option was triggered previously. Delete state file to reset.")
-                return
-
-        if not self.api_client.login():
-            logger.critical("❌ Failed to authenticate with Freqtrade API. Exiting.")
-            sys.exit(1)
-
-        # Launch LLM Sentinel in a background daemon thread
-        sentinel_thread = threading.Thread(
-            target=self._llm_sentinel_loop,
-            name="AI-Sentinel-Thread",
-            daemon=True,
-        )
-        sentinel_thread.start()
-
-        # Main thread: Dedicated High-Priority Drawdown Guard
-        self._drawdown_guard_loop()
-
-    def _drawdown_guard_loop(self):
-        while not self.nuclear_triggered and not self._shutdown_requested:
-            try:
-                if self._check_drawdown():
-                    break
-                time.sleep(CHECK_INTERVAL_SECONDS)
-            except Exception as e:
-                logger.error(f"Drawdown monitor error: {e}")
-                time.sleep(CHECK_INTERVAL_SECONDS)
+                metrics = self.macro_monitor.get_metrics()
+                if market_crash(metrics):
+                    self.trigger_nuclear_option("Quantitative BTC crash confirmed")
+                elif not all(finite_number(metrics.get(k)) for k in ("btc_1h_pct", "btc_24h_pct")):
+                    self._pause_on_fault("Macro prices unavailable or stale")
+            except Exception:
+                logger.exception("Deterministic macro monitor failed")
+                self._pause_on_fault("Macro monitor failure")
+            self._shutdown.wait(30)
 
     def _llm_sentinel_loop(self):
-        """Background thread auditing News, Binance Macro, and Gemini AI with Hysteresis & Wake-Up Lock."""
-        while not self.nuclear_triggered and not self._shutdown_requested:
+        while not self._shutdown.is_set():
             try:
-                self.cycle_count += 1
-                now = datetime.now(timezone.utc)
+                # No Freqtrade client access or state mutations in the LLM worker.
+                decision = self.sentiment.analyze_market([])
+                logger.info("Advisory sentiment only: %s", decision.get("regime", "UNKNOWN"))
+            except Exception:
+                logger.exception("Advisory LLM failed; deterministic guard remains active")
+            self._shutdown.wait(900)
 
-                # Check if currently inside Cooldown timer (Brief local read, 0 network)
-                with self._state_lock:
-                    if self.cooldown_until is not None and now < self.cooldown_until:
-                        in_cooldown_timer = True
-                        rem_min = int((self.cooldown_until - now).total_seconds() // 60)
-                    else:
-                        in_cooldown_timer = False
-                        rem_min = 0
-                    wake_up_locked = self.wake_up_lock
-
-                if in_cooldown_timer:
-                    macro = self.sentiment.macro_monitor.get_metrics()
-                    btc_1h = macro.get("btc_1h_pct") or 0.0
-                    btc_24h = macro.get("btc_24h_pct") or 0.0
-                    fgi_val, _ = self.sentiment.get_fear_and_greed_index()
-                    fgi = fgi_val if fgi_val is not None else 50
-
-                    is_actively_stressed = (
-                        btc_1h <= -2.0
-                        or btc_24h <= -4.5
-                        or macro.get("is_heavy_bear", False)
-                        or macro.get("is_flash_crash", False)
-                        or fgi <= 18
-                    )
-
-                    if is_actively_stressed:
-                        if self.cycle_count % 5 == 0 or rem_min <= 5:
-                            logger.info(
-                                f"⏳ System in DEFENSIVE COOLDOWN: {rem_min}m remaining "
-                                f"(Stress confirmed: BTC 1h={btc_1h:+}%, 24h={btc_24h:+}%, FGI={fgi})."
-                            )
-                        time.sleep(CHECK_INTERVAL_SECONDS * LLM_CHECK_INTERVAL_CYCLES)
-                        continue
-                    else:
-                        logger.info(
-                            f"🟢 Market calm during cooldown (BTC 1h={btc_1h:+}%, 24h={btc_24h:+}%, FGI={fgi}). "
-                            f"Early release from defensive cooldown. Resuming active entries (/start)."
-                        )
-                        with self._state_lock:
-                            self.cooldown_until = None
-                            self.wake_up_lock = False
-                            self.current_regime = "BULL"
-                            self.consecutive_bull_cycles = 0
-                            self._save_state()
-                        self.api_client.start_trading()
-                        time.sleep(CHECK_INTERVAL_SECONDS * LLM_CHECK_INTERVAL_CYCLES)
-                        continue
-
-                # Cooldown timer has elapsed! Query market intelligence OUTSIDE of lock
-                whitelist = self.api_client.get_whitelist()
-                decision = self.sentiment.analyze_market(whitelist)
-                regime = decision.get("regime", "BULL")
-                confidence = float(decision.get("confidence", 0.0))
-                reason = decision.get("reason", "N/A")
-                cooldown_min = decision.get("cooldown_minutes", WAKE_UP_COOLDOWN_MINUTES)
-                flagged_coins = decision.get("flagged_coins", {})
-                macro = self.sentiment.macro_monitor.get_metrics()
-                fgi_val, _ = self.sentiment.get_fear_and_greed_index()
-                fgi = fgi_val if fgi_val is not None else 50
-                btc_1h = macro.get("btc_1h_pct") or 0.0
-                btc_24h = macro.get("btc_24h_pct") or 0.0
-
-                # 1. Targeted Token Defense (EXIT_PAIR)
-                if flagged_coins and isinstance(flagged_coins, dict):
-                    for coin_id, info in flagged_coins.items():
-                        act = info.get("action") if isinstance(info, dict) else str(info)
-                        if act in ("EXIT_PAIR", "LIQUIDATE"):
-                            logger.warning(f"🚨 TARGETED DEFENSE for {coin_id}: adding to blacklist to prevent further buys. Open positions remain managed by strategy.")
-                            self.api_client.add_to_blacklist([coin_id])
-
-                # 2. Emergency Black Swan (PANIC)
-                if regime == "PANIC":
-                    is_market_crash = (
-                        macro.get("is_flash_crash", False)
-                        or macro.get("is_heavy_bear", False)
-                        or btc_1h <= -3.0
-                        or btc_24h <= -6.0
-                    )
-                    if is_market_crash:
-                        self.trigger_nuclear_option(f"Confirmed Black Swan Panic: {reason} (BTC 1h={btc_1h:+}%, 24h={btc_24h:+}%)")
-                        break
-                    else:
-                        logger.warning(
-                            f"⚠️ Sentinel received PANIC ({reason}), but market prices remain calm "
-                            f"(BTC 1h={btc_1h:+}%, 24h={btc_24h:+}%). Downgrading to defensive BEAR mode."
-                        )
-                        regime = "BEAR"
-
-                # 3. WAKE-UP LOCK LOGIC (Guarded Cooldown Expiry)
-                if wake_up_locked:
-                    is_macro_stable = (btc_1h >= -1.5 and btc_24h >= -4.0)
-                    is_fgi_stable = (fgi > 18)
-                    is_safe = is_macro_stable and is_fgi_stable and regime != "PANIC"
-
-                    if not is_safe:
-                        # Market still actively crashing: extend cooldown by 20m
-                        extension_min = 20
-                        with self._state_lock:
-                            self.cooldown_until = now + timedelta(minutes=extension_min)
-                            self.consecutive_bull_cycles = 0
-                            self._save_state()
-
-                        logger.warning(
-                            f"🔒 WAKE-UP LOCK EXTENDED: Market remains under heavy stress "
-                            f"(Regime={regime}, BTC 1h={btc_1h:+}%, "
-                            f"BTC 24h={btc_24h:+}%, FGI={fgi}). "
-                            f"Extending defensive cooldown by {extension_min}m. Buying remains HALTED."
-                        )
-                        self.api_client.stop_buying()
-                        time.sleep(CHECK_INTERVAL_SECONDS * LLM_CHECK_INTERVAL_CYCLES)
-                        continue
-
-                    # Market is stable: release Wake-Up Lock and resume trading immediately
-                    with self._state_lock:
-                        self.wake_up_lock = False
-                        self.current_regime = "BULL"
-                        self.cooldown_until = None
-                        self.consecutive_bull_cycles = 0
-                        self._save_state()
-
-                    logger.info(
-                        f"🟢 WAKE-UP LOCK RELEASED: Market is stable (BTC 1h={btc_1h:+}%, FGI={fgi}). "
-                        f"Resuming active trade entries (/start)."
-                    )
-                    self.api_client.start_trading()
-                    time.sleep(CHECK_INTERVAL_SECONDS * LLM_CHECK_INTERVAL_CYCLES)
-                    continue
-
-                # 4. NORMAL ACTIVE MONITORING (When wake_up_lock is False)
-                if regime == "BEAR":
-                    is_real_market_stress = (
-                        btc_1h <= -2.5
-                        or btc_24h <= -5.0
-                        or macro.get("is_heavy_bear", False)
-                        or macro.get("is_flash_crash", False)
-                        or fgi <= 15
-                    )
-
-                    if is_real_market_stress:
-                        effective_cooldown = min(30, max(15, cooldown_min))
-                        with self._state_lock:
-                            self.current_regime = "BEAR"
-                            self.wake_up_lock = True
-                            self.cooldown_until = now + timedelta(minutes=effective_cooldown)
-                            self.consecutive_bull_cycles = 0
-                            self._save_state()
-
-                        logger.warning(
-                            f"🛡️  PROACTIVE DEFENSE ACTIVATED (BEAR + Macro Confirmed): {reason}\n"
-                            f"    Market Stress: BTC 1h={btc_1h:+}%, BTC 24h={btc_24h:+}%, FGI={fgi}.\n"
-                            f"    Halting new trade entries for {effective_cooldown}m. Existing trades manage exits naturally."
-                        )
-                        self.api_client.stop_buying()
-                    else:
-                        logger.info(
-                            f"ℹ️ AI Sentinel evaluated BEAR on headlines, but quantitative macro metrics remain stable "
-                            f"(BTC 1h={btc_1h:+}%, BTC 24h={btc_24h:+}%, FGI={fgi}). "
-                            f"Reason: {reason}. Trade entries remain ACTIVE."
-                        )
-                        with self._state_lock:
-                            self.current_regime = "BULL"
-                            self.consecutive_bull_cycles = 0
-
-                        # Auto-heal: verify bot is running
-                        bot_state = self.api_client.get_bot_state()
-                        if bot_state == "paused":
-                            logger.info("🟢 Bot was paused; resuming active trading (/start).")
-                            self.api_client.start_trading()
-
-                elif regime == "BULL":
-                    with self._state_lock:
-                        self.consecutive_bull_cycles = 0
-
-                    # Auto-heal: verify bot is running
-                    bot_state = self.api_client.get_bot_state()
-                    if bot_state == "paused":
-                        logger.info("🟢 Bot was paused during normal BULL regime; resuming active trading (/start).")
-                        self.api_client.start_trading()
-
-                time.sleep(CHECK_INTERVAL_SECONDS * LLM_CHECK_INTERVAL_CYCLES)
-
-            except Exception as e:
-                logger.error(f"Sentinel background loop error: {e}", exc_info=True)
-                time.sleep(CHECK_INTERVAL_SECONDS * LLM_CHECK_INTERVAL_CYCLES)
+    def run(self):
+        threading.Thread(target=self._macro_loop, daemon=True, name="Macro-Guard").start()
+        threading.Thread(target=self._llm_sentinel_loop, daemon=True, name="LLM-Advisory").start()
+        super().run()
 
 
 if __name__ == "__main__":
-    manager = RiskManager()
-    manager.run()
+    RiskManager().run()

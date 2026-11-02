@@ -10,9 +10,9 @@
     "trading_mode": "futures",
     "margin_mode": "isolated",
     "can_short": false,
-    "dry_run": false,
+    "dry_run": true,
     "dry_run_wallet": 5000,
-    "initial_state": "running",
+    "initial_state": "stopped",
     "amend_last_stake_amount": true,
     "cancel_open_orders_on_exit": true,
     "ignore_roi_if_entry_signal": true,
@@ -21,7 +21,7 @@
     "unfilledtimeout": {
         "entry": 3,
         "exit": 2,
-        "exit_timeout_count": 0,
+        "exit_timeout_count": 1,
         "unit": "minutes"
     },
     "order_types": {
@@ -31,8 +31,8 @@
         "force_entry": "limit",
         "force_exit": "market",
         "stoploss": "market",
-        "stoploss_on_exchange": false,
-        "stoploss_on_exchange_interval": 60,
+        "stoploss_on_exchange": true,
+        "stoploss_on_exchange_interval": 5,
         "stoploss_on_exchange_limit_ratio": 0.99
     },
     "entry_pricing": {
@@ -53,8 +53,8 @@
     },
     "exchange": {
         "name": "bybit",
-        "key": "LGPkJfN8NAXn56vOJt",
-        "secret": "dnvZFfH1zZmsY0PKuqkm2gE0WdGeJvUp0meQ",
+        "key": "",
+        "secret": "",
         "demo_trading": true,
         "ccxt_config": {
             "enableRateLimit": true,
@@ -94,7 +94,8 @@
             "(NIGHT)/.*",
             ".*STOCK/.*",
             ".*(AAPL|AMD|ARM|ASTS|CRWV|DELL|GOOGL|IREN|LITE|MRVL|MU|NBIS|QCOM|SNDK|SPCX|AAOI|AMZN|APLD|AVGO|BABA|BE|COHR|HOOD|INTC|IONQ|META|PLTR|SQQQ|TQQQ|TSLA|TSM|MSTR|NVDA|CRCL|SNXX|SKHY|QQQ)B?/.*",
-            "(CL|BZ|NATGAS|XPT)/.*"
+            "(CL|BZ|NATGAS|XPT)/.*",
+            "(OGN|XAU|XAG|PAXG|XAUT|GOLD|SILVER|WTI|BRENT)/.*"
         ]
     },
     "pairlists": [
@@ -136,7 +137,8 @@
         "futures_mode_leverage": 1.0,
         "futures_mode_leverage_rebuy_mode": 1.0,
         "futures_mode_leverage_grind_mode": 1.0,
-        "futures_max_open_trades_short": 0
+        "futures_max_open_trades_short": 0,
+        "bad_trade_controller_structure_break_exit_enable": false
     },
     "telegram": {
         "enabled": false,
@@ -149,13 +151,16 @@
         "listen_port": 8088,
         "verbosity": "error",
         "enable_openapi": false,
-        "ws_token": "supersecretwstoken",
+        "ws_token": "",
         "CORS_origins": [],
         "username": "freqtrade",
-        "password": "ZeroBurnPassword2026!"
+        "password": ""
     },
     "bot_name": "freqtrade_prop_nfix8",
     "internals": {
         "process_throttle_secs": 5
-    }
+    },
+    "stoploss": -0.06,
+    "position_adjustment_enable": false,
+    "max_entry_position_adjustment": 0
 }

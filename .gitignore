@@ -126,6 +126,9 @@ remote_freqtrade_logs.txt
 remote_logs.txt
 backtest_results.txt
 user_data/risk_manager_state.json
+user_data/risk_manager_prop_state.json
+user_data/risk_manager_prop_state.tmp
+user_data/forensic/
 risk_manager_state.json
 user_data/logs/
 
