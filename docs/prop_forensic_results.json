@@ -1,0 +1,501 @@
+{
+  "stress": {
+    "seed": 20261102,
+    "scenarios": 10000,
+    "model": "three correlated $400 positions; loss and execution costs / $5000",
+    "note": "Uniform shocks are adversarial inputs, not estimated event probabilities. No simulated return target.",
+    "before_daily_breaches": 7500,
+    "after_continuous_stop_daily_breaches": 0,
+    "after_gap_through_stop_daily_breaches": 7500,
+    "after_gap_through_stop_trailing_breaches": 6145,
+    "continuous_stop_max_loss_pct": 1.5383984229572996,
+    "gap_max_loss_pct": 9.696433274892845,
+    "three_positions_minus_10pct_with_03pct_slippage_loss_pct": 2.4984,
+    "three_positions_minus_20pct_with_03pct_slippage_loss_pct": 4.8984
+  },
+  "data_inventory": [
+    {
+      "pair": "BTC/USDT:USDT",
+      "tf": "5m",
+      "rows": 192999,
+      "start": "2023-01-01 00:00:00+00:00",
+      "end": "2024-11-01 03:10:00+00:00",
+      "gaps": 0,
+      "duplicate_dates": 0,
+      "sha256": "55fa271fd1c76389dfb4bc836d23bdba2c4c726c5868a0b79d998af74cc2a799"
+    },
+    {
+      "pair": "BTC/USDT:USDT",
+      "tf": "15m",
+      "rows": 64999,
+      "start": "2023-01-01 00:00:00+00:00",
+      "end": "2024-11-08 01:30:00+00:00",
+      "gaps": 0,
+      "duplicate_dates": 0,
+      "sha256": "8a363311ec5ccc848311bce45d053aed5a5564968aa727eff720f1ef68d5d9d8"
+    },
+    {
+      "pair": "BTC/USDT:USDT",
+      "tf": "1h",
+      "rows": 16999,
+      "start": "2023-01-01 00:00:00+00:00",
+      "end": "2024-12-09 06:00:00+00:00",
+      "gaps": 0,
+      "duplicate_dates": 0,
+      "sha256": "6bff268fa5396903e08e5ba5f364dec5045b619d8c327557c67f35791f17c1f2"
+    },
+    {
+      "pair": "BTC/USDT:USDT",
+      "tf": "4h",
+      "rows": 4999,
+      "start": "2023-01-01 00:00:00+00:00",
+      "end": "2025-04-13 00:00:00+00:00",
+      "gaps": 0,
+      "duplicate_dates": 0,
+      "sha256": "f79330038aacc75e8160a72a0996ab61cb7b2a3c7a017eee3d7e7c1fdce5ca78"
+    },
+    {
+      "pair": "BTC/USDT:USDT",
+      "tf": "1d",
+      "rows": 999,
+      "start": "2023-01-01 00:00:00+00:00",
+      "end": "2025-09-25 00:00:00+00:00",
+      "gaps": 0,
+      "duplicate_dates": 0,
+      "sha256": "98bc55c34529710e0ef1ec2bb1be10f3887efd742972e3e7fe9b1272e53365e7"
+    },
+    {
+      "pair": "ETH/USDT:USDT",
+      "tf": "5m",
+      "rows": 192999,
+      "start": "2023-01-01 00:00:00+00:00",
+      "end": "2024-11-01 03:10:00+00:00",
+      "gaps": 0,
+      "duplicate_dates": 0,
+      "sha256": "c08d2be32170d23223540b5d3d36591a91f359c6e37c2501917e873daf81a721"
+    },
+    {
+      "pair": "ETH/USDT:USDT",
+      "tf": "15m",
+      "rows": 64999,
+      "start": "2023-01-01 00:00:00+00:00",
+      "end": "2024-11-08 01:30:00+00:00",
+      "gaps": 0,
+      "duplicate_dates": 0,
+      "sha256": "125933507372b835d83fcb59d1e7233a86fd94d0f017c5496ff797e759b4cbc0"
+    },
+    {
+      "pair": "ETH/USDT:USDT",
+      "tf": "1h",
+      "rows": 16999,
+      "start": "2023-01-01 00:00:00+00:00",
+      "end": "2024-12-09 06:00:00+00:00",
+      "gaps": 0,
+      "duplicate_dates": 0,
+      "sha256": "bffbbb63183609c0eb45b3f15fb1fb46b837a750299eeb539bfe2e05c3e02cf6"
+    },
+    {
+      "pair": "ETH/USDT:USDT",
+      "tf": "4h",
+      "rows": 4999,
+      "start": "2023-01-01 00:00:00+00:00",
+      "end": "2025-04-13 00:00:00+00:00",
+      "gaps": 0,
+      "duplicate_dates": 0,
+      "sha256": "27a938f2b9abbe64a3be07eb5662c4050babca75ccb9634a1f6e639dde51049c"
+    },
+    {
+      "pair": "ETH/USDT:USDT",
+      "tf": "1d",
+      "rows": 999,
+      "start": "2023-01-01 00:00:00+00:00",
+      "end": "2025-09-25 00:00:00+00:00",
+      "gaps": 0,
+      "duplicate_dates": 0,
+      "sha256": "fc4243399b46ab813fe678e189b8543be356816b7f3c8316a2e74d876017f828"
+    },
+    {
+      "pair": "SOL/USDT:USDT",
+      "tf": "5m",
+      "rows": 192999,
+      "start": "2023-01-01 00:00:00+00:00",
+      "end": "2024-11-01 03:10:00+00:00",
+      "gaps": 0,
+      "duplicate_dates": 0,
+      "sha256": "704eba6eeadcf7015003b8facfcd49d000090a1cf563b8f85c52fdc50cefb95c"
+    },
+    {
+      "pair": "SOL/USDT:USDT",
+      "tf": "15m",
+      "rows": 64999,
+      "start": "2023-01-01 00:00:00+00:00",
+      "end": "2024-11-08 01:30:00+00:00",
+      "gaps": 0,
+      "duplicate_dates": 0,
+      "sha256": "4b85cc50e042f25541612343e17dd12d94d6a8447f8648feb690f1c2d8850e20"
+    },
+    {
+      "pair": "SOL/USDT:USDT",
+      "tf": "1h",
+      "rows": 16999,
+      "start": "2023-01-01 00:00:00+00:00",
+      "end": "2024-12-09 06:00:00+00:00",
+      "gaps": 0,
+      "duplicate_dates": 0,
+      "sha256": "a3205ac2226aaec53a61337d7f3a65dc104062af5f443d21734a7905c62d63dd"
+    },
+    {
+      "pair": "SOL/USDT:USDT",
+      "tf": "4h",
+      "rows": 4999,
+      "start": "2023-01-01 00:00:00+00:00",
+      "end": "2025-04-13 00:00:00+00:00",
+      "gaps": 0,
+      "duplicate_dates": 0,
+      "sha256": "a7d4d093bc0fb19f12f3145604835b270e8080ddacbbfa853be32a7cd83d0f41"
+    },
+    {
+      "pair": "SOL/USDT:USDT",
+      "tf": "1d",
+      "rows": 999,
+      "start": "2023-01-01 00:00:00+00:00",
+      "end": "2025-09-25 00:00:00+00:00",
+      "gaps": 0,
+      "duplicate_dates": 0,
+      "sha256": "871e0571d9b018b1ca3f6965eb5e0d5c208be0a21058df61b98b1499c2b75218"
+    }
+  ],
+  "baseline_ref": "192a933fca224e6ae0189db95a42eaf4bca2e7f1",
+  "full_stack_certified": false,
+  "backtests": [
+    {
+      "variant": "before",
+      "period": "bull_q1",
+      "timerange": "20240101-20240401",
+      "returncode": 0,
+      "archive": "user_data\\forensic\\before_bull_q1\\backtest-result-2026-11-03_00-18-13.zip",
+      "max_daily_dd_pct": 0.0,
+      "max_trailing_dd_pct": 0.0,
+      "net_profit_pct": 0.0,
+      "trades": 0,
+      "win_rate_pct": null,
+      "profit_factor": null,
+      "average_win_loss_ratio": null,
+      "pnl_over_max_dd": null,
+      "equity_basis": "5m close inventory reconstruction, funding reconciled at trade close",
+      "account_sentinel_simulated": false,
+      "slippage_sensitivity": {
+        "0.001": {
+          "max_daily_dd_pct": 0.0,
+          "max_trailing_dd_pct": 0.0,
+          "net_profit_pct": 0.0
+        },
+        "0.002": {
+          "max_daily_dd_pct": 0.0,
+          "max_trailing_dd_pct": 0.0,
+          "net_profit_pct": 0.0
+        },
+        "0.003": {
+          "max_daily_dd_pct": 0.0,
+          "max_trailing_dd_pct": 0.0,
+          "net_profit_pct": 0.0
+        }
+      }
+    },
+    {
+      "variant": "before",
+      "period": "bear_jun_jul",
+      "timerange": "20240601-20240801",
+      "returncode": 0,
+      "archive": "user_data\\forensic\\before_bear_jun_jul\\backtest-result-2026-11-03_00-18-29.zip",
+      "max_daily_dd_pct": 0.00818736049999643,
+      "max_trailing_dd_pct": 0.09138800000000628,
+      "net_profit_pct": 0.17206288659998847,
+      "trades": 1,
+      "win_rate_pct": 100.0,
+      "profit_factor": null,
+      "average_win_loss_ratio": null,
+      "pnl_over_max_dd": 1.8827733028405058,
+      "equity_basis": "5m close inventory reconstruction, funding reconciled at trade close",
+      "account_sentinel_simulated": false,
+      "slippage_sensitivity": {
+        "0.001": {
+          "max_daily_dd_pct": 0.01628131449999273,
+          "max_trailing_dd_pct": 0.09138800000000628,
+          "net_profit_pct": 0.15605665459998974
+        },
+        "0.002": {
+          "max_daily_dd_pct": 0.02437526849998903,
+          "max_trailing_dd_pct": 0.09138800000000628,
+          "net_profit_pct": 0.140050422599991
+        },
+        "0.003": {
+          "max_daily_dd_pct": 0.03246922250000353,
+          "max_trailing_dd_pct": 0.09138800000000628,
+          "net_profit_pct": 0.12404419059999228
+        }
+      }
+    },
+    {
+      "variant": "before",
+      "period": "crash_april",
+      "timerange": "20240410-20240417",
+      "returncode": 0,
+      "archive": "user_data\\forensic\\before_crash_april\\backtest-result-2026-11-03_00-18-45.zip",
+      "max_daily_dd_pct": 0.5668512173999989,
+      "max_trailing_dd_pct": 0.5866640000000006,
+      "net_profit_pct": 1.1489405989999923,
+      "trades": 4,
+      "win_rate_pct": 100.0,
+      "profit_factor": null,
+      "average_win_loss_ratio": null,
+      "pnl_over_max_dd": 1.9584303775244412,
+      "equity_basis": "5m close inventory reconstruction, funding reconciled at trade close",
+      "account_sentinel_simulated": false,
+      "slippage_sensitivity": {
+        "0.001": {
+          "max_daily_dd_pct": 0.574838885400004,
+          "max_trailing_dd_pct": 0.5866640000000006,
+          "net_profit_pct": 1.1078400289999957
+        },
+        "0.002": {
+          "max_daily_dd_pct": 0.5828265533999911,
+          "max_trailing_dd_pct": 0.5866640000000006,
+          "net_profit_pct": 1.066739458999999
+        },
+        "0.003": {
+          "max_daily_dd_pct": 0.5908142213999964,
+          "max_trailing_dd_pct": 0.5908142213999964,
+          "net_profit_pct": 1.0256388890000023
+        }
+      }
+    },
+    {
+      "variant": "before",
+      "period": "crash_august",
+      "timerange": "20240801-20240808",
+      "returncode": 0,
+      "archive": "user_data\\forensic\\before_crash_august\\backtest-result-2026-11-03_00-19-00.zip",
+      "max_daily_dd_pct": 0.5440144499999952,
+      "max_trailing_dd_pct": 0.7014880000000084,
+      "net_profit_pct": 1.0482497047999972,
+      "trades": 3,
+      "win_rate_pct": 100.0,
+      "profit_factor": null,
+      "average_win_loss_ratio": null,
+      "pnl_over_max_dd": 1.4943230743790161,
+      "equity_basis": "5m close inventory reconstruction, funding reconciled at trade close",
+      "account_sentinel_simulated": false,
+      "slippage_sensitivity": {
+        "0.001": {
+          "max_daily_dd_pct": 0.5519534500000008,
+          "max_trailing_dd_pct": 0.7014880000000084,
+          "net_profit_pct": 0.9989380067999987
+        },
+        "0.002": {
+          "max_daily_dd_pct": 0.5598924499999884,
+          "max_trailing_dd_pct": 0.7014880000000084,
+          "net_profit_pct": 0.9496263088000001
+        },
+        "0.003": {
+          "max_daily_dd_pct": 0.5678314499999942,
+          "max_trailing_dd_pct": 0.7014880000000084,
+          "net_profit_pct": 0.9003146108000015
+        }
+      }
+    },
+    {
+      "variant": "after",
+      "period": "bull_q1",
+      "timerange": "20240101-20240401",
+      "returncode": 0,
+      "archive": "user_data\\forensic\\after_bull_q1\\backtest-result-2026-11-03_00-19-17.zip",
+      "max_daily_dd_pct": 0.0,
+      "max_trailing_dd_pct": 0.0,
+      "net_profit_pct": 0.0,
+      "trades": 0,
+      "win_rate_pct": null,
+      "profit_factor": null,
+      "average_win_loss_ratio": null,
+      "pnl_over_max_dd": null,
+      "equity_basis": "5m close inventory reconstruction, funding reconciled at trade close",
+      "account_sentinel_simulated": false,
+      "slippage_sensitivity": {
+        "0.001": {
+          "max_daily_dd_pct": 0.0,
+          "max_trailing_dd_pct": 0.0,
+          "net_profit_pct": 0.0
+        },
+        "0.002": {
+          "max_daily_dd_pct": 0.0,
+          "max_trailing_dd_pct": 0.0,
+          "net_profit_pct": 0.0
+        },
+        "0.003": {
+          "max_daily_dd_pct": 0.0,
+          "max_trailing_dd_pct": 0.0,
+          "net_profit_pct": 0.0
+        }
+      }
+    },
+    {
+      "variant": "after",
+      "period": "bear_jun_jul",
+      "timerange": "20240601-20240801",
+      "returncode": 0,
+      "archive": "user_data\\forensic\\after_bear_jun_jul\\backtest-result-2026-11-03_00-19-33.zip",
+      "max_daily_dd_pct": 0.00818736049999643,
+      "max_trailing_dd_pct": 0.09138800000000628,
+      "net_profit_pct": 0.17206288659998847,
+      "trades": 1,
+      "win_rate_pct": 100.0,
+      "profit_factor": null,
+      "average_win_loss_ratio": null,
+      "pnl_over_max_dd": 1.8827733028405058,
+      "equity_basis": "5m close inventory reconstruction, funding reconciled at trade close",
+      "account_sentinel_simulated": false,
+      "slippage_sensitivity": {
+        "0.001": {
+          "max_daily_dd_pct": 0.01628131449999273,
+          "max_trailing_dd_pct": 0.09138800000000628,
+          "net_profit_pct": 0.15605665459998974
+        },
+        "0.002": {
+          "max_daily_dd_pct": 0.02437526849998903,
+          "max_trailing_dd_pct": 0.09138800000000628,
+          "net_profit_pct": 0.140050422599991
+        },
+        "0.003": {
+          "max_daily_dd_pct": 0.03246922250000353,
+          "max_trailing_dd_pct": 0.09138800000000628,
+          "net_profit_pct": 0.12404419059999228
+        }
+      }
+    },
+    {
+      "variant": "after",
+      "period": "crash_april",
+      "timerange": "20240410-20240417",
+      "returncode": 0,
+      "archive": "user_data\\forensic\\after_crash_april\\backtest-result-2026-11-03_00-19-48.zip",
+      "max_daily_dd_pct": 0.4877808428000026,
+      "max_trailing_dd_pct": 0.5075936254000044,
+      "net_profit_pct": 1.0547638120000036,
+      "trades": 4,
+      "win_rate_pct": 75.0,
+      "profit_factor": 3.1623723595731175,
+      "average_win_loss_ratio": 1.0541241198577058,
+      "pnl_over_max_dd": 2.0779689878272274,
+      "equity_basis": "5m close inventory reconstruction, funding reconciled at trade close",
+      "account_sentinel_simulated": false,
+      "slippage_sensitivity": {
+        "0.001": {
+          "max_daily_dd_pct": 0.5032769207999991,
+          "max_trailing_dd_pct": 0.5151020353999957,
+          "net_profit_pct": 0.9901925739999928
+        },
+        "0.002": {
+          "max_daily_dd_pct": 0.5187729987999956,
+          "max_trailing_dd_pct": 0.5226104454000051,
+          "net_profit_pct": 0.9256213360000043
+        },
+        "0.003": {
+          "max_daily_dd_pct": 0.5342690768000102,
+          "max_trailing_dd_pct": 0.5342690768000102,
+          "net_profit_pct": 0.8610500979999935
+        }
+      }
+    },
+    {
+      "variant": "after",
+      "period": "crash_august",
+      "timerange": "20240801-20240808",
+      "returncode": 0,
+      "archive": "user_data\\forensic\\after_crash_august\\backtest-result-2026-11-03_00-20-02.zip",
+      "max_daily_dd_pct": 0.5261959630000093,
+      "max_trailing_dd_pct": 0.6836695130000225,
+      "net_profit_pct": 0.09751027460001005,
+      "trades": 3,
+      "win_rate_pct": 66.66666666666666,
+      "profit_factor": 1.2011305273567552,
+      "average_win_loss_ratio": 0.6005652636783776,
+      "pnl_over_max_dd": 0.1426277941985644,
+      "equity_basis": "5m close inventory reconstruction, funding reconciled at trade close",
+      "account_sentinel_simulated": false,
+      "slippage_sensitivity": {
+        "0.001": {
+          "max_daily_dd_pct": 0.5493886230000135,
+          "max_trailing_dd_pct": 0.698923173000021,
+          "net_profit_pct": 0.050019864600026054
+        },
+        "0.002": {
+          "max_daily_dd_pct": 0.5725812830000178,
+          "max_trailing_dd_pct": 0.7141768330000378,
+          "net_profit_pct": 0.002529454599997649
+        },
+        "0.003": {
+          "max_daily_dd_pct": 0.5957739430000037,
+          "max_trailing_dd_pct": 0.729430493000018,
+          "net_profit_pct": -0.044960955399986346
+        }
+      }
+    }
+  ],
+  "audit_date": "2026-11-03",
+  "tests": {
+    "dedicated_unit_tests_passed": 24,
+    "seeded_sizing_cases": 10000,
+    "existing_integration_tests_passed": 179,
+    "existing_integration_tests_skipped": 8,
+    "lookahead_signals_checked": 3,
+    "lookahead_bias_detected": false,
+    "lookahead_limitations": "baseline signal code; April crash; limit orders permitted; one force exit skipped; not full proof"
+  },
+  "static_analysis": {
+    "user_data/strategies/NostalgiaForInfinityX8_Prop.py": {
+      "lines": 61714,
+      "functions": 186,
+      "obvious_future_access_patterns": []
+    },
+    "user_data/strategies/NostalgiaForInfinityX8.py": {
+      "lines": 61656,
+      "functions": 182,
+      "obvious_future_access_patterns": []
+    }
+  },
+  "unchanged_signal_methods": {
+    "populate_indicators": true,
+    "populate_entry_trend": true,
+    "populate_exit_trend": true,
+    "info_switcher": true,
+    "btc_info_switcher": true
+  },
+  "limitations": [
+    "three static USDT perpetual pairs; not historical dynamic pairlist",
+    "eight trades per variant across four non-overlapping windows",
+    "5m closes; no tick, order queue, latency or actual intrabar equity",
+    "external REST sentinel not simulated by strategy backtest",
+    "funding allocated at trade close",
+    "no live or demo account tested; no credentials used",
+    "current market metadata entails survivorship bias",
+    "profit targets and 15-45 day completion not demonstrated"
+  ],
+  "runtime_commit": "7c9394141",
+  "verification": {
+    "compose_static_config": "passed; daemon unavailable, image not built",
+    "python_compile": "passed",
+    "new_scoped_lint": "passed",
+    "git_diff_check": "passed",
+    "native_equity_rpc_regression": "passed"
+  },
+  "runtime_file_sha256": {
+    "scripts\\prop_risk_guard.py": "93e470917262d6d5a12c7b99619b952c7c4edd76c3121c230edb661b58f05468",
+    "scripts\\llm_risk_manager_prop.py": "f147966cdb0f0ea8b238d3de13d2e002390ca600be1031bfac8dd9f0b920cf28",
+    "user_data\\strategies\\NostalgiaForInfinityX8_Prop.py": "42662877de24076ea9bb3d5d27d82dc6e9dfca8af0636940a38d3ea8d3691a8c",
+    "user_data\\config_prop_nfix8.json": "c6aaf49efeddf746be3476beb04867f7accb82668b4feae53359bf5c18b3890a",
+    "freqtrade\\exchange\\bybit.py": "51330118a227e44cf8dd44be268c1ade8baac98a6d074c4c5b8b594160d26af5",
+    "freqtrade\\exchange\\exchange.py": "144fda25ac7b7659d01f87ca9cc8c1da14e32727846528d881ecd989bbe54c5d",
+    "freqtrade\\rpc\\rpc.py": "68cdacf8580f2a2b5c445cb246f96d34e7abc5df65de7694562bc0dfc5766f9d",
+    "freqtrade\\rpc\\api_server\\api_schemas.py": "e643a4a1f783726457c7375c623ee287a470c231659baae80e81a22c06471628"
+  }
+}

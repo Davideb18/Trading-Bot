@@ -121,7 +121,7 @@ def evaluate_qualifying_day(trades_in_day: pd.DataFrame, initial_balance: float)
     return False
 
 
-def simulate_evaluation_challenge(df_trades: pd.DataFrame, start_dt: datetime, initial_balance: float = 5000.0, allow_heartbeat: bool = True, daily_wallet_stats: dict | None = None):
+def simulate_evaluation_challenge(df_trades: pd.DataFrame, start_dt: datetime, initial_balance: float = 5000.0, allow_heartbeat: bool = False, daily_wallet_stats: dict | None = None):
     """
     Simulates a 2-Step Challenge starting at start_dt.
     Phase 1: +10% target, max 40% consistency per day, 5 active days, 5% daily DD, 10% max DD.
@@ -265,7 +265,8 @@ def simulate_evaluation_challenge(df_trades: pd.DataFrame, start_dt: datetime, i
                 phase2_pass_dt = day_trades["close_dt"].max()
                 phase2_pass_days = (phase2_pass_dt - phase2_start_dt).days + 1
                 return {
-                    "status": "PASSED",
+                    "status": "SIMULATED_TARGET_ONLY",
+                    "full_stack_certified": False,
                     "phase1_days": phase1_pass_days,
                     "phase2_days": phase2_pass_days,
                     "total_days": (phase2_pass_dt - start_dt).days + 1,
@@ -293,7 +294,7 @@ def simulate_evaluation_challenge(df_trades: pd.DataFrame, start_dt: datetime, i
         }
 
 
-def run_rolling_evaluation_audit(df_trades: pd.DataFrame, df_wallet: pd.DataFrame | None = None, initial_balance: float = 5000.0, step_days: int = 7, allow_heartbeat: bool = True):
+def run_rolling_evaluation_audit(df_trades: pd.DataFrame, df_wallet: pd.DataFrame | None = None, initial_balance: float = 5000.0, step_days: int = 7, allow_heartbeat: bool = False):
     """
     Runs a rolling sliding window audit across the entire historical period.
     Simulates purchasing a challenge every 'step_days' (e.g. weekly).
@@ -436,74 +437,10 @@ def audit_funded_account_performance(df_trades: pd.DataFrame, df_wallet: pd.Data
 
 
 def main():
-    source_file = sys.argv[1] if len(sys.argv) > 1 else "user_data/backtest_results/latest_futures/backtest-result-2026-10-27_13-44-14.json"
-    initial_balance = float(sys.argv[2]) if len(sys.argv) > 2 else 5000.0
-    
-    print("=" * 80)
-    print(f"🏛️ INSTITUTIONAL PROP FIRM AUDIT ENGINE: HYROTRADER TWO-STEP CHALLENGE")
-    print(f"Source file:     {source_file}")
-    print(f"Account Balance: ${initial_balance:,.2f}")
-    print("=" * 80)
-    
-    trades, df_wallet = load_backtest_ledger(source_file)
-    df_trades = parse_trade_ledger(trades)
-    print(f"Loaded {len(df_trades)} total closed trades.")
-    print(f"Timeline: {df_trades['open_dt'].min().strftime('%Y-%m-%d')} to {df_trades['close_dt'].max().strftime('%Y-%m-%d')}\n")
-    
-    # 1. EVALUATION ROLLING WINDOW AUDIT
-    print("⏳ Running Rolling Window Challenge Simulation (Every 7 days with true 5m candle intraday DD)...")
-    eval_df_heartbeat = run_rolling_evaluation_audit(df_trades, df_wallet=df_wallet, initial_balance=initial_balance, step_days=7, allow_heartbeat=True)
-    eval_df_strict = run_rolling_evaluation_audit(df_trades, df_wallet=df_wallet, initial_balance=initial_balance, step_days=7, allow_heartbeat=False)
-    
-    total_tests = len(eval_df_heartbeat)
-    passed_tests_hb = len(eval_df_heartbeat[eval_df_heartbeat["status"] == "PASSED"])
-    pass_rate_hb = (passed_tests_hb / total_tests * 100) if total_tests > 0 else 0.0
-    
-    passed_tests_strict = len(eval_df_strict[eval_df_strict["status"] == "PASSED"])
-    pass_rate_strict = (passed_tests_strict / total_tests * 100) if total_tests > 0 else 0.0
-    
-    passed_df = eval_df_heartbeat[eval_df_heartbeat["status"] == "PASSED"]
-    avg_phase1_days = passed_df["phase1_days"].mean() if not passed_df.empty else 0
-    avg_phase2_days = passed_df["phase2_days"].mean() if not passed_df.empty else 0
-    avg_total_days = passed_df["total_days"].mean() if not passed_df.empty else 0
-    
-    dd_failures_hb = len(eval_df_heartbeat[eval_df_heartbeat["status"].str.startswith("FAILED_DAILY") | eval_df_heartbeat["status"].str.startswith("FAILED_MAX")])
-    
-    print("\n" + "=" * 80)
-    print("📋 REPORT 1: EVALUATION PHASE AUDIT (TWO-STEP CHALLENGE)")
-    print("=" * 80)
-    print(f"• Total Rolling Challenge Windows Tested: {total_tests}")
-    print(f"• Successful Passes (with Sentinel Heartbeat): {passed_tests_hb} / {total_tests} ({pass_rate_hb:.1f}%)")
-    print(f"• Successful Passes (Strict raw data, no heartbeat): {passed_tests_strict} / {total_tests} ({pass_rate_strict:.1f}%)")
-    print(f"• Drawdown Limit Breaches (Daily or Max DD):   {dd_failures_hb} / {total_tests}")
-    print(f"• In Progress (End of Dataset Buffer):         {len(eval_df_heartbeat[eval_df_heartbeat['status'] == 'IN_PROGRESS'])}")
-    print(f"• Average Days to Clear Phase 1 (+10%):        {avg_phase1_days:.1f} days (Min: {passed_df['phase1_days'].min() if not passed_df.empty else 0}, Max: {passed_df['phase1_days'].max() if not passed_df.empty else 0})")
-    print(f"• Average Days to Clear Phase 2 (+5%):         {avg_phase2_days:.1f} days (Min: {passed_df['phase2_days'].min() if not passed_df.empty else 0}, Max: {passed_df['phase2_days'].max() if not passed_df.empty else 0})")
-    print(f"• Average Total Time to Funded Account:        {avg_total_days:.1f} days (~{avg_total_days/30.4:.1f} months)")
-    print(f"• 40% Daily Consistency Rule Compliance:       100% ENFORCED (Excess profits capped per day)")
-    print(f"• 5 Minimum Active Days Compliance:           100% ENFORCED (All passes had >= 5 active days)")
-    print("-" * 80)
-    
-    # 2. FUNDED ACCOUNT AUDIT
-    print("\n" + "=" * 80)
-    print("💼 REPORT 2: FUNDED ACCOUNT STAGE AUDIT (PERMANENT CAPITAL HARVESTING)")
-    print("=" * 80)
-    funded_res = audit_funded_account_performance(df_trades, df_wallet, initial_balance=initial_balance)
-    
-    print(f"• Worst Daily Drawdown Observed:         {funded_res['worst_daily_drawdown_pct']:.2f}% (HyroTrader Limit: 5.00%)")
-    print(f"• Worst Overall Drawdown Observed:       {funded_res['max_overall_drawdown_pct']:.2f}% (HyroTrader Limit: 10.00%)")
-    print(f"• Margin Exposure (Max 25% Rule):        STRICTLY 24.0% CAP (Zero margin breaches)")
-    print(f"• Notional Value Exposure (Max 2.0x):    STRICTLY 0.24x CAP (Zero notional breaches)")
-    print(f"• Daily Drawdown Rule Breaches:          {funded_res['breaches_daily_dd']}")
-    print(f"• Max Loss Floor Breaches:               {funded_res['breaches_max_loss']}")
-    print(f"• Total Gross Profit Generated:          ${funded_res['total_gross_profit']:,.2f} USDT")
-    print(f"• Total Trader Payout in Pocket (80%):   ${funded_res['total_trader_payout_usd']:,.2f} USDT (~{funded_res['total_trader_payout_eur']:,.2f} EUR)")
-    print(f"• Average Monthly Payout:                ${funded_res['avg_monthly_payout_usd']:,.2f} USDT/month (~{funded_res['avg_monthly_payout_eur']:,.2f} EUR/month)")
-    print("-" * 80)
-    print("\n📅 MONTHLY PAYOUT BREAKDOWN (FUNDED STAGE):")
-    print(funded_res["monthly_breakdown"].to_string(index=False))
-    print("=" * 80 + "\n")
+    """Use the evidence-based checker; legacy models above are exploratory only."""
+    from check_prop_firm_rules import main as checked_main
+    return checked_main()
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

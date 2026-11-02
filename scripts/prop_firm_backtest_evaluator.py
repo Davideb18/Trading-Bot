@@ -157,8 +157,10 @@ def audit_prop_firm_compliance(backtest_data: dict, initial_balance: float = 100
             "target_phase1_passed_date": target_phase1_passed_at,
             "target_phase2_passed_date": target_phase2_passed_at,
             "max_single_trade_pct_of_profit": consistency_ratio * 100.0,
-            "passed_prop_rules": is_passed,
-            "verdict": "PASSED ✅" if is_passed else f"FAILED ❌ ({disqualified_reason})"
+            "passed_prop_rules": False,
+            "closed_ledger_within_limits": is_passed,
+            "equity_basis": "closed trades only; floating exposure unverified",
+            "verdict": "UNVERIFIED: closed-trade ledger cannot certify prop compliance" if is_passed else f"FAILED/INCOMPLETE ({disqualified_reason})"
         }
 
     return strategy_results

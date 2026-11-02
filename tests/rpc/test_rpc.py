@@ -905,6 +905,18 @@ def test_rpc_balance_futures(default_conf_usdt, mocker):
     assert stake_pos["est_stake_bot"] == 990.0
     assert stake_pos["bot_owned"] == 990.0
 
+    # Native account equity is a separate contract from the estimated UI totals.
+    snapshot = {
+        "value": 960.0,
+        "currency": "USDT",
+        "timestamp": 1793660000000,
+        "source": "bybit_wallet_coin_equity",
+    }
+    freqtradebot.exchange.account_equity_snapshot = snapshot
+    result = rpc._rpc_balance("USDT", "USD")
+    assert result["account_equity"] == snapshot
+    assert result["total"] == 1500.0
+
 
 def test_rpc_start(mocker, default_conf) -> None:
     mocker.patch("freqtrade.rpc.telegram.Telegram", MagicMock())
