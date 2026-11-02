@@ -1247,10 +1247,42 @@ class RiskManager:
                     wake_up_locked = self.wake_up_lock
 
                 if in_cooldown_timer:
-                    if self.cycle_count % 5 == 0 or rem_min <= 5:
-                        logger.info(f"⏳ System in DEFENSIVE COOLDOWN: {rem_min}m remaining before re-evaluation.")
-                    time.sleep(CHECK_INTERVAL_SECONDS * LLM_CHECK_INTERVAL_CYCLES)
-                    continue
+                    macro = self.sentiment.macro_monitor.get_metrics()
+                    btc_1h = macro.get("btc_1h_pct") or 0.0
+                    btc_24h = macro.get("btc_24h_pct") or 0.0
+                    fgi_val, _ = self.sentiment.get_fear_and_greed_index()
+                    fgi = fgi_val if fgi_val is not None else 50
+
+                    is_actively_stressed = (
+                        btc_1h <= -2.0
+                        or btc_24h <= -4.5
+                        or macro.get("is_heavy_bear", False)
+                        or macro.get("is_flash_crash", False)
+                        or fgi <= 18
+                    )
+
+                    if is_actively_stressed:
+                        if self.cycle_count % 5 == 0 or rem_min <= 5:
+                            logger.info(
+                                f"⏳ System in DEFENSIVE COOLDOWN: {rem_min}m remaining "
+                                f"(Stress confirmed: BTC 1h={btc_1h:+}%, 24h={btc_24h:+}%, FGI={fgi})."
+                            )
+                        time.sleep(CHECK_INTERVAL_SECONDS * LLM_CHECK_INTERVAL_CYCLES)
+                        continue
+                    else:
+                        logger.info(
+                            f"🟢 Market calm during cooldown (BTC 1h={btc_1h:+}%, 24h={btc_24h:+}%, FGI={fgi}). "
+                            f"Early release from defensive cooldown. Resuming active entries (/start)."
+                        )
+                        with self._state_lock:
+                            self.cooldown_until = None
+                            self.wake_up_lock = False
+                            self.current_regime = "BULL"
+                            self.consecutive_bull_cycles = 0
+                            self._save_state()
+                        self.api_client.start_trading()
+                        time.sleep(CHECK_INTERVAL_SECONDS * LLM_CHECK_INTERVAL_CYCLES)
+                        continue
 
                 # Cooldown timer has elapsed! Query market intelligence OUTSIDE of lock
                 whitelist = self.api_client.get_whitelist()
@@ -1262,6 +1294,9 @@ class RiskManager:
                 flagged_coins = decision.get("flagged_coins", {})
                 macro = self.sentiment.macro_monitor.get_metrics()
                 fgi_val, _ = self.sentiment.get_fear_and_greed_index()
+                fgi = fgi_val if fgi_val is not None else 50
+                btc_1h = macro.get("btc_1h_pct") or 0.0
+                btc_24h = macro.get("btc_24h_pct") or 0.0
 
                 # 1. Targeted Token Defense (EXIT_PAIR)
                 if flagged_coins and isinstance(flagged_coins, dict):
@@ -1290,45 +1325,29 @@ class RiskManager:
 
                 # 3. WAKE-UP LOCK LOGIC (Guarded Cooldown Expiry)
                 if wake_up_locked:
-                    is_safe_bull = (regime == "BULL" and confidence >= 0.80)
-                    is_macro_stable = (macro.get("btc_1h_pct", 0.0) >= -1.0 and macro.get("btc_24h_pct", 0.0) >= -3.5)
-                    is_fgi_stable = (fgi_val > 25)
+                    is_macro_stable = (btc_1h >= -1.5 and btc_24h >= -4.0)
+                    is_fgi_stable = (fgi > 18)
+                    is_safe = is_macro_stable and is_fgi_stable and regime != "PANIC"
 
-                    if not (is_safe_bull and is_macro_stable and is_fgi_stable):
-                        # Wake-up criteria NOT met! Reject wakeup and extend cooldown
-                        extension_min = cooldown_min if cooldown_min > 0 else WAKE_UP_COOLDOWN_MINUTES
+                    if not is_safe:
+                        # Market still actively crashing: extend cooldown by 20m
+                        extension_min = 20
                         with self._state_lock:
                             self.cooldown_until = now + timedelta(minutes=extension_min)
                             self.consecutive_bull_cycles = 0
                             self._save_state()
 
                         logger.warning(
-                            f"🔒 WAKE-UP LOCK REJECTED: Cooldown expired but market remains unsafe "
-                            f"(Regime={regime}, Conf={confidence:.2f}, BTC 1h={macro.get('btc_1h_pct')}%, "
-                            f"BTC 24h={macro.get('btc_24h_pct')}%, FGI={fgi_val}). "
+                            f"🔒 WAKE-UP LOCK EXTENDED: Market remains under heavy stress "
+                            f"(Regime={regime}, BTC 1h={btc_1h:+}%, "
+                            f"BTC 24h={btc_24h:+}%, FGI={fgi}). "
                             f"Extending defensive cooldown by {extension_min}m. Buying remains HALTED."
                         )
-                        # Re-affirm stop buying to be 100% sure Freqtrade is paused
                         self.api_client.stop_buying()
                         time.sleep(CHECK_INTERVAL_SECONDS * LLM_CHECK_INTERVAL_CYCLES)
                         continue
 
-                    # Market evaluated as calm BULL: Enforce HYSTERESIS confirmation
-                    with self._state_lock:
-                        self.consecutive_bull_cycles += 1
-                        curr_confirmations = self.consecutive_bull_cycles
-                        self._save_state()
-
-                    logger.info(
-                        f"⏳ HYSTERESIS CONFIRMATION: Calm cycle {curr_confirmations}/{BULL_CONFIRMATION_CYCLES} recorded "
-                        f"(BTC 1h={macro.get('btc_1h_pct'):+}%, FGI={fgi_val}). Entries remain PAUSED until confirmation completes."
-                    )
-
-                    if curr_confirmations < BULL_CONFIRMATION_CYCLES:
-                        time.sleep(CHECK_INTERVAL_SECONDS * LLM_CHECK_INTERVAL_CYCLES)
-                        continue
-
-                    # Hysteresis requirement achieved! Release Wake-Up Lock and resume trading
+                    # Market is stable: release Wake-Up Lock and resume trading immediately
                     with self._state_lock:
                         self.wake_up_lock = False
                         self.current_regime = "BULL"
@@ -1337,7 +1356,7 @@ class RiskManager:
                         self._save_state()
 
                     logger.info(
-                        f"🟢 WAKE-UP LOCK RELEASED & HYSTERESIS PASSED: {BULL_CONFIRMATION_CYCLES} consecutive calm cycles confirmed. "
+                        f"🟢 WAKE-UP LOCK RELEASED: Market is stable (BTC 1h={btc_1h:+}%, FGI={fgi}). "
                         f"Resuming active trade entries (/start)."
                     )
                     self.api_client.start_trading()
@@ -1346,24 +1365,54 @@ class RiskManager:
 
                 # 4. NORMAL ACTIVE MONITORING (When wake_up_lock is False)
                 if regime == "BEAR":
-                    with self._state_lock:
-                        self.current_regime = "BEAR"
-                        self.wake_up_lock = True
-                        self.cooldown_until = now + timedelta(minutes=cooldown_min)
-                        self.consecutive_bull_cycles = 0
-                        self._save_state()
-
-                    logger.warning(
-                        f"🛡️  PROACTIVE DEFENSE ACTIVATED (BEAR): {reason}\n"
-                        f"    Halting new trade entries for {cooldown_min} minutes. "
-                        f"Existing trades will exit naturally on stops/targets."
+                    is_real_market_stress = (
+                        btc_1h <= -2.5
+                        or btc_24h <= -5.0
+                        or macro.get("is_heavy_bear", False)
+                        or macro.get("is_flash_crash", False)
+                        or fgi <= 15
                     )
-                    self.api_client.stop_buying()
+
+                    if is_real_market_stress:
+                        effective_cooldown = min(30, max(15, cooldown_min))
+                        with self._state_lock:
+                            self.current_regime = "BEAR"
+                            self.wake_up_lock = True
+                            self.cooldown_until = now + timedelta(minutes=effective_cooldown)
+                            self.consecutive_bull_cycles = 0
+                            self._save_state()
+
+                        logger.warning(
+                            f"🛡️  PROACTIVE DEFENSE ACTIVATED (BEAR + Macro Confirmed): {reason}\n"
+                            f"    Market Stress: BTC 1h={btc_1h:+}%, BTC 24h={btc_24h:+}%, FGI={fgi}.\n"
+                            f"    Halting new trade entries for {effective_cooldown}m. Existing trades manage exits naturally."
+                        )
+                        self.api_client.stop_buying()
+                    else:
+                        logger.info(
+                            f"ℹ️ AI Sentinel evaluated BEAR on headlines, but quantitative macro metrics remain stable "
+                            f"(BTC 1h={btc_1h:+}%, BTC 24h={btc_24h:+}%, FGI={fgi}). "
+                            f"Reason: {reason}. Trade entries remain ACTIVE."
+                        )
+                        with self._state_lock:
+                            self.current_regime = "BULL"
+                            self.consecutive_bull_cycles = 0
+
+                        # Auto-heal: verify bot is running
+                        bot_state = self.api_client.get_bot_state()
+                        if bot_state == "paused":
+                            logger.info("🟢 Bot was paused; resuming active trading (/start).")
+                            self.api_client.start_trading()
 
                 elif regime == "BULL":
-                    # Normal market, no change needed. Reset any partial counters
                     with self._state_lock:
                         self.consecutive_bull_cycles = 0
+
+                    # Auto-heal: verify bot is running
+                    bot_state = self.api_client.get_bot_state()
+                    if bot_state == "paused":
+                        logger.info("🟢 Bot was paused during normal BULL regime; resuming active trading (/start).")
+                        self.api_client.start_trading()
 
                 time.sleep(CHECK_INTERVAL_SECONDS * LLM_CHECK_INTERVAL_CYCLES)
 
