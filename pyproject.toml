@@ -200,6 +200,8 @@ exclude = [
   "build_helpers/*.py",
   "ft_client/build/*",
   "build/*",
+  "user_data/**",
+  "freqtrade/vendor/**",
 ]
 ignore = ["freqtrade/vendor/**"]
 pythonPlatform = "All"
@@ -234,7 +236,7 @@ ccxt = false
 
 [tool.ruff]
 line-length = 100
-extend-exclude = [".env", ".venv"]
+extend-exclude = [".env", ".venv", "user_data", "freqtrade/vendor", "build"]
 
 [tool.ruff.lint]
 extend-select = [
