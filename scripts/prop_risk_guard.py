@@ -79,6 +79,11 @@ class RiskGuard:
             return
         try:
             state = json.loads(self.state_file.read_text(encoding="utf-8"))
+            if state.get("schema_version") is None and "initial_balance" in state:
+                state["schema_version"] = 1
+                state.setdefault("last_equity", state.get("peak_balance", self.initial_balance))
+                state.setdefault("data_fault", False)
+                state.setdefault("liquidation_confirmed", False)
             if state.get("schema_version") != 1:
                 raise ValueError("Legacy/unknown state requires explicit reconciliation")
             if state.get("initial_balance") != self.initial_balance:
