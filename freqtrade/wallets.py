@@ -11,6 +11,7 @@ from freqtrade.exceptions import DependencyException
 from freqtrade.exchange import Exchange
 from freqtrade.misc import safe_value_fallback
 from freqtrade.persistence import LocalTrade, Trade, WalletHistory
+from freqtrade.prop_capital import prop_capital_available
 from freqtrade.util import dt_floor_day, dt_now
 
 
@@ -319,6 +320,12 @@ class Wallets:
         (<open_trade stakes> + free amount) * tradable_balance_ratio - <open_trade stakes>
         """
 
+        if (
+            self._config.get("prop_guard_enabled")
+            and not self._is_backtest
+            and not prop_capital_available(self._config["user_data_dir"], dt_now())
+        ):
+            return 0.0
         free = self.get_free(self._stake_currency)
         return min(self.get_total_stake_amount() - Trade.total_open_trades_stakes(), free)
 

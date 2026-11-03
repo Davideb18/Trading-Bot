@@ -3,7 +3,7 @@
     "max_open_trades": 3,
     "stake_currency": "USDT",
     "stake_amount": "unlimited",
-    "tradable_balance_ratio": 0.24,
+    "tradable_balance_ratio": 0.02,
     "max_stake_amount": 50000,
     "fiat_display_currency": "USD",
     "timeframe": "5m",
@@ -72,7 +72,38 @@
                 "fetchCurrencies": false
             }
         },
-        "pair_whitelist": [],
+        "pair_whitelist": [
+            "BTC/USDT:USDT",
+            "ETH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "XRP/USDT:USDT",
+            "DOGE/USDT:USDT",
+            "ADA/USDT:USDT",
+            "AVAX/USDT:USDT",
+            "LINK/USDT:USDT",
+            "DOT/USDT:USDT",
+            "LTC/USDT:USDT",
+            "BCH/USDT:USDT",
+            "TRX/USDT:USDT",
+            "ATOM/USDT:USDT",
+            "NEAR/USDT:USDT",
+            "UNI/USDT:USDT",
+            "AAVE/USDT:USDT",
+            "ETC/USDT:USDT",
+            "FIL/USDT:USDT",
+            "ARB/USDT:USDT",
+            "OP/USDT:USDT",
+            "SUI/USDT:USDT",
+            "APT/USDT:USDT",
+            "INJ/USDT:USDT",
+            "ICP/USDT:USDT",
+            "ALGO/USDT:USDT",
+            "RUNE/USDT:USDT",
+            "CRV/USDT:USDT",
+            "GALA/USDT:USDT",
+            "SAND/USDT:USDT",
+            "IMX/USDT:USDT"
+        ],
         "pair_blacklist": [
             "(GLMR|ICX|MOVR|SOPH)/.*",
             "(LSK|STX)/.*",
@@ -100,14 +131,14 @@
     },
     "pairlists": [
         {
-            "method": "VolumePairList",
-            "number_assets": 40,
-            "sort_key": "quoteVolume",
-            "min_value": 25000000,
-            "refresh_period": 1800
+            "method": "StaticPairList"
         },
         {
-            "method": "FullTradesFilter"
+            "method": "VolumePairList",
+            "number_assets": 30,
+            "sort_key": "quoteVolume",
+            "min_value": 5000000,
+            "refresh_period": 1800
         },
         {
             "method": "DelistFilter"
@@ -118,19 +149,7 @@
         },
         {
             "method": "SpreadFilter",
-            "max_spread_ratio": 0.003
-        },
-        {
-            "method": "RangeStabilityFilter",
-            "lookback_days": 3,
-            "min_rate_of_change": 0.03,
-            "max_rate_of_change": 0.85,
-            "refresh_period": 1800
-        },
-        {
-            "method": "VolumePairList",
-            "number_assets": 30,
-            "sort_key": "quoteVolume"
+            "max_spread_ratio": 0.001
         }
     ],
     "nfi_parameters": {
@@ -160,7 +179,6 @@
     "internals": {
         "process_throttle_secs": 5
     },
-    "stoploss": -0.06,
-    "position_adjustment_enable": false,
-    "max_entry_position_adjustment": 0
+    "position_adjustment_enable": true,
+    "prop_guard_enabled": true
 }

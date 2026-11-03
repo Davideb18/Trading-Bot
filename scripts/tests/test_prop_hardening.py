@@ -3,7 +3,6 @@
 import importlib.util
 import json
 import math
-import random
 import sys
 import tempfile
 import time
@@ -214,6 +213,35 @@ class StrategyTests(unittest.TestCase):
         }
         self.s.is_futures_mode = True
 
+    def test_native_dca_and_sizing_are_restored(self):
+        import ast
+
+        def methods(path):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            cls = next(n for n in tree.body if isinstance(n, ast.ClassDef))
+            return {
+                n.name: ast.dump(n, include_attributes=False)
+                for n in cls.body
+                if isinstance(n, ast.FunctionDef)
+            }
+
+        directory = ROOT / "user_data/strategies"
+        native = methods(directory / "NostalgiaForInfinityX8.py")
+        prop = methods(directory / "NostalgiaForInfinityX8_Prop.py")
+        for name in (
+            "custom_stake_amount",
+            "adjust_trade_position",
+            "custom_exit",
+            "populate_indicators",
+            "populate_entry_trend",
+            "populate_exit_trend",
+        ):
+            self.assertEqual(native[name], prop[name], name)
+        self.assertTrue(self.s.position_adjustment_enable)
+        self.assertTrue(self.s.grinding_enable)
+        self.assertEqual(self.s.stoploss, -0.99)
+        self.assertEqual(self.s.max_entry_position_adjustment, -1)
+
     def test_leverage_ignores_every_override(self):
         for value in (0, -1, 100, None, math.nan, "bad"):
             self.s.futures_mode_leverage = value
@@ -221,22 +249,34 @@ class StrategyTests(unittest.TestCase):
             for tag in (None, "", "61", "120", "1"):
                 self.assertEqual(self.s.leverage("BTC", NOW, 1, value, value, tag, "long"), 1.0)
 
-    def test_10000_random_sizing_cases(self):
-        rng = random.Random(20261102)  # noqa: S311 - reproducible adversarial inputs, not secrets
-        for _ in range(10000):
-            proposed, minimum, maximum = [rng.uniform(0, 1000) for _ in range(3)]
-            stake = self.s.custom_stake_amount(
-                "BTC", NOW, 1, proposed, minimum, maximum, 1, None, "long"
-            )
-            self.assertLessEqual(stake, min(400, proposed, maximum))
-            self.assertTrue(stake == 0 or stake >= minimum)
-
-    def test_minimum_never_forces_oversize(self):
-        self.assertEqual(
-            self.s.custom_stake_amount("BTC", NOW, 1, 400, 401, 5000, 1, None, "long"), 0
+    def test_runtime_profile_requires_wallet_gate_and_native_dca(self):
+        self.s.config.update(
+            trading_mode="futures",
+            margin_mode="isolated",
+            max_open_trades=3,
+            tradable_balance_ratio=0.02,
+            prop_guard_enabled=True,
+            runmode=SimpleNamespace(value="dry_run"),
         )
-        self.assertEqual(self.s.correct_min_stake(None, 0), 5)
-        self.assertEqual(self.s.adjust_trade_position(None, NOW, 1, -0.2, 1, 5000), None)
+        self.s.order_types = {
+            "stoploss": "market",
+            "force_exit": "market",
+            "stoploss_on_exchange": True,
+        }
+        self.s.bot_start()
+        for key, value in (
+            ("available_capital", 5000),
+            ("tradable_balance_ratio", 0.24),
+            ("prop_guard_enabled", False),
+        ):
+            original = self.s.config.copy()
+            self.s.config[key] = value
+            with self.assertRaises(ValueError):
+                self.s.bot_start()
+            self.s.config = original
+        self.s.position_adjustment_enable = False
+        with self.assertRaises(ValueError):
+            self.s.bot_start()
 
     def test_safety_exits_bypass_hold_and_profit_filters(self):
         for reason in (
@@ -250,10 +290,7 @@ class StrategyTests(unittest.TestCase):
                 self.s.confirm_trade_exit("BTC", None, "market", 1, 1, "GTC", reason, NOW)
             )
 
-    def test_actual_order_value_checked_even_for_force_entry(self):
-        self.assertFalse(
-            self.s.confirm_trade_entry("BTC", "limit", 401, 1, "GTC", NOW, "force_entry", "long")
-        )
+    def test_short_orders_rejected_even_for_force_entry(self):
         self.assertFalse(
             self.s.confirm_trade_entry("BTC", "limit", 1, 1, "GTC", NOW, "force_entry", "short")
         )
@@ -300,7 +337,101 @@ class StrategyTests(unittest.TestCase):
             self.assertEqual(first, minutes // 5 - 1)
 
 
+class WalletCapitalGateTests(unittest.TestCase):
+    def test_stale_supervisor_blocks_dca_capital_without_changing_strategy(self):
+        from freqtrade.wallets import Wallets
+
+        with tempfile.TemporaryDirectory(dir=ROOT / "user_data/forensic") as temp:
+            wallet = Wallets.__new__(Wallets)
+            wallet._config = {"prop_guard_enabled": True, "user_data_dir": temp}
+            wallet._is_backtest = False
+            wallet._stake_currency = "USDT"
+            wallet.get_free = MagicMock(return_value=5000)
+            wallet.get_total_stake_amount = MagicMock(return_value=100)
+            path = Path(temp) / "risk_manager_prop_state.json"
+            state = {
+                "schema_version": 1,
+                "last_updated": NOW.isoformat(),
+                "nuclear_triggered": False,
+                "data_fault": False,
+                "wake_up_lock": False,
+            }
+            with (
+                patch("freqtrade.wallets.dt_now", return_value=NOW),
+                patch("freqtrade.wallets.Trade.total_open_trades_stakes", return_value=40),
+            ):
+                self.assertEqual(wallet.get_available_stake_amount(), 0)
+                path.write_text(json.dumps(state))
+                self.assertEqual(wallet.get_available_stake_amount(), 60)
+                for change in (
+                    {"last_updated": (NOW - timedelta(seconds=16)).isoformat()},
+                    {"last_updated": (NOW + timedelta(seconds=1)).isoformat()},
+                    {"nuclear_triggered": True},
+                    {"data_fault": True},
+                    {"wake_up_lock": True},
+                ):
+                    path.write_text(json.dumps(state | change))
+                    self.assertEqual(wallet.get_available_stake_amount(), 0)
+                wallet._is_backtest = True
+                self.assertEqual(wallet.get_available_stake_amount(), 60)
+                wallet._is_backtest = False
+                wallet._config["prop_guard_enabled"] = False
+                self.assertEqual(wallet.get_available_stake_amount(), 60)
+
+
 class EquityReconstructionTests(unittest.TestCase):
+    def test_dca_partial_exit_funding_and_pair_outside_original_three(self):
+        import pandas as pd
+        from forensic_prop_validation import equity_metrics
+
+        with tempfile.TemporaryDirectory(dir=ROOT / "user_data/forensic") as temp:
+            directory = Path(temp) / "futures"
+            directory.mkdir()
+            dates = pd.date_range("2024-01-01", periods=4, freq="5min", tz="UTC")
+            pd.DataFrame({"date": dates, "close": [100, 80, 90, 100]}).to_feather(
+                directory / "AVAX_USDT_USDT-5m-futures.feather"
+            )
+            stamps = [int(d.timestamp() * 1000) for d in dates]
+            orders = [
+                {
+                    "amount": q,
+                    "safe_price": price,
+                    "ft_is_entry": entry,
+                    "order_filled_timestamp": stamp,
+                }
+                for q, price, entry, stamp in zip(
+                    [2, 2, 1, 3],
+                    [100, 80, 90, 100],
+                    [True, True, False, False],
+                    stamps,
+                    strict=True,
+                )
+            ]
+            summary = {
+                "starting_balance": 5000,
+                "backtest_start_ts": stamps[0],
+                "backtest_end_ts": stamps[-1],
+                "trades": [
+                    {
+                        "pair": "AVAX/USDT:USDT",
+                        "amount": 3,
+                        "leverage": 1,
+                        "is_short": False,
+                        "fee_open": 0,
+                        "fee_close": 0,
+                        "close_timestamp": stamps[-1],
+                        "profit_abs": 29,
+                        "orders": orders,
+                    }
+                ],
+            }
+            result = equity_metrics(summary, temp)
+            self.assertAlmostEqual(result["max_daily_dd_pct"], 0.8)
+            self.assertAlmostEqual(result["max_trailing_dd_pct"], 0.8)
+            self.assertAlmostEqual(result["net_profit_pct"], 0.58)
+            self.assertAlmostEqual(result["max_entry_principal_committed_usdt"], 360)
+            self.assertAlmostEqual(result["max_marked_exposure_usdt"], 320)
+
     def test_floating_loss_is_visible_even_when_trade_closes_flat(self):
         import pandas as pd
         from forensic_prop_validation import equity_metrics

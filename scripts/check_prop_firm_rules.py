@@ -15,7 +15,7 @@ def main():
     )
     args = parser.parse_args()
     metrics = equity_metrics(load_result(args.result), args.data_dir)
-    breached = metrics["max_daily_dd_pct"] >= 2.5 or metrics["max_trailing_dd_pct"] >= 3.8
+    breached = metrics["max_daily_dd_pct"] >= 2.5 or metrics["max_trailing_dd_pct"] >= 3.5
     metrics["verdict"] = "SAMPLED_LIMIT_EXCEEDED" if breached else "NO_BREACH_AT_SAMPLED_CLOSES"
     metrics["full_stack_certified"] = False
     print(json.dumps(metrics, indent=2, allow_nan=False))

@@ -75,7 +75,7 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
   def version(self) -> str:
     return "v18.0.124"
 
-  stoploss = -0.06
+  stoploss = -0.99
 
   # Trailing stoploss (not used)
   trailing_stop = False
@@ -279,11 +279,11 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
   rebuy_mode_min_free_slots = 2
 
   # Position adjust feature
-  position_adjustment_enable = False
-  max_entry_position_adjustment = 0
+  position_adjustment_enable = True
+  max_entry_position_adjustment = -1
 
   # Grinding feature
-  grinding_enable = False
+  grinding_enable = True
   derisk_enable = True
   stops_enable = True
   doom_stops_enable = True
@@ -2463,41 +2463,28 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
   # Custom Stake Amount
   # ---------------------------------------------------------------------------------------------
   def bot_start(self, **kwargs) -> None:
-    """Reject overrides which would weaken the audited prop profile."""
+    """Validate the research profile; this is not a profitability certification."""
     if (self.config.get("trading_mode") != "futures"
         or self.config.get("margin_mode") != "isolated"
-        or not 0 < self.config.get("max_open_trades", 0) <= 3
+        or not 0 < self.config.get("max_open_trades", 0) <= 4
         or not 0 < self.config.get("tradable_balance_ratio", 0) <= 0.24
-        or self.position_adjustment_enable
+        or "available_capital" in self.config
+        or not self.position_adjustment_enable
+        or self.max_entry_position_adjustment != -1
+        or not self.grinding_enable
         or self.can_short
-        or not -0.06 <= self.stoploss < 0
+        or self.stoploss != -0.99
         or (self.config["runmode"].value in ("live", "dry_run")
-            and not self.order_types.get("stoploss_on_exchange"))
+            and (not self.order_types.get("stoploss_on_exchange")
+                 or not self.config.get("prop_guard_enabled")
+                 or self.config.get("tradable_balance_ratio", 0) > 0.02))
         or self.order_types.get("stoploss") != "market"
         or self.order_types.get("force_exit") != "market"
         or self.bad_trade_controller_structure_break_exit_enable):
       raise ValueError("Unsafe override of the forensic prop risk profile")
 
-  def _prop_slot_cap(self) -> float:
-    # get_total_stake_amount already includes tradable_balance_ratio.
-    try:
-      budget = self.wallets.get_total_stake_amount()
-      return min(400.0, budget / 3.0) if math.isfinite(budget) and budget > 0 else 0.0
-    except (TypeError, ValueError, AttributeError, RuntimeError):
-      return 0.0
 
-  def custom_stake_amount(self, pair, current_time, current_rate, proposed_stake,
-                          min_stake, max_stake, leverage, entry_tag, side, **kwargs) -> float:
-    if side != "long" or leverage != 1.0:
-      return 0.0
-    values = (proposed_stake, max_stake, min_stake if min_stake is not None else 0.0)
-    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0
-           for v in values):
-      return 0.0
-    stake = min(proposed_stake, max_stake, self._prop_slot_cap())
-    return stake if min_stake is None or stake >= min_stake else 0.0
-
-  def _nfi_custom_stake_amount(
+  def custom_stake_amount(
     self,
     pair: str,
     current_time: datetime,
@@ -2631,6 +2618,7 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
 
     return proposed_stake
 
+
   # Order filled Callback
   # ---------------------------------------------------------------------------------------------
   def order_filled(self, pair: str, trade: Trade, order: Order, current_time: datetime, **kwargs) -> None:
@@ -2735,12 +2723,7 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
 
   # Adjust Trade Position
   # ---------------------------------------------------------------------------------------------
-  def adjust_trade_position(self, trade, current_time, current_rate, current_profit,
-                            min_stake, max_stake, **kwargs):
-    """No averaging down or additional exposure, including after config overrides."""
-    return None
-
-  def _nfi_adjust_trade_position(
+  def adjust_trade_position(
     self,
     trade: Trade,
     current_time: datetime,
@@ -2944,6 +2927,7 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
         return self.short_grind_adjust_trade_position_v2(*args)
 
     return None
+
 
   def notification_msg(
     self,
@@ -5367,8 +5351,6 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
     if (side != "long" or any(isinstance(v, bool) or not isinstance(v, (float, int))
         or not math.isfinite(v) or v <= 0 for v in (amount, rate))):
       return False
-    if amount * rate > self._prop_slot_cap() + 1e-8:
-      return False
     if self.config["runmode"].value in ("live", "dry_run"):
       try:
         state_path = pathlib.Path(self.config["user_data_dir"]) / "risk_manager_prop_state.json"
@@ -5381,7 +5363,7 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
           return False
       except (OSError, ValueError, KeyError, TypeError):
         return False
-    # Force Entry still passes the capital and sentinel checks above.
+    # Wallet validation applies the capital budget; this gate checks the supervisor.
     if entry_tag == "force_entry":
       return True
 

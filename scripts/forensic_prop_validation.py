@@ -72,7 +72,7 @@ def load_result(path):
     raise ValueError(f"No strategy result in {path}")
 
 
-def equity_metrics(summary, data_dir):
+def equity_metrics(summary, data_dir, return_curve=False):
     """Reprice filled order inventory at 5m closes, including partial fills/DCA.
 
     For 1x longs, cashflows plus inventory reproduce futures equity. Closing
@@ -85,14 +85,16 @@ def equity_metrics(summary, data_dir):
     end = pd.to_datetime(summary["backtest_end_ts"], unit="ms", utc=True)
     index = pd.date_range(start, end, freq="5min", inclusive="both")
     cash_events = np.zeros(len(index))
-    quantities = {pair: np.zeros(len(index)) for pair in PAIRS}
+    quantities = {trade["pair"]: np.zeros(len(index)) for trade in summary["trades"]}
     slippage_cost = np.zeros(len(index))
+    principal_events = np.zeros(len(index))
     trades = summary["trades"]
     for trade in trades:
         if trade.get("is_short") or trade.get("leverage", 1) != 1:
             raise ValueError("Equity reconstruction only supports the audited 1x long profile")
         flow = 0.0
         remaining = 0.0
+        principal = 0.0
         for order in trade["orders"]:
             stamp = pd.to_datetime(order["order_filled_timestamp"], unit="ms", utc=True)
             loc = int(index.searchsorted(stamp))
@@ -107,6 +109,9 @@ def equity_metrics(summary, data_dir):
             cash_events[loc] += cash
             quantities[trade["pair"]][loc] += signed_qty
             slippage_cost[loc] += qty * price
+            change = qty * price if entry else -principal * qty / remaining
+            principal_events[loc] += change
+            principal += change
             remaining += signed_qty
             flow += cash
         if abs(remaining) > max(1e-6, float(trade["amount"]) * 1e-6):
@@ -117,6 +122,7 @@ def equity_metrics(summary, data_dir):
         cash_events[close_loc] += float(trade["profit_abs"]) - flow
 
     equity = initial + np.cumsum(cash_events)
+    marked_exposure = np.zeros(len(index))
     for pair, events in quantities.items():
         if not np.any(events):
             continue
@@ -126,7 +132,9 @@ def equity_metrics(summary, data_dir):
         holdings = np.cumsum(events)
         if prices[abs(holdings) > 1e-8].isna().any():
             raise ValueError(f"Missing candle while exposed: {pair}")
-        equity += holdings * prices.fillna(0).to_numpy()
+        value = holdings * prices.fillna(0).to_numpy()
+        marked_exposure += value
+        equity += value
     if abs(equity[-1] - (initial + sum(t["profit_abs"] for t in trades))) > 0.02:
         raise ValueError("Reconstructed terminal equity does not reconcile")
 
@@ -134,9 +142,11 @@ def equity_metrics(summary, data_dir):
         curve = pd.Series(values, index=index)
         # Previous close is the observable approximation of UTC day opening equity.
         day_open = curve.shift(1).fillna(initial).groupby(curve.index.date).transform("first")
+        day_peak = np.maximum(day_open, curve.groupby(curve.index.date).cummax())
         peak = np.maximum.accumulate(np.r_[initial, values])[1:]
         return {
             "max_daily_dd_pct": float(max(0, ((day_open - curve) / initial).max()) * 100),
+            "max_intraday_peak_dd_pct": float(((day_peak - curve) / initial).max() * 100),
             "max_trailing_dd_pct": float(((peak - values) / initial).max() * 100),
             "net_profit_pct": float((values[-1] / initial - 1) * 100),
         }
@@ -157,11 +167,15 @@ def equity_metrics(summary, data_dir):
         else None,
         equity_basis="5m close inventory reconstruction, funding reconciled at trade close",
         account_sentinel_simulated=False,
+        max_entry_principal_committed_usdt=float(np.cumsum(principal_events).max()),
+        max_marked_exposure_usdt=float(marked_exposure.max()),
     )
     result["slippage_sensitivity"] = {
         str(slip): drawdowns(equity - np.cumsum(slippage_cost) * slip)
         for slip in (0.001, 0.002, 0.003)
     }
+    if return_curve:
+        return result, index, equity, np.cumsum(slippage_cost)
     return result
 
 
