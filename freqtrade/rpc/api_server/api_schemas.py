@@ -74,7 +74,15 @@ class Balance(BaseModel):
     is_bot_managed: bool
 
 
+class AccountEquity(BaseModel):
+    value: float
+    currency: str
+    timestamp: int
+    source: str
+
+
 class Balances(BaseModel):
+    account_equity: AccountEquity | None = None
     currencies: list[Balance]
     total: float
     total_bot: float

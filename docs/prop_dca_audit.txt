@@ -1,0 +1,81 @@
+AUDIT DCA NFIX8 / HYROTRADER 5K - 3 NOVEMBRE 2026
+Branch: feature/prop-firm-forensic-hardening. Base: 7c9394141 e bc78e86f2.
+VERDETTO: NO-GO. Nessuna delle sette configurazioni provate soddisfa insieme sicurezza, target in 15-45 giorni e inattivita massima.
+
+CONFIGURAZIONE LASCIATA NEL REPOSITORY (RICERCA, NON RILASCIO)
+user_data/config_prop_nfix8.json: dry_run=true; initial_state=stopped; futures isolated, long-only, leva costante 1x; max_open_trades=3; stake_amount=unlimited; tradable_balance_ratio=0.02; prop_guard_enabled=true.
+Universo ammesso: BTC ETH SOL XRP DOGE ADA AVAX LINK DOT LTC BCH TRX ATOM NEAR UNI AAVE ETC FIL ARB OP SUI APT INJ ICP ALGO RUNE CRV GALA SAND IMX. Tutte coppie USDT perpetual Bybit.
+La StaticPairList delimita questi 30 simboli; VolumePairList li ordina dinamicamente (massimo 30, volume quotato minimo 5 milioni USDT/24h, aggiornamento 1800s), con DelistFilter, anzianita minima 60 giorni e spread massimo 0.1%. Il test pubblico finale seleziona 23 coppie. Non sono state inviate operazioni di trading.
+Lo snapshot dei book verifica la liquidita attuale, NON quella del 2024. I filtri dinamici non sono stati ricostruiti storicamente: le metriche seguenti riguardano universi statici esplicitamente dichiarati.
+
+STRATEGIA E CAPITALE
+Il file originale NostalgiaForInfinityX8.py resta intatto. Nella variante Prop sono ripristinati integralmente custom_stake_amount e adjust_trade_position; DCA e grinding attivi, nessun limite artificiale ai rebuy. Stoploss di emergenza originale -0.99 e uscite dinamiche originali: la strategia originale ha use_custom_stoploss=False, non uno stop percentuale dinamico tramite quel callback.
+I test AST verificano identita dei metodi di sizing, DCA, custom_exit, indicatori e segnali rispetto al file originale. Rimangono leva forzata 1x, divieto short e controlli operativi.
+Budget iniziale: 5000 * 0.02 = 100 USDT complessivi, non per posizione. Con tre slot il proposed_stake iniziale e circa 33.33 USDT; il sizing originale lo adatta al tipo di segnale. Il wallet applica il budget anche ai DCA. Non si suppone un numero fisso di rebuy.
+Nel replay selezionato il massimo capitale di ingresso contemporaneamente impegnato e 101.72 USDT, il massimo controvalore mark-to-market a chiusura 5m 109.06 USDT. Il budget cresce con il saldo: 100 non e un tetto monetario perpetuo.
+Non esiste qui una prova di ottimalita globale. Il profilo a 30 coppie/3 slot e il miglior rendimento H1 tra quelli al 2% provati (1.2536%), con maggiore copertura rispetto al campione a 20. La variante con stake fisso 10 lascia piu riserva DCA ma produce meno rendimento.
+Il ratio limita il capitale impegnabile, NON il drawdown cumulativo. Due perdite integrali successive del 2% lasciano 5000*(0.98)^2=4802: perdita 198 USDT, 3.96%, superiore al target trailing 3.5%. Anche profitti aperti poi restituiti e costi influenzano il drawdown. Non viene promessa una garanzia matematica del rischio di conto.
+Il supervisore continua a imporre le soglie interne (daily intraday-peak 2%, trailing 3.5%). Il polling e le uscite di mercato non garantiscono il prezzo di esecuzione nei gap. Il supervisore NON e simulato nei replay.
+Correzione operativa: Freqtrade chiama confirm_trade_entry solo per gli ingressi iniziali. Ora il wallet azzera il capitale disponibile per nuovi acquisti, inclusi DCA, se heartbeat manca, e vecchio oltre 15s, futuro, corrotto o bloccato. Le riduzioni di posizione restano consentite. Il gate e attivo solo nel profilo opt-in, fuori dai backtest.
+
+METRICHE EMPIRICHE - 2024 COMPLETO
+Periodo: 01/01/2024 00:00 - 31/12/2024 23:55 UTC. Saldo iniziale 5000 USDT. Fee 0.055% per eseguito su entrambi i lati, funding storico Bybit. DCA e uscite parziali inclusi.
+Profilo                  Coppie Slot Budget  Trade  WR%     PF      Netto% DailyDD% TrailDD% Gap eseguiti/giorni
+safe_2                   20    2     2.0%    75  97.33   12.85    1.916    0.272    0.420    51.899
+safe_3                   20    3     2.0%    96  97.92   14.96    1.580    0.266    0.369    51.899
+safe_4                   20    4     2.0%   110  98.18   11.43    1.334    0.273    0.363    51.899
+diagnostic_10pct         20    3    10.0%    90  98.89   16.62    7.675    1.372    1.901    51.899
+diagnostic_24pct         20    3    24.0%    91  98.90   16.85   19.919    3.501    4.847    51.899
+wide_30                  30    3     2.0%   115  98.26   18.40    1.969    0.339    0.385    35.226
+reserve_30               30    3     2.0%   123 100.00     n/d    0.792    0.159    0.183    35.226
+
+PF n/d significa assenza di perdite nel campione, non redditivita infinita. Le varianti condividono date e segnali: i trade NON vanno sommati come osservazioni indipendenti.
+Profilo scelto: 115 trade, 17 con DCA. H1 +1.254%, H2 +0.716%. Solo due trade perdenti rendono il PF elevato poco robusto come stima futura.
+Finestre del percorso annuale, con posizioni e capitale riportati dal periodo precedente (non nuovi conti indipendenti):
+april_crash: netto 0.008%; daily DD 0.339%; trailing DD locale 0.385%.
+august_crash: netto 0.032%; daily DD 0.266%; trailing DD locale 0.325%.
+june_july: netto 0.258%; daily DD 0.037%; trailing DD locale 0.073%.
+
+SENSIBILITA AI COSTI / PROFILO 30 COPPIE
+Slippage aggiuntivo per ogni eseguito, inclusi rebuy e uscite parziali. E un addebito sul percorso esportato: NON simula code, riempimenti mancati o decisioni DCA modificate dai nuovi prezzi.
+0.0%: netto 1.969%, WR 98.26%, PF 18.40, daily DD 0.339%, trailing DD 0.385%, miglior 45 giorni 0.612%.
+0.1%: netto 1.835%, WR 93.91%, PF 16.58, daily DD 0.341%, trailing DD 0.389%, miglior 45 giorni 0.574%.
+0.2%: netto 1.701%, WR 90.43%, PF 14.24, daily DD 0.343%, trailing DD 0.393%, miglior 45 giorni 0.536%.
+0.3%: netto 1.567%, WR 83.48%, PF 11.55, daily DD 0.345%, trailing DD 0.397%, miglior 45 giorni 0.498%.
+
+TEMPI E INATTIVITA
+Nel profilo prudente +8%, +5% e +10% non sono raggiunti nei 366 giorni osservati. Migliore finestra di 45 giorni: +0.612% base, +0.498% con costo aggiuntivo 0.3%. Zero finestre su 321 raggiungono +8%; le finestre sono sovrapposte e non prove indipendenti.
+Non e stimabile in modo affidabile un tempo futuro di completamento. Il dato reale e: non raggiunto in un anno. Una semplice estrapolazione lineare del profitto annuale darebbe circa 1487 giorni per +8%, ma NON e una previsione e ignora cambi di regime e squalifica per inattivita.
+Il profilo al 24% raggiunge +8% in 143.85 giorni (158.82 con costo aggiuntivo 0.3%), ma supera i target di sicurezza: daily 3.50% e trailing 4.85%, peggiori sotto stress. Una sola finestra mobile di 45 giorni raggiunge 8% base; nessuna sotto stress 0.3%. Non rappresenta un passaggio della challenge.
+Il profilo a 30 coppie resta senza alcun eseguito dal 18 giugno 10:05 al 23 luglio 15:30 UTC: 35.226 giorni. Nel periodo il portafoglio e flat, quindi il blocco non e dovuto a capitale occupato dai DCA. Anche la variante a riserva mantiene il gap di 35.226 giorni. Non e rispettato ne il target 10-15 giorni ne il limite di 30 giorni.
+
+QUALITA E LIMITI DELLA PROVA
+210 file Bybit per 30 coppie, 4,484,160 candele 5m, nessun gap/duplicato nelle griglie OHLCV scaricate. Informative 15m/1h/4h aggregate solo da candele 5m complete; daily, mark 1h e funding da endpoint pubblici. Dati di warm-up precedenti al 2024. Manifest con SHA256, estremi e conteggi nel JSON allegato.
+Equity ricostruita dagli eseguiti e rivalutata alle chiusure 5m, con riconciliazione del saldo finale entro 0.02 USDT. Funding attribuito alla chiusura del trade. Daily DD rispetto all equity campionata di inizio giorno UTC; trailing DD rispetto al massimo precedente, entrambi /5000. Il JSON contiene anche il drawdown dal picco intraday usato dal supervisore.
+Queste stime non certificano drawdown intrabar/tick o mark-price reale. Il drawdown sui soli trade chiusi sarebbe fuorviante: la variante reserve_30 mostra zero perdite chiuse ma DD floating 0.183%.
+Universo scelto retrospettivamente, sopravvivenza/listing e versione strategia 2026 applicata al 2024; metadati e minimi di ordine sono quelli attuali. La selezione aggiuntiva delle 30 coppie avviene dopo il primo replay: H2 e un controllo retrospettivo, non un out-of-sample completamente intatto. Non e stato completato un audit lookahead integrale della strategia. Nessuna certificazione forward/live.
+Bootstrap a blocchi mobili di sette giorni, 2000 repliche e seed fisso nel JSON: intervallo descrittivo del PnL giornaliero, non probabilita di passare la challenge. Nessuna frequenza di successo inventata.
+I risk tier aggregati Bybit omettevano XRP/TRX/UNI; recuperati con endpoint pubblici per simbolo. Il runner riproduce questo recupero senza inventare tier. Book e ticker attuali salvati separatamente.
+
+REGOLE HYROTRADER VERIFICATE IL 3 NOVEMBRE 2026
+Le FAQ attuali indicano target 10% Step 1 e 5% Step 2, daily statico 5% dell iniziale con riferimento all equity di mezzanotte UTC e inattivita 30 giorni. Rimangono nell analisi anche il target 8% e il trailing 8% richiesti dall utente, con safety target piu stretti: non sono presentati come termini contrattuali verificati dell account specifico.
+La regola attuale di distribuzione limita al 40% del target il contributo di un singolo giorno. Martingale e vietata; la FAQ la definisce come raddoppio dopo trade perdenti. Questo non consente di classificare automaticamente ogni DCA come ammesso o vietato; l accettazione del comportamento specifico NFI non e certificata.
+https://www.hyrotrader.com/faq/getting-started/how-to-start/
+https://www.hyrotrader.com/faq/rules/what-is-the-difference-between-standard-trailing-and-swing-fixed-daily-drawdown/
+https://www.hyrotrader.com/faq/rules/do-you-have-an-inactivity-rule/
+https://www.hyrotrader.com/faq/rules/what-are-the-risk-management-conditions-at-hyrotrader/
+https://www.bybit.com/en/help-center/article/FAQ-USDT-Perpetual-and-Expiry-Contracts?category=4d5d8649cba144c1a8
+
+VERIFICA E RIPRODUZIONE
+26 test prop passati, 45 test wallet passati. Lint sui nuovi moduli e sugli script modificati passato; wallets.py ha due avvisi lint preesistenti non relativi alla patch. git diff --check passato. Test-pairlist pubblico passato: 23 coppie al momento del controllo.
+Con .venv/Scripts/python.exe -X utf8:
+  scripts/prop_dca_market_data.py --liquidity
+  scripts/prop_dca_market_data.py --config research30.json --manifest data_manifest_30.json
+  scripts/prop_dca_study.py
+  scripts/prop_dca_study.py --summarize
+  -m unittest discover -s scripts/tests -p test_prop_hardening.py -v
+  -m pytest tests/test_wallets.py -q --override-ini addopts=
+I raw ZIP, log, configurazioni per run e curve equity sono in user_data/forensic/dca_validation; sono ignorati da Git. docs/prop_dca_results.json conserva metriche, manifest, snapshot e hash degli archivi. I dati pubblici richiedono rete; nessun comando di trading e previsto.
+
+DECISIONE
+NO-GO per HyroTrader 5K nelle condizioni richieste. Il ripristino della strategia e la redditivita positiva del replay non risolvono il target temporale e l inattivita. Nessun capitale reale o challenge e stato attivato. Il profilo finale e una base prudente di ricerca, non una configurazione dichiarata ottimale o pronta alla challenge.

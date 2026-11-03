@@ -1,0 +1,3 @@
+# Keep the audited RPC and wallet implementation with the strategy.
+FROM freqtradeorg/freqtrade:stable
+COPY --chown=ftuser:ftuser freqtrade /freqtrade/freqtrade

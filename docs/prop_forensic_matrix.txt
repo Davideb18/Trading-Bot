@@ -1,0 +1,39 @@
+MATRICE EMPIRICA — 3 NOVEMBRE 2026
+Capitale 5.000 USDT; BTC/ETH/SOL USDT perpetual Bybit; fee 0,055% per lato.
+DD giornaliero e trailing espressi in % dei 5.000 iniziali, campionamento a chiusura 5m.
+G/R = profitto netto / massimo drawdown monetario campionato.
+PF n.d. = nessuna perdita osservata o nessun trade; non rappresenta un PF pari a zero.
+
+Periodo           Versione Trade    WR %      PF  DD day %  DD trail %    ROI %      G/R
+bull_q1           before       0    n.d.    n.d.     0.000       0.000    0.000     n.d.
+bull_q1           after        0    n.d.    n.d.     0.000       0.000    0.000     n.d.
+bear_jun_jul      before       1 100.000    n.d.     0.008       0.091    0.172    1.883
+bear_jun_jul      after        1 100.000    n.d.     0.008       0.091    0.172    1.883
+crash_april       before       4 100.000    n.d.     0.567       0.587    1.149    1.958
+crash_april       after        4  75.000   3.162     0.488       0.508    1.055    2.078
+crash_august      before       3 100.000    n.d.     0.544       0.701    1.048    1.494
+crash_august      after        3  66.667   1.201     0.526       0.684    0.098    0.143
+
+Finestre: Q1 01/01–01/04; Bear 01/06–01/08; Aprile 10–17/04; Agosto 01–08/08, tutte nel 2024.
+Date finali esclusive nel motore Freqtrade. Stessa frequenza operativa 5m, regimi differenti.
+
+SENSIBILITA SLIPPAGE DOPO LE CORREZIONI
+Costi aggiunti ai fill, nessuna risimulazione del fill rate o delle decisioni.
+bull_q1: ROI con 0,1% / 0,2% / 0,3% = 0.000% / 0.000% / 0.000%
+bear_jun_jul: ROI con 0,1% / 0,2% / 0,3% = 0.156% / 0.140% / 0.124%
+crash_april: ROI con 0,1% / 0,2% / 0,3% = 0.990% / 0.926% / 0.861%
+crash_august: ROI con 0,1% / 0,2% / 0,3% = 0.050% / 0.003% / -0.045%
+
+STRESS SINTETICO, SEED 20261102, 10.000 SCENARI
+Tre posizioni correlate da 400 USDT; shock uniformi 0–40%, costi 0,1–0,3% + fee.
+Stop al 6% con percorso continuo: 0 superamenti giornalieri del 2,5%, massimo 1,5384%.
+Gap attraverso lo stop: 7.500 superamenti giornalieri del 2,5%; 6.145 del trailing 3,8%.
+Perdita massima nel modello gap: 9,6964%. Queste frequenze NON sono probabilita di mercato.
+Tre posizioni a -10% + slippage 0,3% e fee: perdita 2,4984%; a -20%: 4,8984%.
+
+VERDETTO
+Le soglie non sono state superate alle chiusure campionate negli otto backtest.
+Solo otto trade per versione: evidenza insufficiente per validare robustezza o redditivita.
+Nessun target 8%/10% in 15–45 giorni dimostrato. Win rate agosto dopo: 66,7%.
+Nessuna certificazione del sistema completo: il guard REST non gira nei backtest.
+Vedere prop_forensic_audit.txt per le condizioni ancora necessarie prima del live.

@@ -841,7 +841,9 @@ class RPC:
 
         open_trades: list[Trade] = Trade.get_open_trades()
         open_assets: dict[str, Trade] = {t.safe_base_currency: t for t in open_trades}
-        self._freqtrade.wallets.update(require_update=False)
+        # A risk supervisor consumes this endpoint. A cached wallet may otherwise
+        # remain an hour old while positions and the account balance change.
+        self._freqtrade.wallets.update(require_update=True)
         starting_capital = self._freqtrade.wallets.get_starting_balance()
         starting_cap_fiat = (
             self._fiat_converter.convert_amount(
@@ -951,7 +953,17 @@ class RPC:
         starting_capital_ratio = (total_bot / starting_capital) - 1 if starting_capital else 0.0
         starting_cap_fiat_ratio = (value_bot / starting_cap_fiat) - 1 if starting_cap_fiat else 0.0
 
+        account_equity = getattr(self._freqtrade.exchange, "account_equity_snapshot", None)
+        if self._config.get("dry_run"):
+            account_equity = {
+                "value": total,
+                "currency": stake_currency,
+                "timestamp": dt_ts(),
+                "source": "freqtrade_dry_run",
+            }
+
         return {
+            "account_equity": account_equity,
             "currencies": currencies,
             "total": total,
             "total_bot": total_bot,

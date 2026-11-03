@@ -1,0 +1,4944 @@
+{
+  "full_stack_certified": false,
+  "variants": {
+    "safe_2": {
+      "max_daily_dd_pct": 0.27231685416003526,
+      "max_intraday_peak_dd_pct": 0.2755268541600344,
+      "max_trailing_dd_pct": 0.4203537222300292,
+      "net_profit_pct": 1.916257103200003,
+      "trades": 75,
+      "win_rate_pct": 97.33333333333334,
+      "profit_factor": 12.846639383823863,
+      "average_win_loss_ratio": 0.35196272284448943,
+      "pnl_over_max_dd": 4.558677613306278,
+      "equity_basis": "5m close inventory reconstruction, funding reconciled at trade close",
+      "account_sentinel_simulated": false,
+      "max_entry_principal_committed_usdt": 101.33746999999988,
+      "max_marked_exposure_usdt": 109.6963,
+      "slippage_sensitivity": {
+        "0.001": {
+          "max_daily_dd_pct": 0.2774762253600238,
+          "max_intraday_peak_dd_pct": 0.28068622536002297,
+          "max_trailing_dd_pct": 0.4270837628300251,
+          "net_profit_pct": 1.788171403000005
+        },
+        "0.002": {
+          "max_daily_dd_pct": 0.28263559656003057,
+          "max_intraday_peak_dd_pct": 0.28584559656002967,
+          "max_trailing_dd_pct": 0.4339149673900101,
+          "net_profit_pct": 1.6600857028000071
+        },
+        "0.003": {
+          "max_daily_dd_pct": 0.28779496776001906,
+          "max_intraday_peak_dd_pct": 0.29100496776001816,
+          "max_trailing_dd_pct": 0.4419197811900085,
+          "net_profit_pct": 1.532000002599987
+        }
+      },
+      "max_entry_inactivity_days_including_boundaries": 51.93055555555556,
+      "max_all_fills_inactivity_days": 51.89930555555556,
+      "max_all_fills_inactivity_interval": [
+        "2024-09-04 01:50:00+00:00",
+        "2024-10-25 23:25:00+00:00"
+      ],
+      "max_entry_fills_inactivity_days": 51.93055555555556,
+      "max_entry_fills_inactivity_interval": [
+        "2024-09-04 01:05:00+00:00",
+        "2024-10-25 23:25:00+00:00"
+      ],
+      "dca_trades": 9,
+      "entry_fills": 97,
+      "pairs_traded": [
+        "AAVE/USDT:USDT",
+        "ADA/USDT:USDT",
+        "ARB/USDT:USDT",
+        "ATOM/USDT:USDT",
+        "AVAX/USDT:USDT",
+        "BCH/USDT:USDT",
+        "DOGE/USDT:USDT",
+        "DOT/USDT:USDT",
+        "ETC/USDT:USDT",
+        "ETH/USDT:USDT",
+        "FIL/USDT:USDT",
+        "LINK/USDT:USDT",
+        "LTC/USDT:USDT",
+        "NEAR/USDT:USDT",
+        "OP/USDT:USDT",
+        "SOL/USDT:USDT",
+        "UNI/USDT:USDT",
+        "XRP/USDT:USDT"
+      ],
+      "periods": {
+        "train_h1": {
+          "net_profit_pct": 1.0961252131999937,
+          "max_daily_dd_pct": 0.1996901129199796,
+          "max_trailing_dd_pct": 0.2269267404799939
+        },
+        "validation_h2": {
+          "net_profit_pct": 0.8201318900000115,
+          "max_daily_dd_pct": 0.27231685416003526,
+          "max_trailing_dd_pct": 0.4203537222300292
+        },
+        "april_crash": {
+          "net_profit_pct": 0.11357435759999134,
+          "max_daily_dd_pct": 0.1996901129199796,
+          "max_trailing_dd_pct": 0.2269267404799939
+        },
+        "august_crash": {
+          "net_profit_pct": 0.06071161801000926,
+          "max_daily_dd_pct": 0.27231685416003526,
+          "max_trailing_dd_pct": 0.3649291605600229
+        },
+        "june_july": {
+          "net_profit_pct": 0.1743155632699927,
+          "max_daily_dd_pct": 0.03392870784000479,
+          "max_trailing_dd_pct": 0.09897356167000908
+        }
+      },
+      "cost_sensitivity": {
+        "0.0": {
+          "net_profit_pct": 1.916257103200005,
+          "max_daily_dd_pct": 0.27231685416003526,
+          "max_trailing_dd_pct": 0.4203537222300292,
+          "win_rate_pct": 97.33333333333334,
+          "profit_factor": 12.846639383823863,
+          "first_8pct_day": null,
+          "first_5pct_day": null,
+          "first_10pct_day": null,
+          "best_15d_profit_pct": 0.4439349557999958,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 0.6060918618000142,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 0.7145480271999987,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.1195109461916812,
+            0.35550186878945744
+          ]
+        },
+        "0.001": {
+          "net_profit_pct": 1.7881714029999967,
+          "max_daily_dd_pct": 0.2774762253600238,
+          "max_trailing_dd_pct": 0.4270837628300251,
+          "win_rate_pct": 94.66666666666667,
+          "profit_factor": 11.653957107629052,
+          "first_8pct_day": null,
+          "first_5pct_day": null,
+          "first_10pct_day": null,
+          "best_15d_profit_pct": 0.41981213039998694,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 0.5677991316000043,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 0.6676023555999927,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.10639516823054518,
+            0.33381836769130674
+          ]
+        },
+        "0.002": {
+          "net_profit_pct": 1.6600857028000064,
+          "max_daily_dd_pct": 0.28263559656003057,
+          "max_trailing_dd_pct": 0.4339149673900101,
+          "win_rate_pct": 89.33333333333333,
+          "profit_factor": 10.226380464062157,
+          "first_8pct_day": null,
+          "first_5pct_day": null,
+          "first_10pct_day": null,
+          "best_15d_profit_pct": 0.3956893049999962,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 0.5295064014000127,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 0.6241229010999996,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.09259477051233822,
+            0.3129726136318841
+          ]
+        },
+        "0.003": {
+          "net_profit_pct": 1.532000002599998,
+          "max_daily_dd_pct": 0.28779496776001906,
+          "max_trailing_dd_pct": 0.4419197811900085,
+          "win_rate_pct": 82.66666666666667,
+          "profit_factor": 8.684663541032437,
+          "first_8pct_day": null,
+          "first_5pct_day": null,
+          "first_10pct_day": null,
+          "best_15d_profit_pct": 0.37156647959998734,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 0.4915608183999939,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 0.5827901788999771,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.08003231740547438,
+            0.2924597299364449
+          ]
+        }
+      },
+      "archive": "user_data\\forensic\\dca_validation\\safe_2\\backtest-result-2026-11-03_10-57-17.zip",
+      "archive_sha256": "311301c5978df1c091f814620677dc0d0e84cc1a5531ba5ac0681884c0ba41c1",
+      "slots": 2,
+      "allocation_ratio": 0.02
+    },
+    "safe_3": {
+      "max_daily_dd_pct": 0.26594397912000206,
+      "max_intraday_peak_dd_pct": 0.2680799791199934,
+      "max_trailing_dd_pct": 0.36893291697000674,
+      "net_profit_pct": 1.5797878640000151,
+      "trades": 96,
+      "win_rate_pct": 97.91666666666666,
+      "profit_factor": 14.96246367055796,
+      "average_win_loss_ratio": 0.3183502908629353,
+      "pnl_over_max_dd": 4.282046386575022,
+      "equity_basis": "5m close inventory reconstruction, funding reconciled at trade close",
+      "account_sentinel_simulated": false,
+      "max_entry_principal_committed_usdt": 101.19905999999999,
+      "max_marked_exposure_usdt": 109.0576,
+      "slippage_sensitivity": {
+        "0.001": {
+          "max_daily_dd_pct": 0.26874103191999893,
+          "max_intraday_peak_dd_pct": 0.2708770319199903,
+          "max_trailing_dd_pct": 0.37467612476999423,
+          "net_profit_pct": 1.4681641314000071
+        },
+        "0.002": {
+          "max_daily_dd_pct": 0.271538084720014,
+          "max_intraday_peak_dd_pct": 0.2736740847200053,
+          "max_trailing_dd_pct": 0.38041933257001803,
+          "net_profit_pct": 1.356540398799999
+        },
+        "0.003": {
+          "max_daily_dd_pct": 0.2743351375199927,
+          "max_intraday_peak_dd_pct": 0.27647113751998403,
+          "max_trailing_dd_pct": 0.3861625403700054,
+          "net_profit_pct": 1.2449166662000133
+        }
+      },
+      "max_entry_inactivity_days_including_boundaries": 51.93055555555556,
+      "max_all_fills_inactivity_days": 51.89930555555556,
+      "max_all_fills_inactivity_interval": [
+        "2024-09-04 01:50:00+00:00",
+        "2024-10-25 23:25:00+00:00"
+      ],
+      "max_entry_fills_inactivity_days": 51.93055555555556,
+      "max_entry_fills_inactivity_interval": [
+        "2024-09-04 01:05:00+00:00",
+        "2024-10-25 23:25:00+00:00"
+      ],
+      "dca_trades": 12,
+      "entry_fills": 118,
+      "pairs_traded": [
+        "AAVE/USDT:USDT",
+        "ADA/USDT:USDT",
+        "ARB/USDT:USDT",
+        "ATOM/USDT:USDT",
+        "AVAX/USDT:USDT",
+        "BCH/USDT:USDT",
+        "DOGE/USDT:USDT",
+        "DOT/USDT:USDT",
+        "ETC/USDT:USDT",
+        "ETH/USDT:USDT",
+        "FIL/USDT:USDT",
+        "LINK/USDT:USDT",
+        "LTC/USDT:USDT",
+        "NEAR/USDT:USDT",
+        "OP/USDT:USDT",
+        "SOL/USDT:USDT",
+        "TRX/USDT:USDT",
+        "UNI/USDT:USDT",
+        "XRP/USDT:USDT"
+      ],
+      "periods": {
+        "train_h1": {
+          "net_profit_pct": 0.9451733624000008,
+          "max_daily_dd_pct": 0.1502639128899864,
+          "max_trailing_dd_pct": 0.16463126452998042
+        },
+        "validation_h2": {
+          "net_profit_pct": 0.6346145016000082,
+          "max_daily_dd_pct": 0.26594397912000206,
+          "max_trailing_dd_pct": 0.36210819801999605
+        },
+        "april_crash": {
+          "net_profit_pct": 0.1430361475999962,
+          "max_daily_dd_pct": 0.1502639128899864,
+          "max_trailing_dd_pct": 0.16463126452998042
+        },
+        "august_crash": {
+          "net_profit_pct": 0.031911097659994996,
+          "max_daily_dd_pct": 0.26594397912000206,
+          "max_trailing_dd_pct": 0.3252980855200076
+        },
+        "june_july": {
+          "net_profit_pct": 0.16696220285000893,
+          "max_daily_dd_pct": 0.0225505432799946,
+          "max_trailing_dd_pct": 0.07261323144999551
+        }
+      },
+      "cost_sensitivity": {
+        "0.0": {
+          "net_profit_pct": 1.579787864000009,
+          "max_daily_dd_pct": 0.26594397912000206,
+          "max_trailing_dd_pct": 0.36893291697000674,
+          "win_rate_pct": 97.91666666666666,
+          "profit_factor": 14.96246367055796,
+          "first_8pct_day": null,
+          "first_5pct_day": null,
+          "first_10pct_day": null,
+          "best_15d_profit_pct": 0.3752850424000098,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 0.49120602080000025,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 0.5929092109000158,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.09859004119852179,
+            0.2947827812591443
+          ]
+        },
+        "0.001": {
+          "net_profit_pct": 1.468164131400008,
+          "max_daily_dd_pct": 0.26874103191999893,
+          "max_trailing_dd_pct": 0.37467612476999423,
+          "win_rate_pct": 95.83333333333334,
+          "profit_factor": 13.507709049267445,
+          "first_8pct_day": null,
+          "first_5pct_day": null,
+          "first_10pct_day": null,
+          "best_15d_profit_pct": 0.35151363500001026,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 0.456373656199994,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 0.5561975823000103,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.08710428810796701,
+            0.2747358796100706
+          ]
+        },
+        "0.002": {
+          "net_profit_pct": 1.356540398800007,
+          "max_daily_dd_pct": 0.271538084720014,
+          "max_trailing_dd_pct": 0.38041933257001803,
+          "win_rate_pct": 90.625,
+          "profit_factor": 11.731459704801448,
+          "first_8pct_day": null,
+          "first_5pct_day": null,
+          "first_10pct_day": null,
+          "best_15d_profit_pct": 0.32774222760001065,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 0.4215412916000059,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 0.5194859537000229,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.07618145005867163,
+            0.2553781874687213
+          ]
+        },
+        "0.003": {
+          "net_profit_pct": 1.2449166662000062,
+          "max_daily_dd_pct": 0.2743351375199927,
+          "max_trailing_dd_pct": 0.3861625403700054,
+          "win_rate_pct": 80.20833333333334,
+          "profit_factor": 9.679971704270681,
+          "first_8pct_day": null,
+          "first_5pct_day": null,
+          "first_10pct_day": null,
+          "best_15d_profit_pct": 0.3039708202000111,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 0.3869383972000105,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 0.48277432510001744,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.066168640981066,
+            0.23655350208075948
+          ]
+        }
+      },
+      "archive": "user_data\\forensic\\dca_validation\\safe_3\\backtest-result-2026-11-03_10-55-40.zip",
+      "archive_sha256": "2d86639b15a3bf635d8442d83b1406a9d508ca937baf4fbfcb8dab2ee452fe81",
+      "slots": 3,
+      "allocation_ratio": 0.02
+    },
+    "safe_4": {
+      "max_daily_dd_pct": 0.27250347450000845,
+      "max_intraday_peak_dd_pct": 0.2743094745000053,
+      "max_trailing_dd_pct": 0.3632903664900186,
+      "net_profit_pct": 1.3342700101999894,
+      "trades": 110,
+      "win_rate_pct": 98.18181818181819,
+      "profit_factor": 11.425174227696234,
+      "average_win_loss_ratio": 0.2115773005128932,
+      "pnl_over_max_dd": 3.6727371085868286,
+      "equity_basis": "5m close inventory reconstruction, funding reconciled at trade close",
+      "account_sentinel_simulated": false,
+      "max_entry_principal_committed_usdt": 100.31367000000003,
+      "max_marked_exposure_usdt": 102.61636999999999,
+      "slippage_sensitivity": {
+        "0.001": {
+          "max_daily_dd_pct": 0.27497161010000126,
+          "max_intraday_peak_dd_pct": 0.27677761009999813,
+          "max_trailing_dd_pct": 0.3687294058900261,
+          "net_profit_pct": 1.2357197540000087
+        },
+        "0.002": {
+          "max_daily_dd_pct": 0.2774397457000123,
+          "max_intraday_peak_dd_pct": 0.27924574570000915,
+          "max_trailing_dd_pct": 0.3741684452900154,
+          "net_profit_pct": 1.1371694978000058
+        },
+        "0.003": {
+          "max_daily_dd_pct": 0.2799078813000051,
+          "max_intraday_peak_dd_pct": 0.28171388130000197,
+          "max_trailing_dd_pct": 0.3796074846900228,
+          "net_profit_pct": 1.0386192415999806
+        }
+      },
+      "max_entry_inactivity_days_including_boundaries": 51.93055555555556,
+      "max_all_fills_inactivity_days": 51.89930555555556,
+      "max_all_fills_inactivity_interval": [
+        "2024-09-04 01:50:00+00:00",
+        "2024-10-25 23:25:00+00:00"
+      ],
+      "max_entry_fills_inactivity_days": 51.93055555555556,
+      "max_entry_fills_inactivity_interval": [
+        "2024-09-04 01:05:00+00:00",
+        "2024-10-25 23:25:00+00:00"
+      ],
+      "dca_trades": 12,
+      "entry_fills": 131,
+      "pairs_traded": [
+        "AAVE/USDT:USDT",
+        "ADA/USDT:USDT",
+        "ARB/USDT:USDT",
+        "ATOM/USDT:USDT",
+        "AVAX/USDT:USDT",
+        "BCH/USDT:USDT",
+        "DOGE/USDT:USDT",
+        "DOT/USDT:USDT",
+        "ETC/USDT:USDT",
+        "ETH/USDT:USDT",
+        "FIL/USDT:USDT",
+        "LINK/USDT:USDT",
+        "LTC/USDT:USDT",
+        "NEAR/USDT:USDT",
+        "OP/USDT:USDT",
+        "SOL/USDT:USDT",
+        "TRX/USDT:USDT",
+        "UNI/USDT:USDT",
+        "XRP/USDT:USDT"
+      ],
+      "periods": {
+        "train_h1": {
+          "net_profit_pct": 0.7583350778000022,
+          "max_daily_dd_pct": 0.11543761889000963,
+          "max_trailing_dd_pct": 0.12756164000003992
+        },
+        "validation_h2": {
+          "net_profit_pct": 0.5759349323999959,
+          "max_daily_dd_pct": 0.27250347450000845,
+          "max_trailing_dd_pct": 0.34970136003001245
+        },
+        "april_crash": {
+          "net_profit_pct": 0.16233851340000913,
+          "max_daily_dd_pct": 0.11543761889000963,
+          "max_trailing_dd_pct": 0.12247952878000432
+        },
+        "august_crash": {
+          "net_profit_pct": 0.035169428470017014,
+          "max_daily_dd_pct": 0.27250347450000845,
+          "max_trailing_dd_pct": 0.3216385809000167
+        },
+        "june_july": {
+          "net_profit_pct": 0.15720786661000602,
+          "max_daily_dd_pct": 0.018094527359990027,
+          "max_trailing_dd_pct": 0.06615318559001025
+        }
+      },
+      "cost_sensitivity": {
+        "0.0": {
+          "net_profit_pct": 1.334270010199998,
+          "max_daily_dd_pct": 0.27250347450000845,
+          "max_trailing_dd_pct": 0.3632903664900186,
+          "win_rate_pct": 98.18181818181819,
+          "profit_factor": 11.425174227696234,
+          "first_8pct_day": null,
+          "first_5pct_day": null,
+          "first_10pct_day": null,
+          "best_15d_profit_pct": 0.3564957904000039,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 0.4554753229999915,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 0.5375883764000173,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.08018233369772657,
+            0.2611596303973277
+          ]
+        },
+        "0.001": {
+          "net_profit_pct": 1.2357197540000016,
+          "max_daily_dd_pct": 0.27497161010000126,
+          "max_trailing_dd_pct": 0.3687294058900261,
+          "win_rate_pct": 96.36363636363636,
+          "profit_factor": 10.406336548073998,
+          "first_8pct_day": null,
+          "first_5pct_day": null,
+          "first_10pct_day": null,
+          "best_15d_profit_pct": 0.3333792284000083,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 0.4226556263999919,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 0.5032276278000245,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.07083998814471994,
+            0.24290477523835285
+          ]
+        },
+        "0.002": {
+          "net_profit_pct": 1.137169497800005,
+          "max_daily_dd_pct": 0.2774397457000123,
+          "max_trailing_dd_pct": 0.3741684452900154,
+          "win_rate_pct": 90.0,
+          "profit_factor": 9.181498395374618,
+          "first_8pct_day": null,
+          "first_5pct_day": null,
+          "first_10pct_day": null,
+          "best_15d_profit_pct": 0.31026266640001265,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 0.3898359297999923,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 0.46886687920003167,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.06149883573325334,
+            0.2250778598458996
+          ]
+        },
+        "0.003": {
+          "net_profit_pct": 1.0386192415999904,
+          "max_daily_dd_pct": 0.2799078813000051,
+          "max_trailing_dd_pct": 0.3796074846900228,
+          "win_rate_pct": 80.9090909090909,
+          "profit_factor": 7.720029973081803,
+          "first_8pct_day": null,
+          "first_5pct_day": null,
+          "first_10pct_day": null,
+          "best_15d_profit_pct": 0.2871461043999989,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 0.35718686479998724,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 0.4345061306000025,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.051632671145787325,
+            0.2063570409320062
+          ]
+        }
+      },
+      "archive": "user_data\\forensic\\dca_validation\\safe_4\\backtest-result-2026-11-03_10-58-52.zip",
+      "archive_sha256": "8dd8c9f96b0d8c154534800b1ef2e2ae3bad5a8c5132c8a7255127ce9d0c0330",
+      "slots": 4,
+      "allocation_ratio": 0.02
+    },
+    "diagnostic_10pct": {
+      "max_daily_dd_pct": 1.3721708656599914,
+      "max_intraday_peak_dd_pct": 1.383246865659985,
+      "max_trailing_dd_pct": 1.9005784848800067,
+      "net_profit_pct": 7.674739833199995,
+      "trades": 90,
+      "win_rate_pct": 98.88888888888889,
+      "profit_factor": 16.619404181812598,
+      "average_win_loss_ratio": 0.18673487844733258,
+      "pnl_over_max_dd": 4.038107289047074,
+      "equity_basis": "5m close inventory reconstruction, funding reconciled at trade close",
+      "account_sentinel_simulated": false,
+      "max_entry_principal_committed_usdt": 534.9257899999997,
+      "max_marked_exposure_usdt": 550.6278,
+      "slippage_sensitivity": {
+        "0.001": {
+          "max_daily_dd_pct": 1.386949166859995,
+          "max_intraday_peak_dd_pct": 1.3980251668599886,
+          "max_trailing_dd_pct": 1.9314996984800201,
+          "net_profit_pct": 7.101967943999998
+        },
+        "0.002": {
+          "max_daily_dd_pct": 1.4017274680599985,
+          "max_intraday_peak_dd_pct": 1.4128034680599921,
+          "max_trailing_dd_pct": 1.9624209120800151,
+          "net_profit_pct": 6.529196054800002
+        },
+        "0.003": {
+          "max_daily_dd_pct": 1.416505769260002,
+          "max_intraday_peak_dd_pct": 1.4275817692599957,
+          "max_trailing_dd_pct": 1.9933421256800101,
+          "net_profit_pct": 5.956424165600005
+        }
+      },
+      "max_entry_inactivity_days_including_boundaries": 51.93055555555556,
+      "max_all_fills_inactivity_days": 51.89930555555556,
+      "max_all_fills_inactivity_interval": [
+        "2024-09-04 01:50:00+00:00",
+        "2024-10-25 23:25:00+00:00"
+      ],
+      "max_entry_fills_inactivity_days": 51.93055555555556,
+      "max_entry_fills_inactivity_interval": [
+        "2024-09-04 01:05:00+00:00",
+        "2024-10-25 23:25:00+00:00"
+      ],
+      "dca_trades": 13,
+      "entry_fills": 125,
+      "pairs_traded": [
+        "AAVE/USDT:USDT",
+        "ADA/USDT:USDT",
+        "ARB/USDT:USDT",
+        "ATOM/USDT:USDT",
+        "AVAX/USDT:USDT",
+        "BCH/USDT:USDT",
+        "DOGE/USDT:USDT",
+        "DOT/USDT:USDT",
+        "ETC/USDT:USDT",
+        "ETH/USDT:USDT",
+        "FIL/USDT:USDT",
+        "LINK/USDT:USDT",
+        "LTC/USDT:USDT",
+        "NEAR/USDT:USDT",
+        "OP/USDT:USDT",
+        "SOL/USDT:USDT",
+        "TRX/USDT:USDT",
+        "UNI/USDT:USDT",
+        "XRP/USDT:USDT"
+      ],
+      "periods": {
+        "train_h1": {
+          "net_profit_pct": 4.427921427399997,
+          "max_daily_dd_pct": 0.7869707393999852,
+          "max_trailing_dd_pct": 0.8601499283199883
+        },
+        "validation_h2": {
+          "net_profit_pct": 3.246818405800004,
+          "max_daily_dd_pct": 1.3721708656599914,
+          "max_trailing_dd_pct": 1.8653502493999985
+        },
+        "april_crash": {
+          "net_profit_pct": 0.49032559100001893,
+          "max_daily_dd_pct": 0.7869707393999852,
+          "max_trailing_dd_pct": 0.8601499283199883
+        },
+        "august_crash": {
+          "net_profit_pct": 0.18243592041999362,
+          "max_daily_dd_pct": 1.3721708656599914,
+          "max_trailing_dd_pct": 1.6744135046600057
+        },
+        "june_july": {
+          "net_profit_pct": 0.8642130357800124,
+          "max_daily_dd_pct": 0.11697699071999523,
+          "max_trailing_dd_pct": 0.3764293802199972
+        }
+      },
+      "cost_sensitivity": {
+        "0.0": {
+          "net_profit_pct": 7.674739833200001,
+          "max_daily_dd_pct": 1.3721708656599914,
+          "max_trailing_dd_pct": 1.9005784848800067,
+          "win_rate_pct": 98.88888888888889,
+          "profit_factor": 16.619404181812598,
+          "first_8pct_day": null,
+          "first_5pct_day": 310.4375,
+          "first_10pct_day": null,
+          "best_15d_profit_pct": 1.9088746836000063,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 2.510660146400005,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 3.0196237692999968,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.471872949838551,
+            1.4425025099265103
+          ]
+        },
+        "0.001": {
+          "net_profit_pct": 7.101967944000007,
+          "max_daily_dd_pct": 1.386949166859995,
+          "max_trailing_dd_pct": 1.9314996984800201,
+          "win_rate_pct": 94.44444444444444,
+          "profit_factor": 15.06103555779552,
+          "first_8pct_day": null,
+          "first_5pct_day": 329.2395833333333,
+          "first_10pct_day": null,
+          "best_15d_profit_pct": 1.7851336568000078,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 2.3322936558000036,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 2.8271676966999983,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.4180253566192382,
+            1.3421030922562365
+          ]
+        },
+        "0.002": {
+          "net_profit_pct": 6.529196054799995,
+          "max_daily_dd_pct": 1.4017274680599985,
+          "max_trailing_dd_pct": 1.9624209120800151,
+          "win_rate_pct": 88.88888888888889,
+          "profit_factor": 12.663005791054207,
+          "first_8pct_day": null,
+          "first_5pct_day": 337.58680555555554,
+          "first_10pct_day": null,
+          "best_15d_profit_pct": 1.6613926300000095,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 2.1539271652000025,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 2.634711624099982,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.36003920107814563,
+            1.2369509835618966
+          ]
+        },
+        "0.003": {
+          "net_profit_pct": 5.956424165600001,
+          "max_daily_dd_pct": 1.416505769260002,
+          "max_trailing_dd_pct": 1.9933421256800101,
+          "win_rate_pct": 82.22222222222221,
+          "profit_factor": 10.17656107371139,
+          "first_8pct_day": null,
+          "first_5pct_day": 344.7951388888889,
+          "first_10pct_day": null,
+          "best_15d_profit_pct": 1.537651603200011,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 1.9755606746000012,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 2.4422555515000024,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.30724447658362625,
+            1.1368198090974007
+          ]
+        }
+      },
+      "archive": "user_data\\forensic\\dca_validation\\diagnostic_10pct\\backtest-result-2026-11-03_11-00-45.zip",
+      "archive_sha256": "493cf03b404d14a3f4921b5c3608b9ca87fea54ff144f657b7d552e834e3b575",
+      "slots": 3,
+      "allocation_ratio": 0.1
+    },
+    "diagnostic_24pct": {
+      "max_daily_dd_pct": 3.5007658251400064,
+      "max_intraday_peak_dd_pct": 3.529097825140016,
+      "max_trailing_dd_pct": 4.847329400989984,
+      "net_profit_pct": 19.919326948000005,
+      "trades": 91,
+      "win_rate_pct": 98.9010989010989,
+      "profit_factor": 16.8496638310129,
+      "average_win_loss_ratio": 0.18721848701125446,
+      "pnl_over_max_dd": 4.1093404842534165,
+      "equity_basis": "5m close inventory reconstruction, funding reconciled at trade close",
+      "account_sentinel_simulated": false,
+      "max_entry_principal_committed_usdt": 1420.7468600000009,
+      "max_marked_exposure_usdt": 1450.7013,
+      "slippage_sensitivity": {
+        "0.001": {
+          "max_daily_dd_pct": 3.5386847799399948,
+          "max_intraday_peak_dd_pct": 3.5670167799400043,
+          "max_trailing_dd_pct": 4.927163204789976,
+          "net_profit_pct": 18.414828574399998
+        },
+        "0.002": {
+          "max_daily_dd_pct": 3.5766037347400013,
+          "max_intraday_peak_dd_pct": 3.6049357347400113,
+          "max_trailing_dd_pct": 5.0069970085899875,
+          "net_profit_pct": 16.910330200799994
+        },
+        "0.003": {
+          "max_daily_dd_pct": 3.614522689540008,
+          "max_intraday_peak_dd_pct": 3.642854689540018,
+          "max_trailing_dd_pct": 5.086830812389981,
+          "net_profit_pct": 15.40583182719999
+        }
+      },
+      "max_entry_inactivity_days_including_boundaries": 51.93055555555556,
+      "max_all_fills_inactivity_days": 51.89930555555556,
+      "max_all_fills_inactivity_interval": [
+        "2024-09-04 01:50:00+00:00",
+        "2024-10-25 23:25:00+00:00"
+      ],
+      "max_entry_fills_inactivity_days": 51.93055555555556,
+      "max_entry_fills_inactivity_interval": [
+        "2024-09-04 01:05:00+00:00",
+        "2024-10-25 23:25:00+00:00"
+      ],
+      "dca_trades": 11,
+      "entry_fills": 128,
+      "pairs_traded": [
+        "AAVE/USDT:USDT",
+        "ADA/USDT:USDT",
+        "ARB/USDT:USDT",
+        "ATOM/USDT:USDT",
+        "AVAX/USDT:USDT",
+        "BCH/USDT:USDT",
+        "DOGE/USDT:USDT",
+        "DOT/USDT:USDT",
+        "ETC/USDT:USDT",
+        "ETH/USDT:USDT",
+        "FIL/USDT:USDT",
+        "LINK/USDT:USDT",
+        "LTC/USDT:USDT",
+        "NEAR/USDT:USDT",
+        "OP/USDT:USDT",
+        "SOL/USDT:USDT",
+        "TRX/USDT:USDT",
+        "UNI/USDT:USDT",
+        "XRP/USDT:USDT"
+      ],
+      "periods": {
+        "train_h1": {
+          "net_profit_pct": 11.177328721199991,
+          "max_daily_dd_pct": 1.9687722385999953,
+          "max_trailing_dd_pct": 2.149923637139982
+        },
+        "validation_h2": {
+          "net_profit_pct": 8.741998226800005,
+          "max_daily_dd_pct": 3.5007658251400064,
+          "max_trailing_dd_pct": 4.757632696420005
+        },
+        "april_crash": {
+          "net_profit_pct": 1.5309851630000049,
+          "max_daily_dd_pct": 1.9687722385999953,
+          "max_trailing_dd_pct": 2.149923637139982
+        },
+        "august_crash": {
+          "net_profit_pct": 0.47462972667999564,
+          "max_daily_dd_pct": 3.5007658251400064,
+          "max_trailing_dd_pct": 4.269462329140006
+        },
+        "june_july": {
+          "net_profit_pct": 2.2147323998500177,
+          "max_daily_dd_pct": 0.2991361812000105,
+          "max_trailing_dd_pct": 0.9622378718499749
+        }
+      },
+      "cost_sensitivity": {
+        "0.0": {
+          "net_profit_pct": 19.919326948,
+          "max_daily_dd_pct": 3.5007658251400064,
+          "max_trailing_dd_pct": 4.847329400989984,
+          "win_rate_pct": 98.9010989010989,
+          "profit_factor": 16.8496638310129,
+          "first_8pct_day": 143.84722222222223,
+          "first_5pct_day": 64.88541666666667,
+          "first_10pct_day": 158.87847222222223,
+          "best_15d_profit_pct": 5.363441567800001,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 6.859746469799993,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 8.154976672100002,
+          "45d_windows_8pct": 1,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            1.2175047594227122,
+            3.7970823319617497
+          ]
+        },
+        "0.001": {
+          "net_profit_pct": 18.414828574399998,
+          "max_daily_dd_pct": 3.5386847799399948,
+          "max_trailing_dd_pct": 4.927163204789976,
+          "win_rate_pct": 95.6043956043956,
+          "profit_factor": 14.842173169527094,
+          "first_8pct_day": 143.875,
+          "first_5pct_day": 74.64583333333333,
+          "first_10pct_day": 169.09375,
+          "best_15d_profit_pct": 5.0190759466000054,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 6.360441590999999,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 7.618892363300001,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            1.0810425462371283,
+            3.523943122190717
+          ]
+        },
+        "0.002": {
+          "net_profit_pct": 16.9103302008,
+          "max_daily_dd_pct": 3.5766037347400013,
+          "max_trailing_dd_pct": 5.0069970085899875,
+          "win_rate_pct": 90.10989010989012,
+          "profit_factor": 12.403031739281163,
+          "first_8pct_day": 158.75347222222223,
+          "first_5pct_day": 102.84027777777777,
+          "first_10pct_day": 299.0208333333333,
+          "best_15d_profit_pct": 4.67471032540001,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 5.861136712199986,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 7.082808054500001,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.9409232996354429,
+            3.270126586446756
+          ]
+        },
+        "0.003": {
+          "net_profit_pct": 15.4058318272,
+          "max_daily_dd_pct": 3.614522689540008,
+          "max_trailing_dd_pct": 5.086830812389981,
+          "win_rate_pct": 81.31868131868131,
+          "profit_factor": 9.916671022586534,
+          "first_8pct_day": 158.81597222222223,
+          "first_5pct_day": 103.94444444444444,
+          "first_10pct_day": 310.44444444444446,
+          "best_15d_profit_pct": 4.330344704199997,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 5.361831833399992,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 6.546723745700001,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.8000345659587266,
+            3.0174222928443433
+          ]
+        }
+      },
+      "archive": "user_data\\forensic\\dca_validation\\diagnostic_24pct\\backtest-result-2026-11-03_11-03-13.zip",
+      "archive_sha256": "9d4b488c91c0b3a6ad3158bef0181cdb93d14995b9183add71781fa355a30bb2",
+      "slots": 3,
+      "allocation_ratio": 0.24
+    },
+    "wide_30": {
+      "max_daily_dd_pct": 0.3389844271200127,
+      "max_intraday_peak_dd_pct": 0.35640029107999,
+      "max_trailing_dd_pct": 0.3850695428299878,
+      "net_profit_pct": 1.9692849602000129,
+      "trades": 115,
+      "win_rate_pct": 98.26086956521739,
+      "profit_factor": 18.40491260905691,
+      "average_win_loss_ratio": 0.325750665647025,
+      "pnl_over_max_dd": 5.114102106666638,
+      "equity_basis": "5m close inventory reconstruction, funding reconciled at trade close",
+      "account_sentinel_simulated": false,
+      "max_entry_principal_committed_usdt": 101.7154999999999,
+      "max_marked_exposure_usdt": 109.0576,
+      "slippage_sensitivity": {
+        "0.001": {
+          "max_daily_dd_pct": 0.34102396152002257,
+          "max_intraday_peak_dd_pct": 0.3577564566799992,
+          "max_trailing_dd_pct": 0.3891260150299968,
+          "net_profit_pct": 1.8351821508999944
+        },
+        "0.002": {
+          "max_daily_dd_pct": 0.3430634959200143,
+          "max_intraday_peak_dd_pct": 0.3591126222799903,
+          "max_trailing_dd_pct": 0.3931824872299876,
+          "net_profit_pct": 1.701079341599998
+        },
+        "0.003": {
+          "max_daily_dd_pct": 0.3451030303200059,
+          "max_intraday_peak_dd_pct": 0.3604687878799814,
+          "max_trailing_dd_pct": 0.39723895942997844,
+          "net_profit_pct": 1.5669765323000018
+        }
+      },
+      "max_entry_inactivity_days_including_boundaries": 35.55902777777778,
+      "max_all_fills_inactivity_days": 35.22569444444444,
+      "max_all_fills_inactivity_interval": [
+        "2024-06-18 10:05:00+00:00",
+        "2024-07-23 15:30:00+00:00"
+      ],
+      "max_entry_fills_inactivity_days": 35.55902777777778,
+      "max_entry_fills_inactivity_interval": [
+        "2024-06-18 02:05:00+00:00",
+        "2024-07-23 15:30:00+00:00"
+      ],
+      "dca_trades": 17,
+      "entry_fills": 155,
+      "pairs_traded": [
+        "AAVE/USDT:USDT",
+        "ADA/USDT:USDT",
+        "ALGO/USDT:USDT",
+        "APT/USDT:USDT",
+        "ARB/USDT:USDT",
+        "ATOM/USDT:USDT",
+        "AVAX/USDT:USDT",
+        "BCH/USDT:USDT",
+        "CRV/USDT:USDT",
+        "DOGE/USDT:USDT",
+        "DOT/USDT:USDT",
+        "ETC/USDT:USDT",
+        "ETH/USDT:USDT",
+        "FIL/USDT:USDT",
+        "GALA/USDT:USDT",
+        "ICP/USDT:USDT",
+        "IMX/USDT:USDT",
+        "INJ/USDT:USDT",
+        "LINK/USDT:USDT",
+        "LTC/USDT:USDT",
+        "NEAR/USDT:USDT",
+        "OP/USDT:USDT",
+        "SAND/USDT:USDT",
+        "SOL/USDT:USDT",
+        "SUI/USDT:USDT",
+        "UNI/USDT:USDT",
+        "XRP/USDT:USDT"
+      ],
+      "periods": {
+        "train_h1": {
+          "net_profit_pct": 1.2536022625999976,
+          "max_daily_dd_pct": 0.3389844271200127,
+          "max_trailing_dd_pct": 0.3850695428299878
+        },
+        "validation_h2": {
+          "net_profit_pct": 0.7156826976000048,
+          "max_daily_dd_pct": 0.2659212795200073,
+          "max_trailing_dd_pct": 0.3620854984200014
+        },
+        "april_crash": {
+          "net_profit_pct": 0.008227331140005845,
+          "max_daily_dd_pct": 0.3389844271200127,
+          "max_trailing_dd_pct": 0.3850695428299878
+        },
+        "august_crash": {
+          "net_profit_pct": 0.03193379726000785,
+          "max_daily_dd_pct": 0.2659212795200073,
+          "max_trailing_dd_pct": 0.3252753859200129
+        },
+        "june_july": {
+          "net_profit_pct": 0.2575859902500087,
+          "max_daily_dd_pct": 0.0365465592000146,
+          "max_trailing_dd_pct": 0.07261323144999551
+        }
+      },
+      "cost_sensitivity": {
+        "0.0": {
+          "net_profit_pct": 1.9692849602000024,
+          "max_daily_dd_pct": 0.3389844271200127,
+          "max_trailing_dd_pct": 0.3850695428299878,
+          "win_rate_pct": 98.26086956521739,
+          "profit_factor": 18.40491260905691,
+          "first_8pct_day": null,
+          "first_5pct_day": null,
+          "first_10pct_day": null,
+          "best_15d_profit_pct": 0.43197396679999656,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 0.5585337929550042,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 0.612231931464994,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.11940784952115872,
+            0.37449465437123947
+          ]
+        },
+        "0.001": {
+          "net_profit_pct": 1.8351821509000001,
+          "max_daily_dd_pct": 0.34102396152002257,
+          "max_trailing_dd_pct": 0.3891260150299968,
+          "win_rate_pct": 93.91304347826087,
+          "profit_factor": 16.575428699512454,
+          "first_8pct_day": null,
+          "first_5pct_day": null,
+          "first_10pct_day": null,
+          "best_15d_profit_pct": 0.4176396434999879,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 0.5223513513550097,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 0.5741134740649977,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.1052518298935934,
+            0.3506910435231485
+          ]
+        },
+        "0.002": {
+          "net_profit_pct": 1.7010793415999979,
+          "max_daily_dd_pct": 0.3430634959200143,
+          "max_trailing_dd_pct": 0.3931824872299876,
+          "win_rate_pct": 90.43478260869566,
+          "profit_factor": 14.24438960656066,
+          "first_8pct_day": null,
+          "first_5pct_day": null,
+          "first_10pct_day": null,
+          "best_15d_profit_pct": 0.4033053201999974,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 0.486168909754997,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 0.5359950166649833,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.09276625157010765,
+            0.33030642483785283
+          ]
+        },
+        "0.003": {
+          "net_profit_pct": 1.5669765322999956,
+          "max_daily_dd_pct": 0.3451030303200059,
+          "max_trailing_dd_pct": 0.39723895942997844,
+          "win_rate_pct": 83.47826086956522,
+          "profit_factor": 11.551894916254152,
+          "first_8pct_day": null,
+          "first_5pct_day": null,
+          "first_10pct_day": null,
+          "best_15d_profit_pct": 0.38897099689998865,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 0.44998646815500254,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 0.49787655926498703,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.0776045230274905,
+            0.30874403952966106
+          ]
+        }
+      },
+      "archive": "user_data\\forensic\\dca_validation\\wide_30\\backtest-result-2026-11-03_11-05-40.zip",
+      "archive_sha256": "7c4aa3847d82e6fc19c39fff0d886010c69ebeaf19d0aa9db21f3696801e417a",
+      "slots": 3,
+      "allocation_ratio": 0.02
+    },
+    "reserve_30": {
+      "max_daily_dd_pct": 0.15887144013997384,
+      "max_intraday_peak_dd_pct": 0.16542043929995998,
+      "max_trailing_dd_pct": 0.18343634505999945,
+      "net_profit_pct": 0.7918667748000097,
+      "trades": 123,
+      "win_rate_pct": 100.0,
+      "profit_factor": null,
+      "average_win_loss_ratio": null,
+      "pnl_over_max_dd": 4.316847757411388,
+      "equity_basis": "5m close inventory reconstruction, funding reconciled at trade close",
+      "account_sentinel_simulated": false,
+      "max_entry_principal_committed_usdt": 79.64793000000002,
+      "max_marked_exposure_usdt": 78.923,
+      "slippage_sensitivity": {
+        "0.001": {
+          "max_daily_dd_pct": 0.16032566293997663,
+          "max_intraday_peak_dd_pct": 0.16653396529996825,
+          "max_trailing_dd_pct": 0.18581597685999443,
+          "net_profit_pct": 0.7371099750000054
+        },
+        "0.002": {
+          "max_daily_dd_pct": 0.1617798857399612,
+          "max_intraday_peak_dd_pct": 0.16764749129995835,
+          "max_trailing_dd_pct": 0.18819560866000756,
+          "net_profit_pct": 0.6823531752000012
+        },
+        "0.003": {
+          "max_daily_dd_pct": 0.1632341085399821,
+          "max_intraday_peak_dd_pct": 0.16876101729996662,
+          "max_trailing_dd_pct": 0.19057524045998434,
+          "net_profit_pct": 0.6275963753999969
+        }
+      },
+      "max_entry_inactivity_days_including_boundaries": 35.55902777777778,
+      "max_all_fills_inactivity_days": 35.22569444444444,
+      "max_all_fills_inactivity_interval": [
+        "2024-06-18 10:05:00+00:00",
+        "2024-07-23 15:30:00+00:00"
+      ],
+      "max_entry_fills_inactivity_days": 35.55902777777778,
+      "max_entry_fills_inactivity_interval": [
+        "2024-06-18 02:05:00+00:00",
+        "2024-07-23 15:30:00+00:00"
+      ],
+      "dca_trades": 25,
+      "entry_fills": 153,
+      "pairs_traded": [
+        "AAVE/USDT:USDT",
+        "ADA/USDT:USDT",
+        "ALGO/USDT:USDT",
+        "APT/USDT:USDT",
+        "ARB/USDT:USDT",
+        "ATOM/USDT:USDT",
+        "AVAX/USDT:USDT",
+        "BCH/USDT:USDT",
+        "CRV/USDT:USDT",
+        "DOGE/USDT:USDT",
+        "DOT/USDT:USDT",
+        "ETC/USDT:USDT",
+        "ETH/USDT:USDT",
+        "FIL/USDT:USDT",
+        "GALA/USDT:USDT",
+        "ICP/USDT:USDT",
+        "IMX/USDT:USDT",
+        "INJ/USDT:USDT",
+        "LINK/USDT:USDT",
+        "LTC/USDT:USDT",
+        "NEAR/USDT:USDT",
+        "OP/USDT:USDT",
+        "RUNE/USDT:USDT",
+        "SAND/USDT:USDT",
+        "SOL/USDT:USDT",
+        "SUI/USDT:USDT",
+        "UNI/USDT:USDT",
+        "XRP/USDT:USDT"
+      ],
+      "periods": {
+        "train_h1": {
+          "net_profit_pct": 0.44956957880000115,
+          "max_daily_dd_pct": 0.15887144013997384,
+          "max_trailing_dd_pct": 0.1707444066499738
+        },
+        "validation_h2": {
+          "net_profit_pct": 0.3422971959999995,
+          "max_daily_dd_pct": 0.10907048235998444,
+          "max_trailing_dd_pct": 0.18343634505999945
+        },
+        "april_crash": {
+          "net_profit_pct": 0.031947506769993195,
+          "max_daily_dd_pct": 0.15887144013997384,
+          "max_trailing_dd_pct": 0.1707444066499738
+        },
+        "august_crash": {
+          "net_profit_pct": 0.058928890200004386,
+          "max_daily_dd_pct": 0.10694291222996981,
+          "max_trailing_dd_pct": 0.11509933542996804
+        },
+        "june_july": {
+          "net_profit_pct": 0.09781535039999653,
+          "max_daily_dd_pct": 0.012116127360022802,
+          "max_trailing_dd_pct": 0.020279970440005856
+        }
+      },
+      "cost_sensitivity": {
+        "0.0": {
+          "net_profit_pct": 0.7918667748000007,
+          "max_daily_dd_pct": 0.15887144013997384,
+          "max_trailing_dd_pct": 0.18343634505999945,
+          "win_rate_pct": 100.0,
+          "profit_factor": null,
+          "first_8pct_day": null,
+          "first_5pct_day": null,
+          "first_10pct_day": null,
+          "best_15d_profit_pct": 0.15374050979999082,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 0.20814925479999147,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 0.22717263900000034,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.05906844142591687,
+            0.14548008075119312
+          ]
+        },
+        "0.001": {
+          "net_profit_pct": 0.7371099750000031,
+          "max_daily_dd_pct": 0.16032566293997663,
+          "max_trailing_dd_pct": 0.18581597685999443,
+          "win_rate_pct": 95.1219512195122,
+          "profit_factor": 2087.187072777537,
+          "first_8pct_day": null,
+          "first_5pct_day": null,
+          "first_10pct_day": null,
+          "best_15d_profit_pct": 0.1469664352000109,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 0.1946532895999917,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 0.2110494020200167,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.05315203611397932,
+            0.1364107302472915
+          ]
+        },
+        "0.002": {
+          "net_profit_pct": 0.6823531752000054,
+          "max_daily_dd_pct": 0.1617798857399612,
+          "max_trailing_dd_pct": 0.18819560866000756,
+          "win_rate_pct": 89.43089430894308,
+          "profit_factor": 183.6904001279991,
+          "first_8pct_day": null,
+          "first_5pct_day": null,
+          "first_10pct_day": null,
+          "best_15d_profit_pct": 0.1417665597999985,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 0.1811573243999919,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 0.19521442442000989,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.04784152486879564,
+            0.12668176334428766
+          ]
+        },
+        "0.003": {
+          "net_profit_pct": 0.6275963754000077,
+          "max_daily_dd_pct": 0.1632341085399821,
+          "max_trailing_dd_pct": 0.19057524045998434,
+          "win_rate_pct": 82.11382113821138,
+          "profit_factor": 59.73368429002441,
+          "first_8pct_day": null,
+          "first_5pct_day": null,
+          "first_10pct_day": null,
+          "best_15d_profit_pct": 0.1365666844000043,
+          "15d_windows_8pct": 0,
+          "15d_windows": 351,
+          "best_30d_profit_pct": 0.16766135919999214,
+          "30d_windows_8pct": 0,
+          "30d_windows": 336,
+          "best_45d_profit_pct": 0.17937944682002127,
+          "45d_windows_8pct": 0,
+          "45d_windows": 321,
+          "daily_pnl_7day_block_bootstrap_95pct_interval_usd": [
+            0.04218449914825233,
+            0.116596153932473
+          ]
+        }
+      },
+      "archive": "user_data\\forensic\\dca_validation\\reserve_30\\backtest-result-2026-11-03_11-07-29.zip",
+      "archive_sha256": "1a22e65ca580935c1c0e0f0502df5f602a9b83e9d297b31aa21e71e1e297c064",
+      "slots": 3,
+      "allocation_ratio": 0.02
+    }
+  },
+  "data_manifest": [
+    {
+      "file": "AAVE_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "c770939f182fcff160dd33668caa6669895aef930d14c6bdb7477bb34dd710d4"
+    },
+    {
+      "file": "AAVE_USDT_USDT-1d-futures.feather",
+      "rows": 1329,
+      "start": "2021-05-13 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "ec182982074b0b0d3ac738135d104871ebefa4446d17b023c000ac62b2bfc232"
+    },
+    {
+      "file": "AAVE_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "a4df83722e77ef4d8e80fb8159793d6dac93ac2bc9ea45cafc954c9b7bed6cfb"
+    },
+    {
+      "file": "AAVE_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "c07fafceae62e93cf058fb09f22c4cd757ad79a46046aac4cc3e54de05b55062"
+    },
+    {
+      "file": "AAVE_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "4d536f9346c19652c2cb2b1e48e801a22881ec2d6f7611c846d3c83bb688bb00"
+    },
+    {
+      "file": "AAVE_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "cf712fff8c86c78561ea2e92bdb731d0103f009a18dc431ec75d99cb8e51a924"
+    },
+    {
+      "file": "AAVE_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "f3b16320da34850b23f5a041ebbd34d43c3507dcebaf98cfe51019b366cd3810"
+    },
+    {
+      "file": "ADA_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "e322090f3ac8682087914f99eba46ace2f95dc408cfccd25557663dd5cf2fc6a"
+    },
+    {
+      "file": "ADA_USDT_USDT-1d-futures.feather",
+      "rows": 1385,
+      "start": "2021-03-18 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "e8a7c444c27f6e83dee6924573b2719ff02d46c5d926d86c2d7f0963f0a1dbbf"
+    },
+    {
+      "file": "ADA_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "6ea721e3a2625ce1ff30f02148dc00032c9e3eaa2508ef32d404ff9659b7778b"
+    },
+    {
+      "file": "ADA_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "8e5a8a8f70992c05bda3b4add250be81cc3f97659f30044366f6981a1920bb4d"
+    },
+    {
+      "file": "ADA_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "3db577f6d44f50ce98b3bdb92fee6ae3b37de839700fdbff2247b88689f85475"
+    },
+    {
+      "file": "ADA_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "778309d74318e80a25e270527768b1c652a202e37724a93343c1174414505590"
+    },
+    {
+      "file": "ADA_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "6db1f571490426b2cf6cf4b2b7614b9f59db2c9b1560351a362488fa7f9a2ef0"
+    },
+    {
+      "file": "ARB_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "de0f894ecea0546b205f901005bc36da624e012b0fb5b2b2989f5540b6673c68"
+    },
+    {
+      "file": "ARB_USDT_USDT-1d-futures.feather",
+      "rows": 650,
+      "start": "2023-03-23 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "64bc3c0f60e5559bb9856f51075ae1ad91f662f07aece666a37cb06062b23ae5"
+    },
+    {
+      "file": "ARB_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "8041a5b13edc2a78c736634533c3481764f31b264a3a1349f3856e2381deda74"
+    },
+    {
+      "file": "ARB_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "2eb9820b85557dcd9bb98aa0373b04013c460dc12a8d064dca2053b43dbc5f05"
+    },
+    {
+      "file": "ARB_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "d954f943fc854f9a9bd1b016a04168fcb350c12fa874027515aacd49dc929aa4"
+    },
+    {
+      "file": "ARB_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "1fc1e93df4938a7f8c1683ce2e0b831797e09eb8ee593e73f3230dadf7c29cfd"
+    },
+    {
+      "file": "ARB_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "a4079a8082d2ffdd0e985b742963b136a21b8f31141c1f7fc463b45214e5d500"
+    },
+    {
+      "file": "ATOM_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "bc65b98e4a1ce0b08cd6698f37ae749afc5541525f6447ceea6550e7a8f71399"
+    },
+    {
+      "file": "ATOM_USDT_USDT-1d-futures.feather",
+      "rows": 1178,
+      "start": "2021-10-11 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "c4b7300c17ee081df7bcdfe6dcd877271b0e735f356c70db8b5e19fbc57e7899"
+    },
+    {
+      "file": "ATOM_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "3cc3845b340b4012ed4884cdd5b8d81914a5fd5ca74be8499a90b054c61661d1"
+    },
+    {
+      "file": "ATOM_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "4fa61efc5bb190962a7c6927c6f4642bb2b0cf9380e0ff51cd0a0e7a4d356ee0"
+    },
+    {
+      "file": "ATOM_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "48c7c957221fa1ea443c4caf946a8e774ba81ccb87121d69a331c1222c154bb9"
+    },
+    {
+      "file": "ATOM_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "1f8a5c4c05d61b0c57bb61ffe001b2506197277e8bc103b6c723fa0b2229c761"
+    },
+    {
+      "file": "ATOM_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "7a35ee946ed9456504c6255e2dddd08e17174e77b66bc49c75fdb30090e34be1"
+    },
+    {
+      "file": "AVAX_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "3ea6cc509c40ac59b1e6e41fd87a1c0628363726aa8e71dd1a5a83f8bfcb9e5a"
+    },
+    {
+      "file": "AVAX_USDT_USDT-1d-futures.feather",
+      "rows": 1204,
+      "start": "2021-09-15 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "7a681de845e9daa9f2579328f5f92e7b12abdfe7afd46658c3cd4671ba6b1a95"
+    },
+    {
+      "file": "AVAX_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "0634194f7c09113ce536f069ff96e7f1ed42d714d995018bb25b7000308eb6ef"
+    },
+    {
+      "file": "AVAX_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "c9122f7a4e606409fba12fd95f75f03614292c954706a20a034d7b5b71f8ccf9"
+    },
+    {
+      "file": "AVAX_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "cd33dd97e55a6a9bdc55fe6756c7d75356db539cc8986656cfd2904a7218667b"
+    },
+    {
+      "file": "AVAX_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "bfa838359a30abebe25d0ace35cba8b59a5b92c9cec38b91d9883adfc7d2b041"
+    },
+    {
+      "file": "AVAX_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "1343c5735be476ccb2c64fb0f0da71e8ddb14442d75b9ee5574ed56c157f1cf8"
+    },
+    {
+      "file": "BCH_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "320fa18a595e5a7b6109236c20cc9feee9fe75cf4fc4e1b9e3b71d0e7951fc55"
+    },
+    {
+      "file": "BCH_USDT_USDT-1d-futures.feather",
+      "rows": 1461,
+      "start": "2021-01-01 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "a7d38a61076e0369a8a73a2437bed72987d0b28f05e9deaee9ffcff493fa8fee"
+    },
+    {
+      "file": "BCH_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "bc293f165ad6516d0f67a687df041d034830e0148b7980d2299de7f9d50c4f9b"
+    },
+    {
+      "file": "BCH_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "590426a229acd42f88155451ea99e092dede4859e03e51219dcc912cbdc62121"
+    },
+    {
+      "file": "BCH_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "23418358d9504867066dc55bb963a9d5b499eabcf1205c7f1bd7e8a476c505e9"
+    },
+    {
+      "file": "BCH_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "0fce1d467f09d820bc3721b38516736645c1348ccfa8f922117aa2a31502d9f4"
+    },
+    {
+      "file": "BCH_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "d88ca3e906a0d4db620510d3cc9adc2912f8ccf7a3ffdfe183757a1af862d9b7"
+    },
+    {
+      "file": "BTC_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "47dbff5515d0db42eb411049d82f6a8cbcc3ceaa6482a684bf4d7f370718eee6"
+    },
+    {
+      "file": "BTC_USDT_USDT-1d-futures.feather",
+      "rows": 1461,
+      "start": "2021-01-01 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "bb923c2cf7d3a76b77d466554aefec1b4a65ebd344a8016cb020439245fb0928"
+    },
+    {
+      "file": "BTC_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "bf3b136b18a753b0f752ccb65c53f8816d6f334463ce2c3c848f8cf9c4adfed1"
+    },
+    {
+      "file": "BTC_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "78ecc1dfcd21f173da94c1eacdb53d64a1a1fee84c030a9f7c59c98c1c71bf29"
+    },
+    {
+      "file": "BTC_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "28bdc41bfc66302786901e3cfa83d60662d5c08f91a8b5046dc021db3f427649"
+    },
+    {
+      "file": "BTC_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "5fb32b8e76c4b8712700409b60d1c939528d4d3e0f1b92bf87276e7fd4d89550"
+    },
+    {
+      "file": "BTC_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "60c7c9b4d61eebd6c1b409573e560a56c325ad81e9c4e75252d06a4c8e548b0a"
+    },
+    {
+      "file": "DOGE_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "12c6afd820f20ab8aba47733f103e596ef8a71b51f36c54c8d3e6053722246a8"
+    },
+    {
+      "file": "DOGE_USDT_USDT-1d-futures.feather",
+      "rows": 1309,
+      "start": "2021-06-02 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "0197fd5769e7c398cae4a5206ee0182131bf48f1d2c4fff3066cf0a3bba58b1f"
+    },
+    {
+      "file": "DOGE_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "394cf8d8532343025ce5c689670fb6d1b5f49a3deecf42eb34cedfd5af2cb31f"
+    },
+    {
+      "file": "DOGE_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "ab39f56c2692dc3569d601dfb4a8f00f22de8b867b96411da420fb2f580efc22"
+    },
+    {
+      "file": "DOGE_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "69c5301575a3a0096afe044c29e31594037e25d95af2160a8785361cfffdacc1"
+    },
+    {
+      "file": "DOGE_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "f182b54271b705f7190d350c367948f0a00a9765f7c86614fb431e184491d2fa"
+    },
+    {
+      "file": "DOGE_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "25d6fde4d37d8d1c8f9dae6f74e712ae1c58d5d5a57fe4a64355f85e2fbb0764"
+    },
+    {
+      "file": "DOT_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "336f5c60b2d5e4b9e7279784cf63aa4d9350f759146d1e0bffbce4036236049b"
+    },
+    {
+      "file": "DOT_USDT_USDT-1d-futures.feather",
+      "rows": 1385,
+      "start": "2021-03-18 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "e3899d859c54c4f6f25e0c7206ada5dabed928d0374c0688f945b3b3c2341506"
+    },
+    {
+      "file": "DOT_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "24c735613236d983fd3ba40e699b3d64e87d6ee17f40b32ac5a0a083f7b47fd8"
+    },
+    {
+      "file": "DOT_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "332292375f7f14d4c54bd9eab9e0335888aa502ce97dc2c7c75e89a8047675e4"
+    },
+    {
+      "file": "DOT_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "ce90adbd722a9b45ec82544ffcd270f5389680e6a6a7d4020e263dc39a738ff4"
+    },
+    {
+      "file": "DOT_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "36369df8778704745d5d121c4aefb25a8d7baff5a69c6747d48ca07021bb6919"
+    },
+    {
+      "file": "DOT_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "1835aa9f1ec9aecc3c2b9c7791c395db7803932ff1052bafaca50655ed215436"
+    },
+    {
+      "file": "ETC_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "8ed39cb8cdd0eb43e515203140f20318cd65e98e66b35516e99739a82dafc42d"
+    },
+    {
+      "file": "ETC_USDT_USDT-1d-futures.feather",
+      "rows": 1282,
+      "start": "2021-06-29 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "73f1d0ec654c7ccdf7ca337afee707599709bbf474a5ad3bea428178a87f6380"
+    },
+    {
+      "file": "ETC_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "1c48817d590cd4c00396412977871c5202a1ea8a40f864904e02bbe5f62a6748"
+    },
+    {
+      "file": "ETC_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "b2f43536581592c306edc4561bc653d21140b564c925f7566132032e1a0dd0fb"
+    },
+    {
+      "file": "ETC_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "54e2e26333375f68131263e9f675d07efed9f625a26baa2b44239a37c4e71fbc"
+    },
+    {
+      "file": "ETC_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "59b6c74df6d6883c52d1f02414df8a9189b909145abc51e06fbf115ba9512637"
+    },
+    {
+      "file": "ETC_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "a2698a23a8aa1438c9f882473f47b368e678eae14bc0924d9dcdb75457847a8a"
+    },
+    {
+      "file": "ETH_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "5d8fc0699686f5f652be9b0262afe18190bc4a39ceb8839ae3713708f0e0a325"
+    },
+    {
+      "file": "ETH_USDT_USDT-1d-futures.feather",
+      "rows": 1388,
+      "start": "2021-03-15 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "02a1c51087f2e8690c8468e23f2f9445c0d8e7d572bd97efb99ebfae8890c9a3"
+    },
+    {
+      "file": "ETH_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "ba71620d76346dc9645801873632bfa046756f76a21ac23234a386537bdc8d5f"
+    },
+    {
+      "file": "ETH_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "a30f0dc656d03901f926ee49e643848e1a46d2c147338527c585260a1546d835"
+    },
+    {
+      "file": "ETH_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "0dd6320b41f9fd6d5b17a533b82df3ad6968fd5ad0931b0ad5e2305658658d20"
+    },
+    {
+      "file": "ETH_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "3bcdb3aeb9fb3f2d191199f4a0efa726513bc5b3dbd285149fd86045276938af"
+    },
+    {
+      "file": "ETH_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "dfc80f351e711885cd43deb271d37035c51f886d64907d6903f1bd4975be4d20"
+    },
+    {
+      "file": "FIL_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "9763c57c1c3ef106e397004b7b5de752789f5682a99cdd66803f867280ae8334"
+    },
+    {
+      "file": "FIL_USDT_USDT-1d-futures.feather",
+      "rows": 1282,
+      "start": "2021-06-29 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "57e5e91ad32a9c3210a6d345e2a14dc2419a97c70f7c7b6c2b82587c53223e21"
+    },
+    {
+      "file": "FIL_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "82890bc4ca32e4492a1274cc21e940ab19fc4d4f6d0689790284a4c76ee3bb4b"
+    },
+    {
+      "file": "FIL_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "f7a2aaeae8c3f86b49b3b04869273826352a33b39c03cdc3352933b907315f17"
+    },
+    {
+      "file": "FIL_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "cd3033032077c9bb5ea83d0277022ef1a8419dfbae10090c4037ffffa8e649d7"
+    },
+    {
+      "file": "FIL_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "073cac0e0fa887bc8deb12dec6f905df1fc406ae04b2230a9e23f3d33566a029"
+    },
+    {
+      "file": "FIL_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "2ef646d63608f2c5713886c3a1b76c4c7f76c9a8db5458ffd97fa6c08295216e"
+    },
+    {
+      "file": "LINK_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "677f5401a4c129f3e1f2e3b5d80118ea636e55811fda5dc039a5ffb6e5f57669"
+    },
+    {
+      "file": "LINK_USDT_USDT-1d-futures.feather",
+      "rows": 1461,
+      "start": "2021-01-01 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "5a1ccfef0c15e33133409724d252c498832a4f28748dec41afa1108b4f6a188c"
+    },
+    {
+      "file": "LINK_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "66512979dc16cb2b927b8b9566545de62b6cb0ffa4a480699977671c195a7809"
+    },
+    {
+      "file": "LINK_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "61b26709ad6d6be6546d9d4c97943a562c0c9e95891e5eaa881e3e507ad1d9bd"
+    },
+    {
+      "file": "LINK_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "1af412de3bc655992f1d420c85b66c376c7d6d5470dbb602faa25940b44c9c36"
+    },
+    {
+      "file": "LINK_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "61a7d7f086ba23a6f5b84f7c6730369d08e800c50eea4d49107a5e4e19fcb4e7"
+    },
+    {
+      "file": "LINK_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "cfa9f617cd3bc2e1a87aba7372fa4ff84068d9db5790cebfd7e8a3d0da0e2024"
+    },
+    {
+      "file": "LTC_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "49b2d1a5143ab45f6d8b4180ea7807e2a971801b23e3f13f6778d22aa7e6c193"
+    },
+    {
+      "file": "LTC_USDT_USDT-1d-futures.feather",
+      "rows": 1461,
+      "start": "2021-01-01 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "c32c456bc50d0d3b21b8cfcbf99176930225baae68f280a6fb08e16be18ae8c9"
+    },
+    {
+      "file": "LTC_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "073a4954f961b7b7e767e9c146c07fabdd96e849b7a54d1df967765abd3943a1"
+    },
+    {
+      "file": "LTC_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "e8a1c6d37a9ce4420a30317335effa6c0b702d9c4140795cd08bc375b02fffd5"
+    },
+    {
+      "file": "LTC_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "902ae664b21c5670aa134b6f27f25a19fb628336d662103183e826d5899a6ae4"
+    },
+    {
+      "file": "LTC_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "1df7f5561e75f07bb58350699d3f0cce32197191774910cc17a3d1f0e71f866b"
+    },
+    {
+      "file": "LTC_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "5b067f9f419dc2f1fefa77bfe3333b39c943bd7b321ae295a566226cf47c9aa9"
+    },
+    {
+      "file": "NEAR_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "13bf31dcd332017902f95de4699fc7d63b881f935398dc3903d64346eecb5e33"
+    },
+    {
+      "file": "NEAR_USDT_USDT-1d-futures.feather",
+      "rows": 1178,
+      "start": "2021-10-11 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "6303aac233304c7fab8237cb9b253a1d35c2bb32ec0b38cd5345a46dc03b5f7a"
+    },
+    {
+      "file": "NEAR_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "e4294a6187bd8ce8741732b36848cfed2b532d7fb493738c983df4a43fec7803"
+    },
+    {
+      "file": "NEAR_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "e2523a5196477bd357ea3db19bc43975808b45acf18f6ad86ad0405eb4127d1f"
+    },
+    {
+      "file": "NEAR_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "936e2355d1ac7bc57f32585aabdf8f20157c94f4a94047e638f6ee0996a64cd7"
+    },
+    {
+      "file": "NEAR_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "8bd1f3100db8e7aa3a1b144b1648497a0ba39eb74c64ed219f72ca14f678931c"
+    },
+    {
+      "file": "NEAR_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "6e7856ae80e671533d2d913190abc9af8f4eb5efcbdb08e76c9cebb37ec05b24"
+    },
+    {
+      "file": "OP_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "444941dee3558b73b3673ea852f1d35701c2a45e755857709dce4591137baf7f"
+    },
+    {
+      "file": "OP_USDT_USDT-1d-futures.feather",
+      "rows": 945,
+      "start": "2022-06-01 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "e5d89162d313e9d3d636f99a0eea1bbe102d9051dab1519f528533d98fc04f98"
+    },
+    {
+      "file": "OP_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "2aaa319e9c841ec4fa9ef55e173707527d9b4efdf05baa7395c44c8239c49f77"
+    },
+    {
+      "file": "OP_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "5a23e1878bc52811c893bfbc465431bf86d9a80d1eea70bc65f7d697ca7ae152"
+    },
+    {
+      "file": "OP_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "68c6be8558a93e8e6b887028194889a484ad302f373ef1e04b0d0bb7d6a306c5"
+    },
+    {
+      "file": "OP_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "4aacd5914729220c02fc01a51235488fbe1f8b1e15d9dc514713f7ebfa3e5d9c"
+    },
+    {
+      "file": "OP_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "578a4c693b2bebea3d2d37db47185017d556836234f4565936874908bab3bb61"
+    },
+    {
+      "file": "SOL_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "d925aec5b519a2089b1f3b51fc7bef8965c64d191af7d987e7427c1ba06f4634"
+    },
+    {
+      "file": "SOL_USDT_USDT-1d-futures.feather",
+      "rows": 1174,
+      "start": "2021-10-15 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "e76e00be98a4705a2ef83c200c4bb9f5e92a1365d110237ba80f8a86603f7822"
+    },
+    {
+      "file": "SOL_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "4c5cb454c53c2d93fa89a46d3621668908e0eb7ac25b2c66625a532a76b26957"
+    },
+    {
+      "file": "SOL_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "9d93e8a53430c9d33f597271823631051318a353f85571b71d344feda4ed9db5"
+    },
+    {
+      "file": "SOL_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "3b8b6b76f82a43efabbf205bc4ffe7be899003ad679c2addfbb5a6815099a6de"
+    },
+    {
+      "file": "SOL_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "6bd7c0fff11d97021744de6a8b403586b73322e100666104357a1052db3242fa"
+    },
+    {
+      "file": "SOL_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "b360c10a7ea5dc4cc9648acfc293530e47942cf11c80604a176432cca1d9f515"
+    },
+    {
+      "file": "TRX_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "8556264534bb7792e421c46bad038f829428eb4bf14bd414c73c3b7423e72b57"
+    },
+    {
+      "file": "TRX_USDT_USDT-1d-futures.feather",
+      "rows": 1219,
+      "start": "2021-08-31 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "663a4c4dd6aec934d3e3c18433fb8d89893721ead58e23ca320587ac7efb99a6"
+    },
+    {
+      "file": "TRX_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "b4e2172acc381525ce84f6277f56f17c6853a60da062cfa9c6489cb8adcf9e59"
+    },
+    {
+      "file": "TRX_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "09c6c44a157236324018608ac57078c28efef1844ce5c0229b36405fe764ba28"
+    },
+    {
+      "file": "TRX_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "c92f0b83668254e2c798338c1778cf8e93c6b01a2a0336b1a83e4ac992543adf"
+    },
+    {
+      "file": "TRX_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "f654aae2c6d5a5491d201831004da7153315536beec94840b5679b2c20566cd6"
+    },
+    {
+      "file": "TRX_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "a839793f664e119ab560292993da81135ea74b1f366faea510c8ff9386974175"
+    },
+    {
+      "file": "UNI_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "af18c8b5b6dab7ec107cb4dfc3210566d6b782702722cfeda4897a2359d051c7"
+    },
+    {
+      "file": "UNI_USDT_USDT-1d-futures.feather",
+      "rows": 1128,
+      "start": "2021-11-30 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "6644f39d6420ad4021589a8428323be38e1a8ea89d15c7af570bb73df872e87f"
+    },
+    {
+      "file": "UNI_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "145d5b747fc9d10a8187872c4c48f9c8200c30d7e79062a1b997fc7d3fff54d6"
+    },
+    {
+      "file": "UNI_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "14da948ab35b325b3363a115f7fc80e86f88efdc30bd7529a75041da328515fb"
+    },
+    {
+      "file": "UNI_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "61dde040fbb976284fa60db12d599ae0e5642048e446769925a12e4bf286edd9"
+    },
+    {
+      "file": "UNI_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "2b7158882e6435567b8e7e0d498df20eddd8e4bd5745fc218e9d676462503f76"
+    },
+    {
+      "file": "UNI_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "ca78ae96f8daf278db7efa570c6c8321f1ccebe9f9b754ecca5358af596b5112"
+    },
+    {
+      "file": "XRP_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "2c96f1d49d9dcc3786a5826c189274a78d46acaed4899f07c795f8cd7c4e26ed"
+    },
+    {
+      "file": "XRP_USDT_USDT-1d-futures.feather",
+      "rows": 1329,
+      "start": "2021-05-13 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "4fc0993c3f7f1eae1014d828a1330c2333af697b081b9c2390e010d0e6d8d951"
+    },
+    {
+      "file": "XRP_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "c9734a1e2912282ea3e677f205a2041cdbc98bbebd42aa3b623b5d4b27365e2d"
+    },
+    {
+      "file": "XRP_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "0ada6ea406c40c5f5c67c7db52707bb20d1302d4b04750259b4c11fd575f354d"
+    },
+    {
+      "file": "XRP_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "dead9777399115cd23f6db27496fe33dc328c5636790ec977bb788da27aa9a36"
+    },
+    {
+      "file": "XRP_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "a792d8d2947dfc1c790ddccfbb7ddfb0a9624c1c71eba01cf1c6c08cdce2601c"
+    },
+    {
+      "file": "XRP_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "e89ab3fe9b3ccf63eb7c9108cd75371787d37141b7d175fc274c204fc0c869de"
+    }
+  ],
+  "liquidity_snapshot": [
+    {
+      "pair": "BTC/USDT:USDT",
+      "timestamp_ms": 1793699337759,
+      "turnover_24h_usdt": 4078263724.0519,
+      "spread_pct": 0.0001299189760381608,
+      "bid_depth_within_01pct_usdt": 1524121.9562,
+      "ask_depth_within_01pct_usdt": 3791185.7717
+    },
+    {
+      "pair": "ETH/USDT:USDT",
+      "timestamp_ms": 1793699338049,
+      "turnover_24h_usdt": 1726605916.1091,
+      "spread_pct": 0.00044126829331825074,
+      "bid_depth_within_01pct_usdt": 752663.681,
+      "ask_depth_within_01pct_usdt": 1254836.0968
+    },
+    {
+      "pair": "SOL/USDT:USDT",
+      "timestamp_ms": 1793699338320,
+      "turnover_24h_usdt": 518909774.311,
+      "spread_pct": 0.010839520893182068,
+      "bid_depth_within_01pct_usdt": 1394242.284,
+      "ask_depth_within_01pct_usdt": 1891772.242
+    },
+    {
+      "pair": "XRP/USDT:USDT",
+      "timestamp_ms": 1793699338600,
+      "turnover_24h_usdt": 241608598.8438,
+      "spread_pct": 0.00796907996971662,
+      "bid_depth_within_01pct_usdt": 1350535.63349,
+      "ask_depth_within_01pct_usdt": 1879663.0812300001
+    },
+    {
+      "pair": "DOGE/USDT:USDT",
+      "timestamp_ms": 1793699338883,
+      "turnover_24h_usdt": 74026040.0534,
+      "spread_pct": 0.013507125008436718,
+      "bid_depth_within_01pct_usdt": 486193.73464,
+      "ask_depth_within_01pct_usdt": 341363.68201
+    },
+    {
+      "pair": "ADA/USDT:USDT",
+      "timestamp_ms": 1793699339280,
+      "turnover_24h_usdt": 39116092.2544,
+      "spread_pct": 0.05326231691077975,
+      "bid_depth_within_01pct_usdt": 196014.7241,
+      "ask_depth_within_01pct_usdt": 158165.9426
+    },
+    {
+      "pair": "AVAX/USDT:USDT",
+      "timestamp_ms": 1793699339559,
+      "turnover_24h_usdt": 21766757.6093,
+      "spread_pct": 0.01183361931248118,
+      "bid_depth_within_01pct_usdt": 84730.1286,
+      "ask_depth_within_01pct_usdt": 102411.27219999999
+    },
+    {
+      "pair": "LINK/USDT:USDT",
+      "timestamp_ms": 1793699339706,
+      "turnover_24h_usdt": 36392445.8072,
+      "spread_pct": 0.008976257798118987,
+      "bid_depth_within_01pct_usdt": 197138.1292,
+      "ask_depth_within_01pct_usdt": 187246.0542
+    },
+    {
+      "pair": "DOT/USDT:USDT",
+      "timestamp_ms": 1793699340086,
+      "turnover_24h_usdt": 8050228.5336,
+      "spread_pct": 0.010714094391170405,
+      "bid_depth_within_01pct_usdt": 29865.00083,
+      "ask_depth_within_01pct_usdt": 30454.28638
+    },
+    {
+      "pair": "LTC/USDT:USDT",
+      "timestamp_ms": 1793699340349,
+      "turnover_24h_usdt": 11448099.19,
+      "spread_pct": 0.01849967625567499,
+      "bid_depth_within_01pct_usdt": 75681.80799999999,
+      "ask_depth_within_01pct_usdt": 99818.868
+    },
+    {
+      "pair": "BCH/USDT:USDT",
+      "timestamp_ms": 1793699340681,
+      "turnover_24h_usdt": 14701281.1034,
+      "spread_pct": 0.0036099128206020996,
+      "bid_depth_within_01pct_usdt": 63813.6704,
+      "ask_depth_within_01pct_usdt": 55443.417
+    },
+    {
+      "pair": "TRX/USDT:USDT",
+      "timestamp_ms": 1793699340864,
+      "turnover_24h_usdt": 17514952.4192,
+      "spread_pct": 0.031022180859328213,
+      "bid_depth_within_01pct_usdt": 110473.9624,
+      "ask_depth_within_01pct_usdt": 119982.27930000001
+    },
+    {
+      "pair": "ATOM/USDT:USDT",
+      "timestamp_ms": 1793699341149,
+      "turnover_24h_usdt": 6631614.9132,
+      "spread_pct": 0.0704473406128841,
+      "bid_depth_within_01pct_usdt": 8890.1769,
+      "ask_depth_within_01pct_usdt": 5577.334
+    },
+    {
+      "pair": "NEAR/USDT:USDT",
+      "timestamp_ms": 1793699341549,
+      "turnover_24h_usdt": 221073776.3728,
+      "spread_pct": 0.02614037380734257,
+      "bid_depth_within_01pct_usdt": 231418.25770000002,
+      "ask_depth_within_01pct_usdt": 250220.5016
+    },
+    {
+      "pair": "UNI/USDT:USDT",
+      "timestamp_ms": 1793699341884,
+      "turnover_24h_usdt": 42698860.2428,
+      "spread_pct": 0.013961605584646899,
+      "bid_depth_within_01pct_usdt": 85948.10010000001,
+      "ask_depth_within_01pct_usdt": 60353.6042
+    },
+    {
+      "pair": "AAVE/USDT:USDT",
+      "timestamp_ms": 1793699342002,
+      "turnover_24h_usdt": 39007107.1101,
+      "spread_pct": 0.007793321123789818,
+      "bid_depth_within_01pct_usdt": 96922.83810000001,
+      "ask_depth_within_01pct_usdt": 76783.2711
+    },
+    {
+      "pair": "ETC/USDT:USDT",
+      "timestamp_ms": 1793699341517,
+      "turnover_24h_usdt": 2699998.6613,
+      "spread_pct": 0.014368848336810604,
+      "bid_depth_within_01pct_usdt": 10256.9339,
+      "ask_depth_within_01pct_usdt": 9619.138
+    },
+    {
+      "pair": "FIL/USDT:USDT",
+      "timestamp_ms": 1793699342516,
+      "turnover_24h_usdt": 4135855.9079,
+      "spread_pct": 0.011545344339893666,
+      "bid_depth_within_01pct_usdt": 19786.42036,
+      "ask_depth_within_01pct_usdt": 23725.64094
+    },
+    {
+      "pair": "ARB/USDT:USDT",
+      "timestamp_ms": 1793699342887,
+      "turnover_24h_usdt": 16080230.7624,
+      "spread_pct": 0.006430661393530755,
+      "bid_depth_within_01pct_usdt": 36713.873408,
+      "ask_depth_within_01pct_usdt": 49322.938443
+    },
+    {
+      "pair": "OP/USDT:USDT",
+      "timestamp_ms": 1793699343058,
+      "turnover_24h_usdt": 9558000.8348,
+      "spread_pct": 0.009239155541179954,
+      "bid_depth_within_01pct_usdt": 29979.600177,
+      "ask_depth_within_01pct_usdt": 43357.367682
+    }
+  ],
+  "data_manifest_30": [
+    {
+      "file": "AAVE_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "c770939f182fcff160dd33668caa6669895aef930d14c6bdb7477bb34dd710d4"
+    },
+    {
+      "file": "AAVE_USDT_USDT-1d-futures.feather",
+      "rows": 1329,
+      "start": "2021-05-13 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "ec182982074b0b0d3ac738135d104871ebefa4446d17b023c000ac62b2bfc232"
+    },
+    {
+      "file": "AAVE_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "a4df83722e77ef4d8e80fb8159793d6dac93ac2bc9ea45cafc954c9b7bed6cfb"
+    },
+    {
+      "file": "AAVE_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "c07fafceae62e93cf058fb09f22c4cd757ad79a46046aac4cc3e54de05b55062"
+    },
+    {
+      "file": "AAVE_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "4d536f9346c19652c2cb2b1e48e801a22881ec2d6f7611c846d3c83bb688bb00"
+    },
+    {
+      "file": "AAVE_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "cf712fff8c86c78561ea2e92bdb731d0103f009a18dc431ec75d99cb8e51a924"
+    },
+    {
+      "file": "AAVE_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "f3b16320da34850b23f5a041ebbd34d43c3507dcebaf98cfe51019b366cd3810"
+    },
+    {
+      "file": "ADA_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "e322090f3ac8682087914f99eba46ace2f95dc408cfccd25557663dd5cf2fc6a"
+    },
+    {
+      "file": "ADA_USDT_USDT-1d-futures.feather",
+      "rows": 1385,
+      "start": "2021-03-18 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "e8a7c444c27f6e83dee6924573b2719ff02d46c5d926d86c2d7f0963f0a1dbbf"
+    },
+    {
+      "file": "ADA_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "6ea721e3a2625ce1ff30f02148dc00032c9e3eaa2508ef32d404ff9659b7778b"
+    },
+    {
+      "file": "ADA_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "8e5a8a8f70992c05bda3b4add250be81cc3f97659f30044366f6981a1920bb4d"
+    },
+    {
+      "file": "ADA_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "3db577f6d44f50ce98b3bdb92fee6ae3b37de839700fdbff2247b88689f85475"
+    },
+    {
+      "file": "ADA_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "778309d74318e80a25e270527768b1c652a202e37724a93343c1174414505590"
+    },
+    {
+      "file": "ADA_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "6db1f571490426b2cf6cf4b2b7614b9f59db2c9b1560351a362488fa7f9a2ef0"
+    },
+    {
+      "file": "ALGO_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "fa4a2a6ed8b80d54a99481b5b1c95c8976fdbfc41389ac7b6c219a433cce3722"
+    },
+    {
+      "file": "ALGO_USDT_USDT-1d-futures.feather",
+      "rows": 1196,
+      "start": "2021-09-23 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "59f8cbcaf5067f2517c76336c640d341f73d60303133d7a1b75a7a067aa555e7"
+    },
+    {
+      "file": "ALGO_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "4f33710bc4c68e05c694a40384c9ff63f2cc59c8fd23ce666aed6a9ac31b000c"
+    },
+    {
+      "file": "ALGO_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "b0a21ab57c9f130f9a5fd185fd7517becef37d92a9e63471b7b2a70cb2725d8f"
+    },
+    {
+      "file": "ALGO_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "7fb4eb0d59c8b214b90345a5bf79e5e93e18735ce3a0f272faa6b0d331b20202"
+    },
+    {
+      "file": "ALGO_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "9a7680c2e83c7e9289abed895bd27a4d415a906529ff279b59a27047e6dc1b3e"
+    },
+    {
+      "file": "ALGO_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "718f1b479ca8e07310c14837f2037f356af00d94135d657dc596a4ebc741dcdb"
+    },
+    {
+      "file": "APT_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "39c9b6c10ed5a5ec124822433a32fc621f7a91279b567dab7216261f9953f738"
+    },
+    {
+      "file": "APT_USDT_USDT-1d-futures.feather",
+      "rows": 805,
+      "start": "2022-10-19 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "16b5c1d60bd3bc94061e2f04e62f8795f401c6229993b8973ca9eebd83195a20"
+    },
+    {
+      "file": "APT_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "50b0c976aa2c21124aaf4cbc317a5cca2a8b9e26759aa5d7775a8f918266799f"
+    },
+    {
+      "file": "APT_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "e3c46dcc811f54b49926729f9709c094d9589a690a2c6b5671c5980e4af7575c"
+    },
+    {
+      "file": "APT_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "7b4168774d7c1eaef685d12dc79f364a52cea0d5b14ac0d3ee9f89e647b73749"
+    },
+    {
+      "file": "APT_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "7f87c9f047218ef4b7a9a6340780254c982ebc75cef76fe9b61fa4585f0cf91a"
+    },
+    {
+      "file": "APT_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "e26936ae691ed6d08ec37d9baef7882687863227b88e61e8ed46e545fcb3755a"
+    },
+    {
+      "file": "ARB_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "de0f894ecea0546b205f901005bc36da624e012b0fb5b2b2989f5540b6673c68"
+    },
+    {
+      "file": "ARB_USDT_USDT-1d-futures.feather",
+      "rows": 650,
+      "start": "2023-03-23 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "64bc3c0f60e5559bb9856f51075ae1ad91f662f07aece666a37cb06062b23ae5"
+    },
+    {
+      "file": "ARB_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "8041a5b13edc2a78c736634533c3481764f31b264a3a1349f3856e2381deda74"
+    },
+    {
+      "file": "ARB_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "2eb9820b85557dcd9bb98aa0373b04013c460dc12a8d064dca2053b43dbc5f05"
+    },
+    {
+      "file": "ARB_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "d954f943fc854f9a9bd1b016a04168fcb350c12fa874027515aacd49dc929aa4"
+    },
+    {
+      "file": "ARB_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "1fc1e93df4938a7f8c1683ce2e0b831797e09eb8ee593e73f3230dadf7c29cfd"
+    },
+    {
+      "file": "ARB_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "a4079a8082d2ffdd0e985b742963b136a21b8f31141c1f7fc463b45214e5d500"
+    },
+    {
+      "file": "ATOM_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "bc65b98e4a1ce0b08cd6698f37ae749afc5541525f6447ceea6550e7a8f71399"
+    },
+    {
+      "file": "ATOM_USDT_USDT-1d-futures.feather",
+      "rows": 1178,
+      "start": "2021-10-11 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "c4b7300c17ee081df7bcdfe6dcd877271b0e735f356c70db8b5e19fbc57e7899"
+    },
+    {
+      "file": "ATOM_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "3cc3845b340b4012ed4884cdd5b8d81914a5fd5ca74be8499a90b054c61661d1"
+    },
+    {
+      "file": "ATOM_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "4fa61efc5bb190962a7c6927c6f4642bb2b0cf9380e0ff51cd0a0e7a4d356ee0"
+    },
+    {
+      "file": "ATOM_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "48c7c957221fa1ea443c4caf946a8e774ba81ccb87121d69a331c1222c154bb9"
+    },
+    {
+      "file": "ATOM_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "1f8a5c4c05d61b0c57bb61ffe001b2506197277e8bc103b6c723fa0b2229c761"
+    },
+    {
+      "file": "ATOM_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "7a35ee946ed9456504c6255e2dddd08e17174e77b66bc49c75fdb30090e34be1"
+    },
+    {
+      "file": "AVAX_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "3ea6cc509c40ac59b1e6e41fd87a1c0628363726aa8e71dd1a5a83f8bfcb9e5a"
+    },
+    {
+      "file": "AVAX_USDT_USDT-1d-futures.feather",
+      "rows": 1204,
+      "start": "2021-09-15 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "7a681de845e9daa9f2579328f5f92e7b12abdfe7afd46658c3cd4671ba6b1a95"
+    },
+    {
+      "file": "AVAX_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "0634194f7c09113ce536f069ff96e7f1ed42d714d995018bb25b7000308eb6ef"
+    },
+    {
+      "file": "AVAX_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "c9122f7a4e606409fba12fd95f75f03614292c954706a20a034d7b5b71f8ccf9"
+    },
+    {
+      "file": "AVAX_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "cd33dd97e55a6a9bdc55fe6756c7d75356db539cc8986656cfd2904a7218667b"
+    },
+    {
+      "file": "AVAX_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "bfa838359a30abebe25d0ace35cba8b59a5b92c9cec38b91d9883adfc7d2b041"
+    },
+    {
+      "file": "AVAX_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "1343c5735be476ccb2c64fb0f0da71e8ddb14442d75b9ee5574ed56c157f1cf8"
+    },
+    {
+      "file": "BCH_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "320fa18a595e5a7b6109236c20cc9feee9fe75cf4fc4e1b9e3b71d0e7951fc55"
+    },
+    {
+      "file": "BCH_USDT_USDT-1d-futures.feather",
+      "rows": 1461,
+      "start": "2021-01-01 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "a7d38a61076e0369a8a73a2437bed72987d0b28f05e9deaee9ffcff493fa8fee"
+    },
+    {
+      "file": "BCH_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "bc293f165ad6516d0f67a687df041d034830e0148b7980d2299de7f9d50c4f9b"
+    },
+    {
+      "file": "BCH_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "590426a229acd42f88155451ea99e092dede4859e03e51219dcc912cbdc62121"
+    },
+    {
+      "file": "BCH_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "23418358d9504867066dc55bb963a9d5b499eabcf1205c7f1bd7e8a476c505e9"
+    },
+    {
+      "file": "BCH_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "0fce1d467f09d820bc3721b38516736645c1348ccfa8f922117aa2a31502d9f4"
+    },
+    {
+      "file": "BCH_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "d88ca3e906a0d4db620510d3cc9adc2912f8ccf7a3ffdfe183757a1af862d9b7"
+    },
+    {
+      "file": "BTC_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "47dbff5515d0db42eb411049d82f6a8cbcc3ceaa6482a684bf4d7f370718eee6"
+    },
+    {
+      "file": "BTC_USDT_USDT-1d-futures.feather",
+      "rows": 1461,
+      "start": "2021-01-01 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "bb923c2cf7d3a76b77d466554aefec1b4a65ebd344a8016cb020439245fb0928"
+    },
+    {
+      "file": "BTC_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "bf3b136b18a753b0f752ccb65c53f8816d6f334463ce2c3c848f8cf9c4adfed1"
+    },
+    {
+      "file": "BTC_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "78ecc1dfcd21f173da94c1eacdb53d64a1a1fee84c030a9f7c59c98c1c71bf29"
+    },
+    {
+      "file": "BTC_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "28bdc41bfc66302786901e3cfa83d60662d5c08f91a8b5046dc021db3f427649"
+    },
+    {
+      "file": "BTC_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "5fb32b8e76c4b8712700409b60d1c939528d4d3e0f1b92bf87276e7fd4d89550"
+    },
+    {
+      "file": "BTC_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "60c7c9b4d61eebd6c1b409573e560a56c325ad81e9c4e75252d06a4c8e548b0a"
+    },
+    {
+      "file": "CRV_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "80d637842cfe9826a01917346b9abe72c78b79ff7964a71565902c0f8208b3d4"
+    },
+    {
+      "file": "CRV_USDT_USDT-1d-futures.feather",
+      "rows": 1164,
+      "start": "2021-10-25 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "01d344059e281d1d6edd38291266e166de8d732814d0202e5a1e5f99d5504620"
+    },
+    {
+      "file": "CRV_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "53125afbbed744049f9de32dde32838194cd4591c41e9d18118a42d711845bc2"
+    },
+    {
+      "file": "CRV_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "a4bfcf2f4a30aff89103ed7aa485a66f849941bc17124f91289d9bfa57dc3250"
+    },
+    {
+      "file": "CRV_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "605138cf5b37a36976f1a778efbbfad2f4b3b40899e974395441182115054b6d"
+    },
+    {
+      "file": "CRV_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "6a6da18adcc92529c4d5508e5b3e586054c3c3f3161445c746b8e97249e76b3f"
+    },
+    {
+      "file": "CRV_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "4164f8f731e0ab94d551456b3b82bc35128e616843c585a275863294e285d481"
+    },
+    {
+      "file": "DOGE_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "12c6afd820f20ab8aba47733f103e596ef8a71b51f36c54c8d3e6053722246a8"
+    },
+    {
+      "file": "DOGE_USDT_USDT-1d-futures.feather",
+      "rows": 1309,
+      "start": "2021-06-02 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "0197fd5769e7c398cae4a5206ee0182131bf48f1d2c4fff3066cf0a3bba58b1f"
+    },
+    {
+      "file": "DOGE_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "394cf8d8532343025ce5c689670fb6d1b5f49a3deecf42eb34cedfd5af2cb31f"
+    },
+    {
+      "file": "DOGE_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "ab39f56c2692dc3569d601dfb4a8f00f22de8b867b96411da420fb2f580efc22"
+    },
+    {
+      "file": "DOGE_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "69c5301575a3a0096afe044c29e31594037e25d95af2160a8785361cfffdacc1"
+    },
+    {
+      "file": "DOGE_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "f182b54271b705f7190d350c367948f0a00a9765f7c86614fb431e184491d2fa"
+    },
+    {
+      "file": "DOGE_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "25d6fde4d37d8d1c8f9dae6f74e712ae1c58d5d5a57fe4a64355f85e2fbb0764"
+    },
+    {
+      "file": "DOT_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "336f5c60b2d5e4b9e7279784cf63aa4d9350f759146d1e0bffbce4036236049b"
+    },
+    {
+      "file": "DOT_USDT_USDT-1d-futures.feather",
+      "rows": 1385,
+      "start": "2021-03-18 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "e3899d859c54c4f6f25e0c7206ada5dabed928d0374c0688f945b3b3c2341506"
+    },
+    {
+      "file": "DOT_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "24c735613236d983fd3ba40e699b3d64e87d6ee17f40b32ac5a0a083f7b47fd8"
+    },
+    {
+      "file": "DOT_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "332292375f7f14d4c54bd9eab9e0335888aa502ce97dc2c7c75e89a8047675e4"
+    },
+    {
+      "file": "DOT_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "ce90adbd722a9b45ec82544ffcd270f5389680e6a6a7d4020e263dc39a738ff4"
+    },
+    {
+      "file": "DOT_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "36369df8778704745d5d121c4aefb25a8d7baff5a69c6747d48ca07021bb6919"
+    },
+    {
+      "file": "DOT_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "1835aa9f1ec9aecc3c2b9c7791c395db7803932ff1052bafaca50655ed215436"
+    },
+    {
+      "file": "ETC_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "8ed39cb8cdd0eb43e515203140f20318cd65e98e66b35516e99739a82dafc42d"
+    },
+    {
+      "file": "ETC_USDT_USDT-1d-futures.feather",
+      "rows": 1282,
+      "start": "2021-06-29 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "73f1d0ec654c7ccdf7ca337afee707599709bbf474a5ad3bea428178a87f6380"
+    },
+    {
+      "file": "ETC_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "1c48817d590cd4c00396412977871c5202a1ea8a40f864904e02bbe5f62a6748"
+    },
+    {
+      "file": "ETC_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "b2f43536581592c306edc4561bc653d21140b564c925f7566132032e1a0dd0fb"
+    },
+    {
+      "file": "ETC_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "54e2e26333375f68131263e9f675d07efed9f625a26baa2b44239a37c4e71fbc"
+    },
+    {
+      "file": "ETC_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "59b6c74df6d6883c52d1f02414df8a9189b909145abc51e06fbf115ba9512637"
+    },
+    {
+      "file": "ETC_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "a2698a23a8aa1438c9f882473f47b368e678eae14bc0924d9dcdb75457847a8a"
+    },
+    {
+      "file": "ETH_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "5d8fc0699686f5f652be9b0262afe18190bc4a39ceb8839ae3713708f0e0a325"
+    },
+    {
+      "file": "ETH_USDT_USDT-1d-futures.feather",
+      "rows": 1388,
+      "start": "2021-03-15 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "02a1c51087f2e8690c8468e23f2f9445c0d8e7d572bd97efb99ebfae8890c9a3"
+    },
+    {
+      "file": "ETH_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "ba71620d76346dc9645801873632bfa046756f76a21ac23234a386537bdc8d5f"
+    },
+    {
+      "file": "ETH_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "a30f0dc656d03901f926ee49e643848e1a46d2c147338527c585260a1546d835"
+    },
+    {
+      "file": "ETH_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "0dd6320b41f9fd6d5b17a533b82df3ad6968fd5ad0931b0ad5e2305658658d20"
+    },
+    {
+      "file": "ETH_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "3bcdb3aeb9fb3f2d191199f4a0efa726513bc5b3dbd285149fd86045276938af"
+    },
+    {
+      "file": "ETH_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "dfc80f351e711885cd43deb271d37035c51f886d64907d6903f1bd4975be4d20"
+    },
+    {
+      "file": "FIL_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "9763c57c1c3ef106e397004b7b5de752789f5682a99cdd66803f867280ae8334"
+    },
+    {
+      "file": "FIL_USDT_USDT-1d-futures.feather",
+      "rows": 1282,
+      "start": "2021-06-29 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "57e5e91ad32a9c3210a6d345e2a14dc2419a97c70f7c7b6c2b82587c53223e21"
+    },
+    {
+      "file": "FIL_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "82890bc4ca32e4492a1274cc21e940ab19fc4d4f6d0689790284a4c76ee3bb4b"
+    },
+    {
+      "file": "FIL_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "f7a2aaeae8c3f86b49b3b04869273826352a33b39c03cdc3352933b907315f17"
+    },
+    {
+      "file": "FIL_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "cd3033032077c9bb5ea83d0277022ef1a8419dfbae10090c4037ffffa8e649d7"
+    },
+    {
+      "file": "FIL_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "073cac0e0fa887bc8deb12dec6f905df1fc406ae04b2230a9e23f3d33566a029"
+    },
+    {
+      "file": "FIL_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "2ef646d63608f2c5713886c3a1b76c4c7f76c9a8db5458ffd97fa6c08295216e"
+    },
+    {
+      "file": "GALA_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "8782fce0bc20a527a3a4adab4f50653ba1a8da1c1e9826037b790aa87ca6e3e9"
+    },
+    {
+      "file": "GALA_USDT_USDT-1d-futures.feather",
+      "rows": 1149,
+      "start": "2021-11-09 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "ed08fa616ff7dde2b44006491cba5d3bf023ae2029e788c9f42ad364658e9ea9"
+    },
+    {
+      "file": "GALA_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "039f6982e07c3ca9c58d2c9081f0b0e157622862f2a26cb0bee11d8113228ae8"
+    },
+    {
+      "file": "GALA_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "0ffbc06b418724d035da9ecba4dd6065b8a8ef271d0bd7e19638865272a35171"
+    },
+    {
+      "file": "GALA_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "0ab081553770714ed1f7485c1de29ff9e9776cece5c6ea090e8f3409141ce83b"
+    },
+    {
+      "file": "GALA_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "11c22ee00b119dce6c8c98f4b8b8c94e0de5b7ba3b2204bae8e059122b2cc041"
+    },
+    {
+      "file": "GALA_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "2f649f157f24671cdf7926e5ff36eb53508578a4cbdb172fa505e9abd636bca2"
+    },
+    {
+      "file": "ICP_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "54927fa02b5e5049fac2f376db4dd182e01d14e075a2dc0b86cf09e5e3713c3a"
+    },
+    {
+      "file": "ICP_USDT_USDT-1d-futures.feather",
+      "rows": 1204,
+      "start": "2021-09-15 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "0f7fbb5998b7318413ec6fb5a6e1f676447f31d2a4ccfa9edb863e732c5ce5f0"
+    },
+    {
+      "file": "ICP_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "cc4a8e8368d3f555c5b32a14ada7b7ca5ac3e20abd540193910c6d742a955b00"
+    },
+    {
+      "file": "ICP_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "fedbfb3ac1b55283960101c2ac588765c3cf2a1d215d25171ee426978c8c2a4d"
+    },
+    {
+      "file": "ICP_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "46da857cde6c829063b97cf9e18003915648d71f9a989dc560b80f97aa48e1e0"
+    },
+    {
+      "file": "ICP_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "2864aa3d97e82b063fa6cd7d56514d505ecb83497b1f38b24456c910d9388654"
+    },
+    {
+      "file": "ICP_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "a64a5d1314e94325bb26a48924f7841cb625eba7ec9bb16397baec053fc24e9e"
+    },
+    {
+      "file": "IMX_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "770a628b86c4c7aa8e943aaf216544240d4edc00ec8382ee46c1cc10fcf8fa8b"
+    },
+    {
+      "file": "IMX_USDT_USDT-1d-futures.feather",
+      "rows": 1134,
+      "start": "2021-11-24 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "4f3151c332415ee2aadf79f4302c7e168b4dbd61581aec7670428bc9eed1f0d4"
+    },
+    {
+      "file": "IMX_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "3c006e32eb3cbfd291c49a7fb42116aea95086a653256c084069eb30be36d61c"
+    },
+    {
+      "file": "IMX_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "0335061328e999e98f94fea99e0b308407ae862596e3697927240b0a3792ad70"
+    },
+    {
+      "file": "IMX_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "79d7f263221402188e622a6458edc998d2affbb7b28705473870b8e04076d44f"
+    },
+    {
+      "file": "IMX_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "68ae533a2328ecbeefd056ea73f3cb828a8fc1f7f1bf61e7b3e385ee75c62e89"
+    },
+    {
+      "file": "IMX_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "fb0488083851da30c06966d27c0fd1a6e399bf134d71768e8a03ee48e8c4eb29"
+    },
+    {
+      "file": "INJ_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "0e62eda5ed63b3b2cdc6276dca15f425b0b44a3e37f7edc7a233c2aad003deec"
+    },
+    {
+      "file": "INJ_USDT_USDT-1d-futures.feather",
+      "rows": 868,
+      "start": "2022-08-17 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "4ef9ce4fb541de5ba17e6c4e9ae0ffe9e1743936e79be7d9db8196d5bc7b7ed9"
+    },
+    {
+      "file": "INJ_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "a06f317d55c9719cb33693ae03c0f64ab25c2ab17778b3228d3d4d08ee4f084d"
+    },
+    {
+      "file": "INJ_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "0af1fba20c52071fc542d488e5fc4a93c4868caed228274f7cea6bf056393297"
+    },
+    {
+      "file": "INJ_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "226979aadcbe56ee0ee7b1a2a90fc8e8c254f17c67e389a6534bc557759f5599"
+    },
+    {
+      "file": "INJ_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "823e326418642ca8a7a9caa1aaedd95ee4d3c018f25c8d5c7f3218ca4e4cba5c"
+    },
+    {
+      "file": "INJ_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "ef1211da5cd85ac0af3a7b8772d0004d12e7bb3bdda0489bb1a8e28a8c82fafb"
+    },
+    {
+      "file": "LINK_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "677f5401a4c129f3e1f2e3b5d80118ea636e55811fda5dc039a5ffb6e5f57669"
+    },
+    {
+      "file": "LINK_USDT_USDT-1d-futures.feather",
+      "rows": 1461,
+      "start": "2021-01-01 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "5a1ccfef0c15e33133409724d252c498832a4f28748dec41afa1108b4f6a188c"
+    },
+    {
+      "file": "LINK_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "66512979dc16cb2b927b8b9566545de62b6cb0ffa4a480699977671c195a7809"
+    },
+    {
+      "file": "LINK_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "61b26709ad6d6be6546d9d4c97943a562c0c9e95891e5eaa881e3e507ad1d9bd"
+    },
+    {
+      "file": "LINK_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "1af412de3bc655992f1d420c85b66c376c7d6d5470dbb602faa25940b44c9c36"
+    },
+    {
+      "file": "LINK_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "61a7d7f086ba23a6f5b84f7c6730369d08e800c50eea4d49107a5e4e19fcb4e7"
+    },
+    {
+      "file": "LINK_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "cfa9f617cd3bc2e1a87aba7372fa4ff84068d9db5790cebfd7e8a3d0da0e2024"
+    },
+    {
+      "file": "LTC_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "49b2d1a5143ab45f6d8b4180ea7807e2a971801b23e3f13f6778d22aa7e6c193"
+    },
+    {
+      "file": "LTC_USDT_USDT-1d-futures.feather",
+      "rows": 1461,
+      "start": "2021-01-01 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "c32c456bc50d0d3b21b8cfcbf99176930225baae68f280a6fb08e16be18ae8c9"
+    },
+    {
+      "file": "LTC_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "073a4954f961b7b7e767e9c146c07fabdd96e849b7a54d1df967765abd3943a1"
+    },
+    {
+      "file": "LTC_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "e8a1c6d37a9ce4420a30317335effa6c0b702d9c4140795cd08bc375b02fffd5"
+    },
+    {
+      "file": "LTC_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "902ae664b21c5670aa134b6f27f25a19fb628336d662103183e826d5899a6ae4"
+    },
+    {
+      "file": "LTC_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "1df7f5561e75f07bb58350699d3f0cce32197191774910cc17a3d1f0e71f866b"
+    },
+    {
+      "file": "LTC_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "5b067f9f419dc2f1fefa77bfe3333b39c943bd7b321ae295a566226cf47c9aa9"
+    },
+    {
+      "file": "NEAR_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "13bf31dcd332017902f95de4699fc7d63b881f935398dc3903d64346eecb5e33"
+    },
+    {
+      "file": "NEAR_USDT_USDT-1d-futures.feather",
+      "rows": 1178,
+      "start": "2021-10-11 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "6303aac233304c7fab8237cb9b253a1d35c2bb32ec0b38cd5345a46dc03b5f7a"
+    },
+    {
+      "file": "NEAR_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "e4294a6187bd8ce8741732b36848cfed2b532d7fb493738c983df4a43fec7803"
+    },
+    {
+      "file": "NEAR_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "e2523a5196477bd357ea3db19bc43975808b45acf18f6ad86ad0405eb4127d1f"
+    },
+    {
+      "file": "NEAR_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "936e2355d1ac7bc57f32585aabdf8f20157c94f4a94047e638f6ee0996a64cd7"
+    },
+    {
+      "file": "NEAR_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "8bd1f3100db8e7aa3a1b144b1648497a0ba39eb74c64ed219f72ca14f678931c"
+    },
+    {
+      "file": "NEAR_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "6e7856ae80e671533d2d913190abc9af8f4eb5efcbdb08e76c9cebb37ec05b24"
+    },
+    {
+      "file": "OP_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "444941dee3558b73b3673ea852f1d35701c2a45e755857709dce4591137baf7f"
+    },
+    {
+      "file": "OP_USDT_USDT-1d-futures.feather",
+      "rows": 945,
+      "start": "2022-06-01 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "e5d89162d313e9d3d636f99a0eea1bbe102d9051dab1519f528533d98fc04f98"
+    },
+    {
+      "file": "OP_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "2aaa319e9c841ec4fa9ef55e173707527d9b4efdf05baa7395c44c8239c49f77"
+    },
+    {
+      "file": "OP_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "5a23e1878bc52811c893bfbc465431bf86d9a80d1eea70bc65f7d697ca7ae152"
+    },
+    {
+      "file": "OP_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "68c6be8558a93e8e6b887028194889a484ad302f373ef1e04b0d0bb7d6a306c5"
+    },
+    {
+      "file": "OP_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "4aacd5914729220c02fc01a51235488fbe1f8b1e15d9dc514713f7ebfa3e5d9c"
+    },
+    {
+      "file": "OP_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "578a4c693b2bebea3d2d37db47185017d556836234f4565936874908bab3bb61"
+    },
+    {
+      "file": "RUNE_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "d73c4a95281bdfa2a5ee7a54af55a554c542fd1c5784a2b2bf8d01ffb6c01229"
+    },
+    {
+      "file": "RUNE_USDT_USDT-1d-futures.feather",
+      "rows": 1129,
+      "start": "2021-11-29 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "1826866cb08db248f94082389086a43ff47d33cdff6b5f65934d8920b89518d8"
+    },
+    {
+      "file": "RUNE_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "917fc401dc3dca47762fc65fbd13b2339887b6e6e54a135b2cd15d1a69edae6f"
+    },
+    {
+      "file": "RUNE_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "3542b4b52b234f0a0c22140fbefd783142f705b3803be379e109347d5b8bc4c2"
+    },
+    {
+      "file": "RUNE_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "ac11f9c1ad9218625001b5e40dc6015f0414e37551ee40f7d49651ee678b8330"
+    },
+    {
+      "file": "RUNE_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "020b1da2db3fcfc11d59a01ef2cb2b0a1798a0207e0625aa20f344fd4584c483"
+    },
+    {
+      "file": "RUNE_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "a6752a45bf21dd63c9f3362604a69b1be1fd645d2e723f208cac249913f24367"
+    },
+    {
+      "file": "SAND_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "8a3a52f2e6a04e5bc39058805278f528d28400253f81250b483ed503d7dcc8a2"
+    },
+    {
+      "file": "SAND_USDT_USDT-1d-futures.feather",
+      "rows": 1157,
+      "start": "2021-11-01 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "4a5e6332c486a54d69118d89d540cff0bf6a497e53b9d5f5135aba06f431d3da"
+    },
+    {
+      "file": "SAND_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "208080ef513f16e81ef77b5e0da0b784a88a05671082161d07f64e510e8e8ed8"
+    },
+    {
+      "file": "SAND_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "eaba17a1dcf50c4e102cdeec23950b58ee09f7bb2e75a6f3adc3cdf231b59373"
+    },
+    {
+      "file": "SAND_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "1d1efa0b772ec317683bea7be30dbcb55cd757b867fa44f51d026dafe15a660d"
+    },
+    {
+      "file": "SAND_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "76d93e656c91f081371ab6b2b20eae2b714cd71c038048f1f503667f9623f179"
+    },
+    {
+      "file": "SAND_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "d8bd1bef8693e1badbdc87d6d7c7127db1a7e16a7dd11915ad304a57b99cc581"
+    },
+    {
+      "file": "SOL_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "d925aec5b519a2089b1f3b51fc7bef8965c64d191af7d987e7427c1ba06f4634"
+    },
+    {
+      "file": "SOL_USDT_USDT-1d-futures.feather",
+      "rows": 1174,
+      "start": "2021-10-15 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "e76e00be98a4705a2ef83c200c4bb9f5e92a1365d110237ba80f8a86603f7822"
+    },
+    {
+      "file": "SOL_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "4c5cb454c53c2d93fa89a46d3621668908e0eb7ac25b2c66625a532a76b26957"
+    },
+    {
+      "file": "SOL_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "9d93e8a53430c9d33f597271823631051318a353f85571b71d344feda4ed9db5"
+    },
+    {
+      "file": "SOL_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "3b8b6b76f82a43efabbf205bc4ffe7be899003ad679c2addfbb5a6815099a6de"
+    },
+    {
+      "file": "SOL_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "6bd7c0fff11d97021744de6a8b403586b73322e100666104357a1052db3242fa"
+    },
+    {
+      "file": "SOL_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "b360c10a7ea5dc4cc9648acfc293530e47942cf11c80604a176432cca1d9f515"
+    },
+    {
+      "file": "SUI_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "face66b98b333eb7c5eaaefbc407ce2acd174cd528b6d69fdc8b96cb94735a52"
+    },
+    {
+      "file": "SUI_USDT_USDT-1d-futures.feather",
+      "rows": 609,
+      "start": "2023-05-03 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "6119d8f2145fc0040c2341902e1489d76e5d25c860f469f6da0c707bd45996f4"
+    },
+    {
+      "file": "SUI_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "643245b82d6b74c12ec132582cbee60fbcb41489b4ed3e57d37a603d17b78d3e"
+    },
+    {
+      "file": "SUI_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "971bc6851b7f7ac90bb59bfe1c1839a5b7a685f530c4a560a0c6c940db4b0035"
+    },
+    {
+      "file": "SUI_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "128267f3792dea3514c8989148b501439db1acabb6b923b3e65ebe4f646d43bf"
+    },
+    {
+      "file": "SUI_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "21359ba5ba0ef01747abb538c6d76c6ea83b69ed995dd86727a79edb3db57af5"
+    },
+    {
+      "file": "SUI_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "323a922a3736372ada59eeac84cc923edead3d18bee0bf216255908a9560c743"
+    },
+    {
+      "file": "TRX_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "8556264534bb7792e421c46bad038f829428eb4bf14bd414c73c3b7423e72b57"
+    },
+    {
+      "file": "TRX_USDT_USDT-1d-futures.feather",
+      "rows": 1219,
+      "start": "2021-08-31 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "663a4c4dd6aec934d3e3c18433fb8d89893721ead58e23ca320587ac7efb99a6"
+    },
+    {
+      "file": "TRX_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "b4e2172acc381525ce84f6277f56f17c6853a60da062cfa9c6489cb8adcf9e59"
+    },
+    {
+      "file": "TRX_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "09c6c44a157236324018608ac57078c28efef1844ce5c0229b36405fe764ba28"
+    },
+    {
+      "file": "TRX_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "c92f0b83668254e2c798338c1778cf8e93c6b01a2a0336b1a83e4ac992543adf"
+    },
+    {
+      "file": "TRX_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "f654aae2c6d5a5491d201831004da7153315536beec94840b5679b2c20566cd6"
+    },
+    {
+      "file": "TRX_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "a839793f664e119ab560292993da81135ea74b1f366faea510c8ff9386974175"
+    },
+    {
+      "file": "UNI_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "af18c8b5b6dab7ec107cb4dfc3210566d6b782702722cfeda4897a2359d051c7"
+    },
+    {
+      "file": "UNI_USDT_USDT-1d-futures.feather",
+      "rows": 1128,
+      "start": "2021-11-30 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "6644f39d6420ad4021589a8428323be38e1a8ea89d15c7af570bb73df872e87f"
+    },
+    {
+      "file": "UNI_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "145d5b747fc9d10a8187872c4c48f9c8200c30d7e79062a1b997fc7d3fff54d6"
+    },
+    {
+      "file": "UNI_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "14da948ab35b325b3363a115f7fc80e86f88efdc30bd7529a75041da328515fb"
+    },
+    {
+      "file": "UNI_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "61dde040fbb976284fa60db12d599ae0e5642048e446769925a12e4bf286edd9"
+    },
+    {
+      "file": "UNI_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "2b7158882e6435567b8e7e0d498df20eddd8e4bd5745fc218e9d676462503f76"
+    },
+    {
+      "file": "UNI_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "ca78ae96f8daf278db7efa570c6c8321f1ccebe9f9b754ecca5358af596b5112"
+    },
+    {
+      "file": "XRP_USDT_USDT-15m-futures.feather",
+      "rows": 49824,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:45:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "2c96f1d49d9dcc3786a5826c189274a78d46acaed4899f07c795f8cd7c4e26ed"
+    },
+    {
+      "file": "XRP_USDT_USDT-1d-futures.feather",
+      "rows": 1329,
+      "start": "2021-05-13 00:00:00+00:00",
+      "end": "2024-12-31 00:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "4fc0993c3f7f1eae1014d828a1330c2333af697b081b9c2390e010d0e6d8d951"
+    },
+    {
+      "file": "XRP_USDT_USDT-1h-funding_rate.feather",
+      "rows": 1191,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 16:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "c9734a1e2912282ea3e677f205a2041cdbc98bbebd42aa3b623b5d4b27365e2d"
+    },
+    {
+      "file": "XRP_USDT_USDT-1h-futures.feather",
+      "rows": 12456,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "0ada6ea406c40c5f5c67c7db52707bb20d1302d4b04750259b4c11fd575f354d"
+    },
+    {
+      "file": "XRP_USDT_USDT-1h-mark.feather",
+      "rows": 9528,
+      "start": "2023-12-01 00:00:00+00:00",
+      "end": "2024-12-31 23:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "dead9777399115cd23f6db27496fe33dc328c5636790ec977bb788da27aa9a36"
+    },
+    {
+      "file": "XRP_USDT_USDT-4h-futures.feather",
+      "rows": 3114,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 20:00:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "a792d8d2947dfc1c790ddccfbb7ddfb0a9624c1c71eba01cf1c6c08cdce2601c"
+    },
+    {
+      "file": "XRP_USDT_USDT-5m-futures.feather",
+      "rows": 149472,
+      "start": "2023-08-01 00:00:00+00:00",
+      "end": "2024-12-31 23:55:00+00:00",
+      "gaps": 0,
+      "duplicates": 0,
+      "sha256": "e89ab3fe9b3ccf63eb7c9108cd75371787d37141b7d175fc274c204fc0c869de"
+    }
+  ],
+  "liquidity_snapshot30": [
+    {
+      "pair": "BTC/USDT:USDT",
+      "timestamp_ms": 1793700126959,
+      "turnover_24h_usdt": 4081450847.2015,
+      "spread_pct": 0.0001298140738003664,
+      "bid_depth_within_01pct_usdt": 1169187.4856,
+      "ask_depth_within_01pct_usdt": 2336580.4046
+    },
+    {
+      "pair": "ETH/USDT:USDT",
+      "timestamp_ms": 1793700127249,
+      "turnover_24h_usdt": 1733461489.069,
+      "spread_pct": 0.00044127024052397656,
+      "bid_depth_within_01pct_usdt": 1620446.7635,
+      "ask_depth_within_01pct_usdt": 1572590.913
+    },
+    {
+      "pair": "SOL/USDT:USDT",
+      "timestamp_ms": 1793700127520,
+      "turnover_24h_usdt": 517083268.998,
+      "spread_pct": 0.010837171498244503,
+      "bid_depth_within_01pct_usdt": 1356049.0760000001,
+      "ask_depth_within_01pct_usdt": 1354155.1709999999
+    },
+    {
+      "pair": "XRP/USDT:USDT",
+      "timestamp_ms": 1793700127801,
+      "turnover_24h_usdt": 241011325.856,
+      "spread_pct": 0.007963368504876686,
+      "bid_depth_within_01pct_usdt": 1325726.60389,
+      "ask_depth_within_01pct_usdt": 1546963.5707699999
+    },
+    {
+      "pair": "DOGE/USDT:USDT",
+      "timestamp_ms": 1793700128083,
+      "turnover_24h_usdt": 74237937.0633,
+      "spread_pct": 0.013505300830589508,
+      "bid_depth_within_01pct_usdt": 485577.77063,
+      "ask_depth_within_01pct_usdt": 429101.30676
+    },
+    {
+      "pair": "ADA/USDT:USDT",
+      "timestamp_ms": 1793700128480,
+      "turnover_24h_usdt": 39286884.6507,
+      "spread_pct": 0.053205639797812704,
+      "bid_depth_within_01pct_usdt": 177843.035,
+      "ask_depth_within_01pct_usdt": 161767.6901
+    },
+    {
+      "pair": "AVAX/USDT:USDT",
+      "timestamp_ms": 1793700128759,
+      "turnover_24h_usdt": 21609414.1349,
+      "spread_pct": 0.011816838995562138,
+      "bid_depth_within_01pct_usdt": 98014.1049,
+      "ask_depth_within_01pct_usdt": 100292.09150000001
+    },
+    {
+      "pair": "LINK/USDT:USDT",
+      "timestamp_ms": 1793700128907,
+      "turnover_24h_usdt": 36187408.0145,
+      "spread_pct": 0.008978675645337338,
+      "bid_depth_within_01pct_usdt": 182329.0993,
+      "ask_depth_within_01pct_usdt": 217951.8226
+    },
+    {
+      "pair": "DOT/USDT:USDT",
+      "timestamp_ms": 1793700129286,
+      "turnover_24h_usdt": 8053516.4185,
+      "spread_pct": 0.010731340881041905,
+      "bid_depth_within_01pct_usdt": 25898.56496,
+      "ask_depth_within_01pct_usdt": 46801.85277
+    },
+    {
+      "pair": "LTC/USDT:USDT",
+      "timestamp_ms": 1793700129549,
+      "turnover_24h_usdt": 11636145.159,
+      "spread_pct": 0.018513375914107406,
+      "bid_depth_within_01pct_usdt": 82774.166,
+      "ask_depth_within_01pct_usdt": 81486.851
+    },
+    {
+      "pair": "BCH/USDT:USDT",
+      "timestamp_ms": 1793700129881,
+      "turnover_24h_usdt": 14760676.7561,
+      "spread_pct": 0.0036045778138202775,
+      "bid_depth_within_01pct_usdt": 60696.8379,
+      "ask_depth_within_01pct_usdt": 59724.6283
+    },
+    {
+      "pair": "TRX/USDT:USDT",
+      "timestamp_ms": 1793700130063,
+      "turnover_24h_usdt": 17462389.9145,
+      "spread_pct": 0.031022180859328213,
+      "bid_depth_within_01pct_usdt": 99528.6284,
+      "ask_depth_within_01pct_usdt": 141665.2502
+    },
+    {
+      "pair": "ATOM/USDT:USDT",
+      "timestamp_ms": 1793700130349,
+      "turnover_24h_usdt": 6645509.7919,
+      "spread_pct": 0.0704473406128841,
+      "bid_depth_within_01pct_usdt": 4424.867700000001,
+      "ask_depth_within_01pct_usdt": 7672.402
+    },
+    {
+      "pair": "NEAR/USDT:USDT",
+      "timestamp_ms": 1793700130750,
+      "turnover_24h_usdt": 222168673.8183,
+      "spread_pct": 0.026058631921821236,
+      "bid_depth_within_01pct_usdt": 258928.4573,
+      "ask_depth_within_01pct_usdt": 270163.6859
+    },
+    {
+      "pair": "UNI/USDT:USDT",
+      "timestamp_ms": 1793700130884,
+      "turnover_24h_usdt": 42839473.3475,
+      "spread_pct": 0.01401443486791863,
+      "bid_depth_within_01pct_usdt": 97325.4715,
+      "ask_depth_within_01pct_usdt": 65364.181000000004
+    },
+    {
+      "pair": "AAVE/USDT:USDT",
+      "timestamp_ms": 1793700131202,
+      "turnover_24h_usdt": 38355862.6858,
+      "spread_pct": 0.00778422138324906,
+      "bid_depth_within_01pct_usdt": 104313.6752,
+      "ask_depth_within_01pct_usdt": 87652.126
+    },
+    {
+      "pair": "ETC/USDT:USDT",
+      "timestamp_ms": 1793700131117,
+      "turnover_24h_usdt": 2699745.6017,
+      "spread_pct": 0.014370913271530441,
+      "bid_depth_within_01pct_usdt": 9136.1263,
+      "ask_depth_within_01pct_usdt": 9624.5543
+    },
+    {
+      "pair": "FIL/USDT:USDT",
+      "timestamp_ms": 1793700131716,
+      "turnover_24h_usdt": 4122055.4939,
+      "spread_pct": 0.01153469058192387,
+      "bid_depth_within_01pct_usdt": 24946.76549,
+      "ask_depth_within_01pct_usdt": 28274.2223
+    },
+    {
+      "pair": "ARB/USDT:USDT",
+      "timestamp_ms": 1793700132086,
+      "turnover_24h_usdt": 16195748.0161,
+      "spread_pct": 0.006412106056222786,
+      "bid_depth_within_01pct_usdt": 45141.751551,
+      "ask_depth_within_01pct_usdt": 46262.09655
+    },
+    {
+      "pair": "OP/USDT:USDT",
+      "timestamp_ms": 1793700132458,
+      "turnover_24h_usdt": 9567756.3968,
+      "spread_pct": 0.009237448616688489,
+      "bid_depth_within_01pct_usdt": 44149.92777,
+      "ask_depth_within_01pct_usdt": 29418.830381
+    },
+    {
+      "pair": "SUI/USDT:USDT",
+      "timestamp_ms": 1793700132656,
+      "turnover_24h_usdt": 51017963.72,
+      "spread_pct": 0.011467232383462988,
+      "bid_depth_within_01pct_usdt": 190138.668,
+      "ask_depth_within_01pct_usdt": 210259.945
+    },
+    {
+      "pair": "APT/USDT:USDT",
+      "timestamp_ms": 1793700132963,
+      "turnover_24h_usdt": 7735439.9613,
+      "spread_pct": 0.016317206494246388,
+      "bid_depth_within_01pct_usdt": 22682.761339,
+      "ask_depth_within_01pct_usdt": 27938.599531
+    },
+    {
+      "pair": "INJ/USDT:USDT",
+      "timestamp_ms": 1793700133310,
+      "turnover_24h_usdt": 16979662.3445,
+      "spread_pct": 0.01406964474146248,
+      "bid_depth_within_01pct_usdt": 19457.675600000002,
+      "ask_depth_within_01pct_usdt": 12965.1046
+    },
+    {
+      "pair": "ICP/USDT:USDT",
+      "timestamp_ms": 1793700133493,
+      "turnover_24h_usdt": 4425663.6707,
+      "spread_pct": 0.04070832485242784,
+      "bid_depth_within_01pct_usdt": 15619.0916,
+      "ask_depth_within_01pct_usdt": 6814.5197
+    },
+    {
+      "pair": "ALGO/USDT:USDT",
+      "timestamp_ms": 1793700133550,
+      "turnover_24h_usdt": 1927155.0979,
+      "spread_pct": 0.010976345974420858,
+      "bid_depth_within_01pct_usdt": 11883.551513,
+      "ask_depth_within_01pct_usdt": 13571.826753
+    },
+    {
+      "pair": "RUNE/USDT:USDT",
+      "timestamp_ms": 1793700134081,
+      "turnover_24h_usdt": 6730472.9716,
+      "spread_pct": 0.06956521739131599,
+      "bid_depth_within_01pct_usdt": 652.36194,
+      "ask_depth_within_01pct_usdt": 274.74249000000003
+    },
+    {
+      "pair": "CRV/USDT:USDT",
+      "timestamp_ms": 1793700134457,
+      "turnover_24h_usdt": 5917053.3524,
+      "spread_pct": 0.03804451207914951,
+      "bid_depth_within_01pct_usdt": 14254.49116,
+      "ask_depth_within_01pct_usdt": 16865.89757
+    },
+    {
+      "pair": "GALA/USDT:USDT",
+      "timestamp_ms": 1793700134473,
+      "turnover_24h_usdt": 1939097.4425,
+      "spread_pct": 0.06066120715803049,
+      "bid_depth_within_01pct_usdt": 11333.847107,
+      "ask_depth_within_01pct_usdt": 10450.747508999999
+    },
+    {
+      "pair": "SAND/USDT:USDT",
+      "timestamp_ms": 1793700134265,
+      "turnover_24h_usdt": 3629108.792,
+      "spread_pct": 0.04552697473252717,
+      "bid_depth_within_01pct_usdt": 22381.46873,
+      "ask_depth_within_01pct_usdt": 18166.58425
+    },
+    {
+      "pair": "IMX/USDT:USDT",
+      "timestamp_ms": 1793700135281,
+      "turnover_24h_usdt": 676032.2673,
+      "spread_pct": 0.16806722689074946,
+      "bid_depth_within_01pct_usdt": 2401.45897,
+      "ask_depth_within_01pct_usdt": 3113.71467
+    }
+  ],
+  "source_sha256": {
+    "scripts\\prop_dca_study.py": "6fdcbff2408b78a75a80df0dba661d72267995daa7e03fb1de144fe3496af6f9",
+    "scripts\\prop_dca_market_data.py": "a0efe0bd9e6b4f74dd96c95815cb45041df59f19db374afba15be04f42281b35",
+    "scripts\\forensic_prop_validation.py": "1b84fa776e1ca7bbd19c739916fb5a087c87e53e91b0ce42cee32a3fc17fb4ee",
+    "user_data\\strategies\\NostalgiaForInfinityX8.py": "0f8c43e8d761f0492355ee3b2d9ec816b266ed2670bb4242fd28c1aa60417eed",
+    "user_data\\strategies\\NostalgiaForInfinityX8_Prop.py": "247534989779d51313dbef8693f70cf78975cd004cd52502feedda0eb4295ff6"
+  }
+}

@@ -1867,8 +1867,10 @@ class Exchange:
 
     @retrier
     def get_balances(self, params: dict | None = None) -> CcxtBalances:
+        self.account_equity_snapshot = None
         try:
             balances = self._api.fetch_balance(params or {})
+            self.account_equity_snapshot = self._parse_account_equity(balances.get("info"))
             # Remove additional info from ccxt results
             balances.pop("info", None)
             balances.pop("free", None)
@@ -1885,6 +1887,10 @@ class Exchange:
             ) from e
         except ccxt.BaseError as e:
             raise OperationalException(e) from e
+
+    def _parse_account_equity(self, response: dict | None) -> dict | None:
+        """Exchange-specific authoritative account equity, unavailable by default."""
+        return None
 
     @retrier
     def fetch_positions(

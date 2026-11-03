@@ -1,4 +1,6 @@
 import copy
+import json
+import math
 import logging
 import pathlib
 import rapidjson
@@ -278,6 +280,7 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
 
   # Position adjust feature
   position_adjustment_enable = True
+  max_entry_position_adjustment = -1
 
   # Grinding feature
   grinding_enable = True
@@ -2459,6 +2462,27 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
 
   # Custom Stake Amount
   # ---------------------------------------------------------------------------------------------
+  def bot_start(self, **kwargs) -> None:
+    """Validate the prop firm risk profile."""
+    if (self.config.get("trading_mode") != "futures"
+        or self.config.get("margin_mode") != "isolated"
+        or not 0 < self.config.get("max_open_trades", 0) <= 6
+        or not 0 < self.config.get("tradable_balance_ratio", 0) <= 0.40
+        or "available_capital" in self.config
+        or not self.position_adjustment_enable
+        or self.max_entry_position_adjustment != -1
+        or not self.grinding_enable
+        or self.can_short
+        or self.stoploss != -0.99
+        or (self.config["runmode"].value in ("live", "dry_run")
+            and (not self.config.get("prop_guard_enabled")
+                 or self.config.get("tradable_balance_ratio", 0) > 0.36))
+        or self.order_types.get("stoploss") != "market"
+        or self.order_types.get("force_exit") != "market"
+        or self.bad_trade_controller_structure_break_exit_enable):
+      raise ValueError("Unsafe override of the forensic prop risk profile")
+
+
   def custom_stake_amount(
     self,
     pair: str,
@@ -2592,6 +2616,7 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
           return scaled_stake(regular_mode_stake_multipliers[0])
 
     return proposed_stake
+
 
   # Order filled Callback
   # ---------------------------------------------------------------------------------------------
@@ -2901,6 +2926,7 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
         return self.short_grind_adjust_trade_position_v2(*args)
 
     return None
+
 
   def notification_msg(
     self,
@@ -5321,7 +5347,22 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
     side: str,
     **kwargs,
   ) -> bool:
-    # Force Entry
+    if (side != "long" or any(isinstance(v, bool) or not isinstance(v, (float, int))
+        or not math.isfinite(v) or v <= 0 for v in (amount, rate))):
+      return False
+    if self.config["runmode"].value in ("live", "dry_run"):
+      try:
+        state_path = pathlib.Path(self.config["user_data_dir"]) / "risk_manager_prop_state.json"
+        state = json.loads(state_path.read_text())
+        updated = datetime.fromisoformat(state["last_updated"])
+        age = current_time.timestamp() - updated.timestamp()
+        if (state.get("schema_version") != 1 or updated.tzinfo is None
+            or not 0 <= age <= 15 or state.get("nuclear_triggered") is not False
+            or state.get("data_fault") is not False or state.get("wake_up_lock") is not False):
+          return False
+      except (OSError, ValueError, KeyError, TypeError):
+        return False
+    # Wallet validation applies the capital budget; this gate checks the supervisor.
     if entry_tag == "force_entry":
       return True
 
@@ -5419,6 +5460,9 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
     current_time: datetime,
     **kwargs,
   ) -> bool:
+    if exit_reason in {"stop_loss", "stoploss_on_exchange", "trailing_stop_loss",
+                       "emergency_exit", "force_exit", "liquidation"}:
+      return True
     trade_realized_profit = trade.realized_profit
     trade_stake_amount = trade.stake_amount
     trade_is_short = trade.is_short
@@ -5510,20 +5554,15 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
     side: str,
     **kwargs,
   ) -> float:
-    enter_tags = entry_tag.split() if entry_tag else []
-    long_rebuy_mode_tags = self.long_rebuy_mode_tags
-    long_grind_mode_tags = self.long_grind_mode_tags
-    if all(c in long_rebuy_mode_tags for c in enter_tags):
-      return min(1.0, float(self.futures_mode_leverage_rebuy_mode))
-    elif all(c in long_grind_mode_tags for c in enter_tags):
-      return min(1.0, float(self.futures_mode_leverage_grind_mode))
-    return min(1.0, float(self.futures_mode_leverage))
+    return 1.0
 
   # Correct Min Stake
   # ---------------------------------------------------------------------------------------------
   def correct_min_stake(self, min_stake: Optional[float], trade_leverage: Optional[float] = None) -> Optional[float]:
+    if min_stake is not None and (isinstance(min_stake, bool) or not math.isfinite(min_stake) or min_stake < 0):
+      raise ValueError("Invalid minimum stake")
     if self.is_futures_mode and self.config["exchange"]["name"] in ("binance", "bybit", "krakenfutures"):
-      min_futures_stake = 5.0 / (trade_leverage if trade_leverage is not None else self.futures_mode_leverage)
+      min_futures_stake = 5.0  # The only supported leverage is 1x.
       if (min_stake is None) or (min_stake < min_futures_stake):
         min_stake = min_futures_stake
     return min_stake

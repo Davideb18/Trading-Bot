@@ -4,6 +4,10 @@
     "stake_currency": "USDT",
     "stake_amount": "unlimited",
     "tradable_balance_ratio": 0.24,
+    "prop_non_compounding": true,
+    "prop_initial_balance": 5000,
+    "prop_guard_enabled": true,
+    "position_adjustment_enable": true,
     "max_stake_amount": 50000,
     "fiat_display_currency": "USD",
     "timeframe": "5m",
@@ -21,7 +25,7 @@
     "unfilledtimeout": {
         "entry": 3,
         "exit": 2,
-        "exit_timeout_count": 0,
+        "exit_timeout_count": 1,
         "unit": "minutes"
     },
     "order_types": {
@@ -53,14 +57,15 @@
     },
     "exchange": {
         "name": "bybit",
-        "key": "LGPkJfN8NAXn56vOJt",
-        "secret": "dnvZFfH1zZmsY0PKuqkm2gE0WdGeJvUp0meQ",
+        "key": "",
+        "secret": "",
         "demo_trading": true,
         "ccxt_config": {
             "enableRateLimit": true,
             "rateLimit": 200,
             "timeout": 30000,
-            "has": {
+            "options": {
+                "defaultType": "swap",
                 "fetchCurrencies": false
             }
         },
@@ -68,11 +73,58 @@
             "enableRateLimit": true,
             "rateLimit": 200,
             "timeout": 30000,
-            "has": {
+            "options": {
+                "defaultType": "swap",
                 "fetchCurrencies": false
             }
         },
-        "pair_whitelist": [],
+        "pair_whitelist": [
+            "BTC/USDT:USDT",
+            "ETH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "XRP/USDT:USDT",
+            "DOGE/USDT:USDT",
+            "ADA/USDT:USDT",
+            "AVAX/USDT:USDT",
+            "LINK/USDT:USDT",
+            "DOT/USDT:USDT",
+            "LTC/USDT:USDT",
+            "BCH/USDT:USDT",
+            "TRX/USDT:USDT",
+            "ATOM/USDT:USDT",
+            "NEAR/USDT:USDT",
+            "UNI/USDT:USDT",
+            "AAVE/USDT:USDT",
+            "ETC/USDT:USDT",
+            "FIL/USDT:USDT",
+            "ARB/USDT:USDT",
+            "OP/USDT:USDT",
+            "SUI/USDT:USDT",
+            "APT/USDT:USDT",
+            "INJ/USDT:USDT",
+            "ICP/USDT:USDT",
+            "ALGO/USDT:USDT",
+            "RUNE/USDT:USDT",
+            "CRV/USDT:USDT",
+            "GALA/USDT:USDT",
+            "SAND/USDT:USDT",
+            "IMX/USDT:USDT",
+            "SEI/USDT:USDT",
+            "TIA/USDT:USDT",
+            "FET/USDT:USDT",
+            "RENDER/USDT:USDT",
+            "PENDLE/USDT:USDT",
+            "WLD/USDT:USDT",
+            "LDO/USDT:USDT",
+            "GRT/USDT:USDT",
+            "HBAR/USDT:USDT",
+            "KAS/USDT:USDT",
+            "JTO/USDT:USDT",
+            "ORDI/USDT:USDT",
+            "PYTH/USDT:USDT",
+            "QNT/USDT:USDT",
+            "SNX/USDT:USDT"
+        ],
         "pair_blacklist": [
             "(GLMR|ICX|MOVR|SOPH)/.*",
             "(LSK|STX)/.*",
@@ -81,11 +133,12 @@
             "(FIGHT|IDOL)/.*",
             "(RIF|BNB)/.*",
             "(1000.*).*/.*",
-            ".*(_PREMIUM|BEAR|BULL|HALF|HEDGE|UP|DOWN|[1235][SL])/.*",
+            ".*(_PREMIUM|BEAR|BULL|HALF|HEDGE|[1235][SL])/.*",
+            ".{3,}(UP|DOWN)/.*",
             "(ARS|AUD|BIDR|BRZ|BRL|CAD|CHF|EUR|GBP|HKD|IDRT|JPY|NGN|PLN|RON|RUB|SGD|TRY|UAH|USD|ZAR)/.*",
             "(AEUR|FDUSD|BUSD|CUSD|CUSDT|DAI|AXG|SUSD|TUSD|USDC|USDN|USDP|USDT|VAI|UST|USTC|AUSD|FDUSD|EURI|USDS|XUSD|USD1|RLUSD|U)/.*",
             "(ACM|AFA|ALA|ALL|ALPINE|APL|ASR|ATM|BAR|CAI|CHZ|CITY|FOR|GAL|GOZ|IBFK|JUV|LEG|LOCK-1|NAVI|NMR|NOV|PFL|PSG|ROUSH|STV|TH|TRA|UCH|UFC|YBO)/.*",
-            "(1EARTH|ILA|CWAR|OMG|DMTR|MLS|TORN|LUNA|BTS|QKC|ACA|FTT|SRM|YFII|SNM|ANC|AION|MIR|WABI|QLC|NEBL|AUTO|VGX|DREP|PNT|PERL|LOOM|NULS|TOMO|WTC|ANT|MULTI|VAI|DREP|MOB|PNT|BTCDOM|WAVES|WNXM|XEM|ELF|ARK|MDX|BETA|KP3R|AKRO|AMB|BOND|FIRO|OAX|EPX|OOKI|TRUMP|MAGA|MAGAETH|TREMP|BODEN|STRUMP|TOOKER|TMANIA|BOBBY|BABYTRUMP|PTTRUMP|DTI|TRUMPIE|MAGAPEPE|PEPEMAGA|HARD|MBL|GAL|DOCK|POLS|CTXC|BAL|SNT|CREAM|REN|LINA|REEF|UNFI|IRIS|CVP|GFT|KEY|WRX|BLZ|DAR|TROY|STMX|FTM|URO|FRED|DOGEGOV|LIT|TST|TSTBSC|CLV|VITE|BAN|AVAAI|ARC|BNX|MELANIA|BURGER|AERGO|ALPACA|AST|BADGER|COMBO|NULS|STPT|UFT|VIDT|GPS|HAPPY|LAIKA|DAPP|FURY|JELLYJELLY|DF|ACT|PROS|JAILSTOOL|OM|IRL|AURY|ZKF|LAI|ARX|MPC|PUMLX|ISME|LOOM|LUCE|FLT|REAL|PDA|WING|VIB|ARDR|NKN|LTO|FLM|BSW|LEVER|REI|HIFI|ALPHA|MEMEFI|AB|BROCCOLI.*|XYRO|FMB|QAI|HYPERSKIDS|AMC|ZKJ|SNS|KMD|PFVS|BAKE|IDEX|SLF|CATS|ALU|ELDE|RIZE|FRAG|BBQ|FHE|SAROS|AMR|MBG|TA|BOOM|WLFI|NEIROETH|RION|IMT|FLY|ZCX|NUTS|XAR|MINT|PAWS|WELL|APU|CRETA|GSWIFT|PEPECOIN|PIRATE|BRIC|EARNM|OIK|AIOT|IKA|PUMPBTC|ISLAND|COREUM|BAS|KDA|AIA|BANK|DEGO|CCD|PERP|AI16Z|XPIN|CUDIS|H|NIL|TRADOOR|PORT3|MERL|L3|PSTAKE|BDXN|FIS|DMAIL|VOXEL|SKATE|MAIGA|TRUTH|XYO|LOOKS|RIVER|PTB|BIFI|POWER|NIBI|LYN|TAKE|ANLOG|BEAT|\u5e01\u5b89\u4eba\u751f|XCAD|TANSSI|ZRC|DMC|BID|VRA|HANA|TANSSI|XNO|ALEO|FWOG|ZEUS|MILK|COMMON|42|EPT|VENOM|CHESS|DATA|GHST|ROOT|MODE|RVV|YALA|DEAI|ALCX|BULLA|VFY|A2Z|FORTH|HOOK|NTRN|RDNT|SXP|WHITEWHALE|ON|CORE|HIPPO|WAN|DRIFT|FIO|FUN|MDT|OXT|NOM|UTK|LISTA|CAMP|ARIA|DENT|TRU|GRIFFAIN|IR|CORN|IAG|DAM|X|BLUM|MONPRO|UXLINK|IZI|YZY|BSY|WAT|RAIN|PSAI|UPC|AL|ATA|FARM|MLN|PHB|SYS|AIXPLAY|B|CES|GUA|XP|AIXDROP|PLAYSOUT|BDX|NFP|CLO|SKYAI|DN|POND|KBEAT|D|COS|HIGH|MBOX|STAY|ASTEROID|GWEI|IP|XION|AIGENSYN|PYR|SYMM|GIZA|DNX|SDEX|A47|TRIA|BOB|GNS|PROMPT|B3|HYPE|BEAM|XPL|SOXL|APR)/.*",
+            "(1EARTH|ILA|CWAR|OMG|DMTR|MLS|TORN|LUNA|BTS|QKC|ACA|FTT|SRM|YFII|SNM|ANC|AION|MIR|WABI|QLC|NEBL|AUTO|VGX|DREP|PNT|PERL|LOOM|NULS|TOMO|WTC|ANT|MULTI|VAI|DREP|MOB|PNT|BTCDOM|WAVES|WNXM|XEM|ELF|ARK|MDX|BETA|KP3R|AKRO|AMB|BOND|FIRO|OAX|EPX|OOKI|TRUMP|MAGA|MAGAETH|TREMP|BODEN|STRUMP|TOOKER|TMANIA|BOBBY|BABYTRUMP|PTTRUMP|DTI|TRUMPIE|MAGAPEPE|PEPEMAGA|HARD|MBL|GAL|DOCK|POLS|CTXC|BAL|SNT|CREAM|REN|LINA|REEF|UNFI|IRIS|CVP|GFT|KEY|WRX|BLZ|DAR|TROY|STMX|FTM|URO|FRED|DOGEGOV|LIT|TST|TSTBSC|CLV|VITE|BAN|AVAAI|ARC|BNX|MELANIA|BURGER|AERGO|ALPACA|AST|BADGER|COMBO|NULS|STPT|UFT|VIDT|GPS|HAPPY|LAIKA|DAPP|FURY|JELLYJELLY|DF|ACT|PROS|JAILSTOOL|OM|IRL|AURY|ZKF|LAI|ARX|MPC|PUMLX|ISME|LOOM|LUCE|FLT|REAL|PDA|WING|VIB|ARDR|NKN|LTO|FLM|BSW|LEVER|REI|HIFI|ALPHA|MEMEFI|AB|BROCCOLI.*|XYRO|FMB|QAI|HYPERSKIDS|AMC|ZKJ|SNS|KMD|PFVS|BAKE|IDEX|SLF|CATS|ALU|ELDE|RIZE|FRAG|BBQ|FHE|SAROS|AMR|MBG|TA|BOOM|WLFI|NEIROETH|RION|IMT|FLY|ZCX|NUTS|XAR|MINT|PAWS|WELL|APU|CRETA|GSWIFT|PEPECOIN|PIRATE|BRIC|EARNM|OIK|AIOT|IKA|PUMPBTC|ISLAND|COREUM|BAS|KDA|AIA|BANK|DEGO|CCD|PERP|AI16Z|XPIN|CUDIS|H|NIL|TRADOOR|PORT3|MERL|L3|PSTAKE|BDXN|FIS|DMAIL|VOXEL|SKATE|MAIGA|TRUTH|XYO|LOOKS|RIVER|PTB|BIFI|POWER|NIBI|LYN|TAKE|ANLOG|BEAT|XCAD|TANSSI|ZRC|DMC|BID|VRA|HANA|XNO|ALEO|FWOG|ZEUS|MILK|COMMON|42|EPT|VENOM|CHESS|DATA|GHST|ROOT|MODE|RVV|YALA|DEAI|ALCX|BULLA|VFY|A2Z|FORTH|HOOK|NTRN|RDNT|SXP|WHITEWHALE|ON|CORE|HIPPO|WAN|DRIFT|FIO|FUN|MDT|OXT|NOM|UTK|LISTA|CAMP|ARIA|DENT|TRU|GRIFFAIN|IR|CORN|IAG|DAM|X|BLUM|MONPRO|UXLINK|IZI|YZY|BSY|WAT|RAIN|PSAI|UPC|AL|ATA|FARM|MLN|PHB|SYS|AIXPLAY|B|CES|GUA|XP|AIXDROP|PLAYSOUT|BDX|NFP|CLO|SKYAI|DN|POND|KBEAT|D|COS|HIGH|MBOX|STAY|ASTEROID|GWEI|IP|XION|AIGENSYN|PYR|SYMM|GIZA|DNX|SDEX|A47|TRIA|BOB|GNS|PROMPT|B3)/.*",
             "(AIXBT|ANIME|BANANAS31|BASED|BRETT|BSB|CHILLGUY|CLANKER|ESP|ESPORTS|FLOW|GME|MEME|MUBARAK|NEIRO|ORCL|PIPPIN|RAVE|S|SIREN|US|ZEREBRO)/.*",
             "(ACE|ACH|AGLD|AGT|AKE|ALAB|ALICE|BB|BEL|BLESS|BLUAI|BOBA|BTR|CGNX|COLLECT|DOLO|DOOD|DYM|EDEN|ENSO|EPIC|EVAA|EWY|F|HEI|HFT|HMSTR|INFQ|KAT|LAYER|LIGHT|LRC|MAGIC|MYX|NG|OFC|OL|ONE|OPN|PIXEL|PLAY|PORTAL|PUMPFUN|QQQ|RARE|RECALL|RESOLV|RLS|SAGA|SATS|SHIB1000|SPACE|SPORTFUN|SPY|TLM|TNSR|TON|TWLO|USO|VANRY|WCT|WET|XAI|XCU|YB|YGG|ZKP|AIN|EDGE|SAHARA|UB)/.*",
             "(MKR|OMNI)/.*",
@@ -94,19 +147,20 @@
             "(NIGHT)/.*",
             ".*STOCK/.*",
             ".*(AAPL|AMD|ARM|ASTS|CRWV|DELL|GOOGL|IREN|LITE|MRVL|MU|NBIS|QCOM|SNDK|SPCX|AAOI|AMZN|APLD|AVGO|BABA|BE|COHR|HOOD|INTC|IONQ|META|PLTR|SQQQ|TQQQ|TSLA|TSM|MSTR|NVDA|CRCL|SNXX|SKHY|QQQ)B?/.*",
-            "(CL|BZ|NATGAS|XPT)/.*"
+            "(CL|BZ|NATGAS|XPT)/.*",
+            "(OGN|XAU|XAG|PAXG|XAUT|GOLD|SILVER|WTI|BRENT)/.*"
         ]
     },
     "pairlists": [
         {
-            "method": "VolumePairList",
-            "number_assets": 40,
-            "sort_key": "quoteVolume",
-            "min_value": 25000000,
-            "refresh_period": 1800
+            "method": "StaticPairList"
         },
         {
-            "method": "FullTradesFilter"
+            "method": "VolumePairList",
+            "number_assets": 35,
+            "sort_key": "quoteVolume",
+            "min_value": 10000000,
+            "refresh_period": 1800
         },
         {
             "method": "DelistFilter"
@@ -117,26 +171,15 @@
         },
         {
             "method": "SpreadFilter",
-            "max_spread_ratio": 0.003
-        },
-        {
-            "method": "RangeStabilityFilter",
-            "lookback_days": 3,
-            "min_rate_of_change": 0.03,
-            "max_rate_of_change": 0.85,
-            "refresh_period": 1800
-        },
-        {
-            "method": "VolumePairList",
-            "number_assets": 30,
-            "sort_key": "quoteVolume"
+            "max_spread_ratio": 0.002
         }
     ],
     "nfi_parameters": {
         "futures_mode_leverage": 1.0,
         "futures_mode_leverage_rebuy_mode": 1.0,
         "futures_mode_leverage_grind_mode": 1.0,
-        "futures_max_open_trades_short": 0
+        "futures_max_open_trades_short": 0,
+        "bad_trade_controller_structure_break_exit_enable": false
     },
     "telegram": {
         "enabled": false,

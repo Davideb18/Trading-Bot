@@ -11,6 +11,7 @@ from freqtrade.exceptions import DependencyException
 from freqtrade.exchange import Exchange
 from freqtrade.misc import safe_value_fallback
 from freqtrade.persistence import LocalTrade, Trade, WalletHistory
+from freqtrade.prop_capital import prop_capital_available
 from freqtrade.util import dt_floor_day, dt_now
 
 
@@ -306,9 +307,15 @@ class Wallets:
             # Ensure <tradable_balance_ratio>% is used from the overall balance
             # Otherwise we'd risk lowering stakes with each open trade.
             # (tied up + current free) * ratio) - tied up
-            available_amount = (val_tied_up + self.get_free(self._stake_currency)) * self._config[
-                "tradable_balance_ratio"
-            ]
+            total_balance = val_tied_up + self.get_free(self._stake_currency)
+            if self._config.get("prop_non_compounding"):
+                base_cap = float(
+                    self._config.get(
+                        "prop_initial_balance", self._config.get("dry_run_wallet", 5000.0)
+                    )
+                )
+                total_balance = min(total_balance, base_cap)
+            available_amount = total_balance * self._config["tradable_balance_ratio"]
         return available_amount
 
     def get_available_stake_amount(self) -> float:
@@ -319,6 +326,12 @@ class Wallets:
         (<open_trade stakes> + free amount) * tradable_balance_ratio - <open_trade stakes>
         """
 
+        if (
+            self._config.get("prop_guard_enabled")
+            and not self._is_backtest
+            and not prop_capital_available(self._config["user_data_dir"], dt_now())
+        ):
+            return 0.0
         free = self.get_free(self._stake_currency)
         return min(self.get_total_stake_amount() - Trade.total_open_trades_stakes(), free)
 

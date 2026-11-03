@@ -1,0 +1,217 @@
+AUDIT FORENSE PROP — 3 NOVEMBRE 2026, EUROPE/ROME
+Repository: Trading-Bot / IlMioFreqtrade
+Branch: feature/prop-firm-forensic-hardening
+Baseline: 192a933fca224e6ae0189db95a42eaf4bca2e7f1
+
+VERDETTO
+Hardening locale e strumenti riproducibili; NON certificato per produzione.
+Nessun ordine, accesso AWS, modifica al database operativo o deploy eseguito.
+Configurazione consegnata in dry-run, stato iniziale stopped e database separato.
+I risultati storici e le limitazioni sono riportati nella matrice allegata.
+Sicurezza al 100%, zero violazioni a ogni tick, WR >70% e target in 15–45 giorni
+non sono proprietà dimostrate e non vengono promesse.
+
+REGOLE E FONTI
+Le pagine ufficiali consultate il 2–3 novembre 2026 indicano per i nuovi Two-Step
+limiti 5% giornaliero e 10% complessivo statico, target 10% + 5%, reset 00:00 UTC.
+Il mandato cita 8% trailing e target 8%: serve riconciliare il contratto dello
+specifico account, soprattutto se acquistato prima del cambiamento di ottobre.
+Le soglie del codice sono una policy interna, distinta dal contratto:
+100 USDT di perdita dal massimo osservato giornaliero e 175 USDT dal massimo
+osservato complessivo, su allocazione originale di 5.000 USDT.
+Queste soglie attivano richieste di blocco/uscita; non limitano il prezzo di fill.
+
+Fonti primarie:
+https://www.hyrotrader.com/trading-rules/
+https://www.hyrotrader.com/blog/what-is-trailing-drawdown/
+https://www.hyrotrader.com/faq/evaluation-process/minimum-trading-days/
+https://bybit-exchange.github.io/docs/v5/account/wallet-balance
+
+La fonte Bybit distingue equity della singola valuta e totale in USD; specifica
+che i campi aggregati account-wide non si applicano al margine isolato e che
+le risposte possono subire ritardi in mercati estremi. Il nuovo adattatore usa
+coin.equity USDT su account dedicato USDT, senza aggiungere unrealisedPnl.
+Le regole pubbliche includono anche divieto di Martingale e restrizioni sulle
+low-cap: un filtro sul volume non prova il rispetto di questi requisiti.
+
+RISULTATI PRINCIPALI E CORREZIONI
+
+1. STOPLOSS RIFIUTATO (critico)
+Prima: stoploss -99%, stop su exchange disattivato; confirm_trade_exit rifiutava
+stop_loss e trailing_stop_loss, salvo particolari condizioni di liquidazione.
+Dopo: stop -6%, market stop su exchange; force_exit, emergency_exit, stop e
+liquidation non possono essere bloccati da hold o exit_profit_only.
+Il bot_start rifiuta override incompatibili nel profilo operativo.
+Il motore di backtest disabilita stoploss_on_exchange e simula lo stop localmente;
+questa eccezione è limitata ai runmode di simulazione.
+
+2. DCA / GRIND E SIZING (alto)
+Prima: aggiustamenti abilitati e numerose sequenze di rebuy/grind. Il solo rapporto
+0,24 non fissava il capitale della singola posizione; min_stake poteva innalzare
+lo stake richiesto. Non è stata certificata ogni combinazione dei 61.000+ righi
+della strategia originale, né un unico massimo di ordini per tutte le modalità.
+Dopo: zero ingressi aggiuntivi, nessun DCA, callback adjust_trade_position nullo,
+massimo tre posizioni long; stake <= min(proposto, disponibile, budget/3, 400).
+Il budget Freqtrade include già tradable_balance_ratio: non viene contato due
+volte. Un minimo exchange superiore al cap rifiuta il trade, non aumenta il cap.
+confirm_trade_entry verifica anche il valore dell'ordine, incluso force_entry.
+Esposizione iniziale massima 1.200 USDT; il cap si riduce con il budget disponibile.
+Le operazioni di derisking parziale dell'originale non vengono più eseguite
+tramite DCA: questa modifica cambia la strategia e richiede i nuovi backtest.
+
+3. LEVA (alto)
+Prima: min(1.0, parametro) accettava valori inferiori a 1 e valori anomali; non
+era un ritorno costante. correct_min_stake divideva per la leva configurata.
+Dopo: leverage ritorna sempre 1.0; minimo futures di 5 USDT senza divisione.
+Una leva 1x non elimina matematicamente il rischio di liquidazione: maintenance
+margin, funding, fee, gap e comportamento dell'exchange restano rilevanti.
+
+4. EQUITY E FRESCHEZZA (critico)
+Prima: total poteva essere infinito; zero/negativo era ignorato; fallback a
+total_bot confondeva equity account e budget del bot. /balance poteva riutilizzare
+saldi fino a un'ora. Il totale futures ricostruito usa free + posizioni e può
+divergere con margine riservato a ordini pendenti e stime del collateral.
+Dopo: campo RPC account_equity conserva valore nativo Bybit, valuta, origine e
+timestamp; rifiuta dati mancanti, non finiti, vecchi >15s e account multi-valuta.
+Nessun fallback al totale stimato in modalità live. Zero/negativo attiva i limiti.
+Il totale UI preesistente resta una stima: la sentinella usa il nuovo campo.
+Il server e il supervisore devono essere aggiornati insieme. Un server vecchio
+senza il campo nuovo blocca gli ingressi. Il percorso dry-run è etichettato come
+stima simulata separata, non come risposta exchange.
+
+5. PERSISTENZA, RIAVVIO E LIQUIDAZIONE (critico)
+Prima: nuclear_triggered persistente faceva uscire il processo; con restart
+unless-stopped poteva creare un loop. Gli esiti delle vendite erano ignorati;
+/status fallito diventava lista vuota. Stato corrotto poteva perdere il baseline.
+Dopo: latch duraturo, processo vivo anche dopo lo stop, retry nei cicli successivi,
+verifica dello stato bot e delle posizioni residue, stato UNKNOWN distinto da FLAT.
+Scrittura temporanea, flush/fsync, sostituzione atomica, schema validato. Corruzione
+o errore disco preservano l'evidenza e bloccano gli ingressi. Stato legacy richiede
+riconciliazione esplicita: non si cancella il file per azzerare il drawdown.
+Una risposta HTTP di successo non viene presentata come prova di fill.
+
+6. GIORNO UTC E HIGH-WATER MARK
+Il guard osserva UTC, confronta soglie monetarie con Decimal e scatta anche
+all'uguaglianza. L'allocazione iniziale è esplicita, non il primo saldo dopo perdite.
+Il massimo osservato include floating equity. Il controllo interno giornaliero
+dal picco è più prudente della regola statica attuale.
+Al cambio giorno si usa max(ultimo campione precedente, primo campione nuovo).
+Non è la ricostruzione esatta dell'equity delle 00:00; un picco tra campioni può
+sfuggire. Durante downtime anche i massimi non osservati non sono ricostruibili.
+Questa limitazione impedisce la certificazione di conformità per ogni tick.
+
+7. LLM E CRASH (alto)
+Prima: thread separati ma stesso client/lock di rete; percorsi di auto-resume e
+valori macro assenti convertiti a zero potevano interpretare un guasto come calma.
+Il dato denominato 1h misurava il rendimento della candela in formazione.
+Dopo: Gemini è soltanto consultivo, senza autorità su start/stop/liquidazione.
+Crash quantitativo separato: BTC <=-4% circa 60 minuti o <=-8% su 24h, con prezzi
+finiti. La finestra breve usa 61 chiusure a un minuto e controlla tempi/freschezza.
+Titoli di news e flag AI non sono prove di crash. Dati macro assenti bloccano
+gli ingressi. Gli errori LLM non bloccano il controllo equity.
+Il controllo REST resta soggetto a timeout, retry, rate limit e latenza: non 0 ms.
+
+8. HEARTBEAT OPERATIVO
+In live/dry-run, un ingresso richiede stato valido scritto negli ultimi 15s e
+assenza di latch/fault. La sentinella scrive ogni ciclo valido (intervallo 5s).
+I guasti richiedono intervento operatore e non generano /start automatici.
+Un ordine limit già presente prima del fault può ancora essere eseguito:
+stopbuy sospende nuovi ingressi, ma non prova la cancellazione exchange di tutti
+gli ordini pendenti. La verifica continua e gli stop nativi riducono il rischio;
+serve collaudo demo di questo percorso prima dell'uso con una challenge.
+
+9. LIQUIDITÀ, AGE, FILL E TIMEOUT
+Il profilo prop aveva già volume minimo 25M, AgeFilter 60 giorni e spread 0,3%.
+Conservati; aggiunte esclusioni esplicite OGN e simboli comuni di metalli/commodity.
+Non è un catalogo universale di ogni futuro listing. Volume riportato e anzianità
+non escludono manipolazione, gap, scarsa profondità o low-cap. Non esiste 100%.
+Limit al best ask può essere taker: fee usata negli esperimenti 0,055% per lato,
+come scenario richiesto, non attestazione della tariffa privata dell'account.
+Timeout ingressi 3m e uscite 2m; exit_timeout_count passa da 0 a 1 per consentire
+escalation all'emergency_exit market dopo il timeout previsto dal motore.
+Il backtest OHLCV non modella coda ordini, fill parziali/latency/orderbook reale.
+La sensibilità slippage 0,1–0,3% è un costo aggiunto ai fill storici: non rigenera
+segnali e non simula la probabilità che un limit non venga eseguito.
+
+10. CREDENZIALI E RIPRODUCIBILITÀ
+Rimosse credenziali exchange e password/token statici dal config prop versionato.
+Compose richiede segreti da environment, espone l'API su localhost e usa un'immagine
+derivata dal tag 2026.7 con il codice RPC locale. Nessun segreto è nei nuovi report.
+Le credenziali rimosse restano nella storia Git: devono essere revocate/ruotate
+prima dell'utilizzo. Non è stata riscritta la storia del repository.
+Docker daemon non disponibile: build/container e deploy non verificati.
+
+11. AUDITOR PREESISTENTI
+check_prop_firm_rules.py stampava DD hardcoded, "100%" e "impossibile bruciare".
+Sostituito con controllo basato su ZIP e candele, senza verdetto di certificazione.
+Il deep auditor inventava heartbeat trade per saltare l'inattività e stampava
+cap/margine garantiti. Il suo CLI ora delega al checker basato su evidenze;
+le funzioni legacy restano esplorative e i target simulati non sono PASSED.
+Il valutatore basato su soli trade chiusi non può più restituire un pass di
+conformità: perdite floating e giornate senza chiusure potevano essere invisibili.
+
+12. CONFIGURAZIONE GENERALE E STRATEGIA SPOT
+Il file locale ignorato user_data/config.json NON è un config spot X8: punta a
+NostalgiaForInfinityX7, futures isolated, 6 slot, budget 99%, nessun floor di volume,
+uscite/stop limit e stop su exchange disattivato. Non usare questo file per la prop.
+Non è stato versionato o sostituito: contiene impostazioni del bot separato.
+X8 e X8_Prop sono stati sottoposti a scansione AST per shift negativi, bfill e
+rolling centrati: nessun pattern trovato. Non equivale a revisione manuale completa.
+merge_informative_pair sposta già le date fino alla chiusura: aggiungere shift(1)
+indiscriminatamente ai close introdurrebbe un ritardo, non una correzione provata.
+I test coprono il confine di chiusura per 15m, 1h, 4h e 1d.
+L'analisi lookahead nativa sul crash di aprile non ha rilevato bias su tre segnali;
+un force-exit finale è stato escluso dal motore e cinque segnali non erano
+disponibili. Gli ordini limit sono stati consentiti. Il confronto AST conferma
+che populate_indicators, populate_entry_trend, populate_exit_trend, info_switcher
+e btc_info_switcher sono identici alla baseline: non è una prova su ogni segnale.
+
+REGISTRO DEI DIECI INCIDENTI
+OGN: esclusione esplicita e floor mantenuto, nessuna garanzia generale anti-pump.
+PnL doppio: nuovo contratto equity nativa, test su -40 USDT e margine pendente.
+DB ERA: nessun database operativo modificato; episodio storico non riprodotto.
+Structure break: parametro False e override True rifiutato nel profilo prop.
+Leva: ritorno costante 1.0 e test su parametri anomali.
+Crash-loop: latch mantenuto con loop vivo e retry, nessun reset automatico perdite.
+News FUD: LLM privo di comandi di trading; crash dipende dai prezzi.
+Quota 429: percorso LLM consultivo indipendente, analisi ogni 900s.
+Python UTC: virtualenv Python 3.13 verificato; nessun accesso datetime.UTC sulla classe.
+OOM AWS: non verificato; nessun accesso remoto o modifica swap effettuati.
+
+CONDIZIONI ANCORA NECESSARIE PER UN RILASCIO
+- Confermare contratto, fase e valuta di valutazione dell'account specifico.
+- Ruotare i segreti esposti e riconciliare stato storico/equity, senza cancellarlo.
+- Confrontare account_equity con dashboard Bybit/HyroTrader in flat, posizione
+  aperta, ordine pendente, funding e perdita; collaudare schema sul conto demo.
+- Collaudare stop nativo, ordini pendenti, disconnessioni, rate limit, partial fill,
+  riavvio container, filesystem pieno e gestione operativa del latch.
+- Eseguire una sola istanza del supervisore per il file di stato.
+- Usare un account dedicato: /status e forceexit verificano le posizioni gestite
+  dal bot, non certificano l'assenza di posizioni manuali esterne al suo database.
+- Validare container e versioni; il tag Docker è fissato, il digest non è verificato.
+- Valutare universo storico più ampio, out-of-sample, profondità e low-cap; i tre
+  asset degli esperimenti sono un campione, non la whitelist dinamica completa.
+- Non inferire target, win rate o stabilità futura da pochi trade o risultati nulli.
+
+RIPRODUZIONE
+1) Usare .venv/Scripts/python.exe (Python 3.13.5; Freqtrade 2026.7; CCXT 4.5.68).
+2) Test offline: -m unittest discover -s scripts/tests -p test_prop_hardening.py -v
+3) RPC/Bybit: -m pytest tests/exchange/test_bybit.py tests/rpc/test_rpc.py
+   tests/rpc/test_rpc_apiserver.py -k "balance or bybit" -q --override-ini addopts=
+4) Dati: freqtrade download-data, config di audit senza chiavi, BTC/ETH/SOL USDT
+   perpetual, 5m/15m/1h/4h/1d, 20230101-20241101; mark e funding inclusi.
+5) python scripts/forensic_prop_validation.py --run-backtests
+   --baseline-ref 192a933fca224e6ae0189db95a42eaf4bca2e7f1
+6) Output grezzi e log in user_data/forensic (ignorati da Git); risultati sintetici
+   versionati in docs/prop_forensic_results.json e matrice testuale allegata.
+7) Checker: python scripts/check_prop_firm_rules.py RESULT.zip --data-dir DATA_DIR
+
+METODO EMPIRICO
+Le esecuzioni Prima/Dopo usano lo stesso capitale, coppie, candele e fee.
+Il backtest esegue la strategia; NON esegue il supervisore REST esterno.
+L'equity viene ricostruita dagli ordini, inclusi DCA/uscite parziali, e rivalutata
+alle chiusure 5m. Il saldo terminale deve riconciliarsi con i PnL esportati entro
+0,02 USDT. I funding vengono riconciliati alla chiusura del trade: il loro istante
+reale non è ricostruito. Intrabar, tick, mark/index, code ordini e capitale esterno
+possono produrre drawdown peggiori. Una matrice senza violazioni campionate non
+è una certificazione del sistema completo.

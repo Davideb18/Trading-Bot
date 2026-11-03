@@ -1,4 +1,5 @@
 import logging
+import math
 from datetime import datetime, timedelta
 
 import ccxt
@@ -22,6 +23,49 @@ class Bybit(Exchange):
     """
 
     unified_account = False
+
+    def _parse_account_equity(self, response: dict | None) -> dict | None:
+        """Preserve coin equity before CCXT's raw wallet response is discarded.
+
+        This strict adapter supports a dedicated USDT-only derivatives account.
+        Account-wide USD fields are not applicable to isolated margin. Pending
+        order margins and unrealized PnL are already reflected in coin equity.
+        """
+        if self.trading_mode != TradingMode.FUTURES or self._config["stake_currency"] != "USDT":
+            return None
+        try:
+            if response["retCode"] != 0:
+                return None
+            accounts = response["result"]["list"]
+            if len(accounts) != 1 or accounts[0]["accountType"] not in ("UNIFIED", "CONTRACT"):
+                return None
+            found = []
+            for coin in accounts[0]["coin"]:
+                equity = float(coin["equity"])
+                wallet = float(coin["walletBalance"])
+                debt = float(coin.get("borrowAmount", "0"))
+                if not all(math.isfinite(v) for v in (equity, wallet, debt)):
+                    return None
+                if coin["coin"] == "USDT":
+                    found.append(equity)
+                elif any(v != 0 for v in (equity, wallet, debt)):
+                    return None  # Cannot certify full-account equity in another currency.
+            timestamp = response["time"]
+            if (
+                len(found) != 1
+                or isinstance(timestamp, bool)
+                or not isinstance(timestamp, (int, float))
+                or not math.isfinite(timestamp)
+            ):
+                return None
+            return {
+                "value": found[0],
+                "currency": "USDT",
+                "timestamp": int(timestamp),
+                "source": "bybit_wallet_coin_equity",
+            }
+        except (KeyError, ValueError, TypeError, OverflowError):
+            return None
 
     _ft_has: FtHas = {
         "ohlcv_has_history": True,
