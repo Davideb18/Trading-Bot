@@ -10,8 +10,6 @@ services:
       - FREQTRADE__API_SERVER__JWT_SECRET_KEY=${FREQTRADE_JWT_TOKEN:-supersecretjwttoken}
       - FREQTRADE__API_SERVER__PASSWORD=${FREQTRADE_PASSWORD:-ZeroBurnPassword2026!}
       - FREQTRADE__API_SERVER__WS_TOKEN=${FREQTRADE_WS_TOKEN:-supersecretwstoken}
-      - FREQTRADE__EXCHANGE__KEY=${PROP_BYBIT_API_KEY:-}
-      - FREQTRADE__EXCHANGE__SECRET=${PROP_BYBIT_API_SECRET:-}
     volumes:
       - "./user_data:/freqtrade/user_data"
     ports:
