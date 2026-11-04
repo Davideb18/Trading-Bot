@@ -1,9 +1,9 @@
 {
     "strategy": "NostalgiaForInfinityX8_Prop",
-    "max_open_trades": 3,
+    "max_open_trades": 4,
     "stake_currency": "USDT",
     "stake_amount": "unlimited",
-    "tradable_balance_ratio": 0.24,
+    "tradable_balance_ratio": 0.2,
     "prop_non_compounding": true,
     "prop_initial_balance": 5000,
     "prop_guard_enabled": true,
@@ -200,5 +200,12 @@
     "bot_name": "freqtrade_prop_nfix8",
     "internals": {
         "process_throttle_secs": 5
+    },
+    "prop_guard": {
+        "daily_limit_percent": 0.036,
+        "max_loss_percent": 0.052,
+        "profit_target_percent": 0.1,
+        "daily_profit_cap_percent": 0.4,
+        "min_trading_days": 5
     }
 }

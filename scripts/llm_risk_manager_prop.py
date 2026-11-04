@@ -1062,9 +1062,101 @@ class RiskManager(RiskGuard):
                 logger.exception("Advisory LLM failed; deterministic guard remains active")
             self._shutdown.wait(900)
 
+    def _hyrotrader_rules_loop(self):
+        """Monitors HyroTrader One-Step compliance: 30d inactivity, 5 qualifying days, 40% daily profit cap."""
+        while not self._shutdown.is_set():
+            try:
+                open_trades = self.api_client.get_open_trades() or []
+                recent_trades = self.api_client.get_trades(limit=100) or []
+                now_utc = datetime.now(timezone.utc)
+                today_str = now_utc.strftime("%Y-%m-%d")
+
+                # 1. 30-Day Inactivity Sentinel & Auto Keep-Alive
+                latest_close_dt = None
+                if recent_trades:
+                    valid_closes = [
+                        tr.get("close_timestamp") or tr.get("close_date")
+                        for tr in recent_trades if tr.get("close_timestamp") or tr.get("close_date")
+                    ]
+                    if valid_closes:
+                        latest_close_val = max(valid_closes)
+                        if isinstance(latest_close_val, (int, float)):
+                            latest_close_dt = datetime.fromtimestamp(latest_close_val / 1000.0, tz=timezone.utc)
+                        else:
+                            latest_close_dt = datetime.fromisoformat(str(latest_close_val).replace("Z", "+00:00"))
+
+                inactivity_days = 0
+                if len(open_trades) > 0:
+                    inactivity_days = 0
+                elif latest_close_dt:
+                    inactivity_days = (now_utc - latest_close_dt).days
+
+                if inactivity_days >= 24 and len(open_trades) == 0 and not self.nuclear_triggered:
+                    logger.critical(
+                        "🚨 HYROTRADER 24-DAY INACTIVITY DETECTED (%d days flat). "
+                        "Executing automated qualifying keep-alive trade ($250 on BTC/USDT) to reset timer.",
+                        inactivity_days
+                    )
+                    res = self.api_client.post("forceentry", json={"pair": "BTC/USDT:USDT", "side": "long", "stake_amount": 250.0})
+                    logger.info("Keep-alive order response: %s", res)
+                elif inactivity_days >= 20:
+                    logger.warning("⚠️ HyroTrader Inactivity Warning: %d days without trades (forfeiture at 30d).", inactivity_days)
+
+                # 2. Qualifying Trading Days & 40% Daily Profit Cap
+                day_profits: dict[str, float] = {}
+                qualifying_days = set()
+                min_qualifying_stake = self.initial_balance * 0.05  # $250 on $5,000
+
+                for tr in recent_trades:
+                    close_dt_raw = tr.get("close_date") or tr.get("close_timestamp")
+                    if not close_dt_raw:
+                        continue
+                    if isinstance(close_dt_raw, (int, float)):
+                        tr_day = datetime.fromtimestamp(close_dt_raw / 1000.0, tz=timezone.utc).strftime("%Y-%m-%d")
+                    else:
+                        tr_day = str(close_dt_raw)[:10]
+
+                    pnl = float(tr.get("profit_abs", 0.0) or 0.0)
+                    day_profits[tr_day] = day_profits.get(tr_day, 0.0) + pnl
+
+                    cost = float(tr.get("cost", 0.0) or tr.get("stake_amount", 0.0) or 0.0)
+                    profit_ratio = float(tr.get("profit_ratio", 0.0) or 0.0)
+                    if cost >= min_qualifying_stake and abs(profit_ratio) >= 0.01:
+                        qualifying_days.add(tr_day)
+
+                # Counted profit toward 10% target with 40% daily cap
+                target_profit = self.initial_balance * PROP_FIRM_PROFIT_TARGET_PERCENT
+                daily_cap = target_profit * PROP_FIRM_DAILY_PROFIT_CAP_PERCENT
+                counted_profit = sum(min(d_pnl, daily_cap) if d_pnl > 0 else d_pnl for d_pnl in day_profits.values())
+
+                today_profit = day_profits.get(today_str, 0.0)
+                if today_profit >= (daily_cap * 0.9):
+                    logger.warning(
+                        "⚠️ 40%% Daily Cap Notice: Today's profit is $%.2f (cap is $%.2f). "
+                        "Excess profit today will not count toward evaluation target.",
+                        today_profit, daily_cap
+                    )
+
+                if counted_profit >= target_profit and len(qualifying_days) >= PROP_FIRM_MIN_TRADING_DAYS:
+                    logger.info(
+                        "🎉 HYROTRADER ONE-STEP PASSED! Counted profit: $%.2f / $%.2f | Qualifying days: %d/%d.",
+                        counted_profit, target_profit, len(qualifying_days), PROP_FIRM_MIN_TRADING_DAYS
+                    )
+                else:
+                    logger.info(
+                        "📊 HyroTrader One-Step Status: Counted Profit: $%.2f/$%.2f (%.1f%%) | "
+                        "Qualifying Days: %d/%d | Inactivity: %dd/30d",
+                        counted_profit, target_profit, (counted_profit / target_profit) * 100.0 if target_profit else 0.0,
+                        len(qualifying_days), PROP_FIRM_MIN_TRADING_DAYS, inactivity_days
+                    )
+            except Exception:
+                logger.exception("Error in HyroTrader rules evaluation loop")
+            self._shutdown.wait(60)
+
     def run(self):
         threading.Thread(target=self._macro_loop, daemon=True, name="Macro-Guard").start()
         threading.Thread(target=self._llm_sentinel_loop, daemon=True, name="LLM-Advisory").start()
+        threading.Thread(target=self._hyrotrader_rules_loop, daemon=True, name="HyroTrader-Rules").start()
         super().run()
 
 
