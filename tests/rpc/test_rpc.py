@@ -1038,6 +1038,9 @@ def test_rpc_force_exit(default_conf, ticker, fee, mocker) -> None:
                 "type": "limit",
                 "side": "buy",
                 "filled": filled_amount,
+                "amount": trade.amount_requested,
+                "remaining": trade.amount_requested - filled_amount,
+                "price": trade.open_rate,
             },
             {
                 "id": trade.orders[0].order_id,
@@ -1045,6 +1048,9 @@ def test_rpc_force_exit(default_conf, ticker, fee, mocker) -> None:
                 "type": "limit",
                 "side": "buy",
                 "filled": filled_amount,
+                "amount": trade.amount_requested,
+                "remaining": 0.0,
+                "average": trade.open_rate,
             },
         ],
     )
@@ -1093,7 +1099,8 @@ def test_rpc_force_exit(default_conf, ticker, fee, mocker) -> None:
     msg = rpc._rpc_force_exit("3")
     assert msg == {"result": "Created exit order for trade 3."}
     # status quo, no exchange calls
-    assert cancel_order_3.call_count == 1
+    # The previous force-exit is still open: a retry must not cancel and replace it.
+    assert cancel_order_3.call_count == 0
     assert cancel_order_mock.call_count == 0
 
     trade = Trade.session.scalars(select(Trade).filter(Trade.id == "4")).first()
@@ -1116,11 +1123,12 @@ def test_rpc_force_exit(default_conf, ticker, fee, mocker) -> None:
         },
     )
     # check that the trade is called, which is done by ensuring exchange.cancel_order is called
-    msg = rpc._rpc_force_exit("4")
-    assert msg == {"result": "Created exit order for trade 4."}
-    assert cancel_order_4.call_count == 1
+    with pytest.raises(RPCException, match="Failed to exit trade"):
+        rpc._rpc_force_exit("4")
+    # Unknown fill quantity cannot be reconciled through a fabricated cancel result.
+    cancel_order_4.assert_not_called()
     assert cancel_order_mock.call_count == 0
-    assert pytest.approx(trade.amount) == amount
+    assert freqtradebot.has_unresolved_orders()
 
 
 def test_performance_handle(default_conf_usdt, ticker, fee, mocker) -> None:

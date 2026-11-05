@@ -39,6 +39,9 @@ from freqtrade.enums import (
     TradingMode,
 )
 from freqtrade.exceptions import ExchangeError, PricingError
+from freqtrade.order_recovery import (
+    UNKNOWN_FORCE_EXIT, clear_recovery, mark_recovery, order_evidence_valid, pending_recovery,
+)
 from freqtrade.exchange import Exchange, timeframe_to_minutes, timeframe_to_msecs
 from freqtrade.exchange.exchange_utils import price_to_precision
 from freqtrade.ft_types import AnnotationType
@@ -1044,62 +1047,99 @@ class RPC:
         amount: float | None = None,
         price: float | None = None,
     ) -> bool:
-        # Check if there is there are open orders
-        trade_entry_cancelation_registry = []
-        for oo in trade.open_orders:
-            trade_entry_cancelation_res = {"order_id": oo.order_id, "cancel_state": False}
-            order = self._freqtrade.exchange.fetch_order(oo.order_id, trade.pair)
-
-            if order["side"] == trade.entry_side:
-                fully_canceled = self._freqtrade.handle_cancel_enter(
-                    trade, order, oo, CANCEL_REASON["FORCE_EXIT"]
-                )
-                trade_entry_cancelation_res["cancel_state"] = fully_canceled
-                trade_entry_cancelation_registry.append(trade_entry_cancelation_res)
-
-            if order["side"] == trade.exit_side:
-                # Cancel order - so it is placed anew with a fresh price.
-                self._freqtrade.handle_cancel_exit(trade, order, oo, CANCEL_REASON["FORCE_EXIT"])
-
-        if all(tocr["cancel_state"] is False for tocr in trade_entry_cancelation_registry):
-            if trade.has_open_orders:
-                # Order cancellation failed, so we can't exit.
+        if UNKNOWN_FORCE_EXIT in pending_recovery(trade):
+            return False
+        # Canceling a DCA order does not mean the existing position disappeared.
+        # Reconcile authoritative quantities before invoking the ordinary handlers.
+        exit_in_flight = False
+        for oo in list(trade.open_orders):
+            mark_recovery(trade, oo.order_id)
+            Trade.commit()
+            try:
+                order = self._freqtrade.exchange.fetch_order(oo.order_id, trade.pair)
+                if not order_evidence_valid(order, oo, trade.pair):
+                    return False
+                if order["status"] == "open":
+                    if oo.ft_order_tag == "force_exit" and order["side"] == trade.exit_side:
+                        # A known force-exit is still working; retry must not replace it.
+                        self._freqtrade.update_trade_state(trade, oo.order_id, order)
+                        clear_recovery(trade, oo.order_id)
+                        Trade.commit()
+                        exit_in_flight = True
+                        continue
+                    # Do not use cancel_order_with_result: it may synthesize a cancellation.
+                    try:
+                        self._freqtrade.exchange.cancel_order(oo.order_id, trade.pair)
+                    except ExchangeError:
+                        # A timeout can follow a successful cancel/fill. Only lookup can resolve it.
+                        pass
+                    order = self._freqtrade.exchange.fetch_order(oo.order_id, trade.pair)
+                    if (not order_evidence_valid(order, oo, trade.pair)
+                            or order["status"] == "open"):
+                        return False
+                if order["side"] == trade.entry_side and order["status"] != "closed":
+                    clear_recovery(trade, oo.order_id)
+                    self._freqtrade.handle_cancel_enter(
+                        trade, order, oo, CANCEL_REASON["FORCE_EXIT"]
+                    )
+                elif order["side"] == trade.exit_side and order["status"] != "closed":
+                    self._freqtrade.handle_cancel_exit(trade, order, oo, CANCEL_REASON["FORCE_EXIT"])
+                    clear_recovery(trade, oo.order_id)
+                else:
+                    self._freqtrade.update_trade_state(trade, oo.order_id, order)
+                    clear_recovery(trade, oo.order_id)
+                Trade.commit()
+            except ExchangeError:
+                mark_recovery(trade, oo.order_id)
+                Trade.commit()
                 return False
-            # Get current rate and execute sell
 
-            current_rate = (
-                self._freqtrade.exchange.get_rate(
-                    trade.pair, side="exit", is_short=trade.is_short, refresh=True
-                )
-                if ordertype == "market" or price is None
-                else price
-            )
-            exit_check = ExitCheckTuple(exit_type=ExitType.FORCE_EXIT)
-            order_type = ordertype or self._freqtrade.strategy.order_types.get(
-                "force_exit", self._freqtrade.strategy.order_types["exit"]
-            )
-            sub_amount: float | None = None
-            if amount and amount < trade.amount:
-                # Partial exit ...
-                min_exit_stake = self._freqtrade.exchange.get_min_pair_stake_amount(
-                    trade.pair, current_rate, trade.stop_loss_pct or 0.0
-                )
-                remaining = (trade.amount - amount) * current_rate
-                if min_exit_stake and remaining < min_exit_stake:
-                    raise RPCException(f"Remaining amount of {remaining} would be too small.")
-                sub_amount = amount
+        # Query persisted state: the first unfilled entry may have deleted the trade.
+        remaining_trade = Trade.session.get(Trade, trade.id)
+        if remaining_trade is None or not remaining_trade.is_open:
+            return True
+        trade = remaining_trade
+        if pending_recovery(trade):
+            return False
+        if exit_in_flight:
+            return True
+        if trade.has_open_orders or trade.amount <= 0:
+            return False
+        # Get current rate and execute sell
 
-            self._freqtrade.execute_trade_exit(
-                trade,
-                current_rate,
-                exit_check,
-                ordertype=order_type,
+        current_rate = (
+            self._freqtrade.exchange.get_rate(
+                trade.pair, side="exit", is_short=trade.is_short, refresh=True
+            )
+            if ordertype == "market" or price is None
+            else price
+        )
+        exit_check = ExitCheckTuple(exit_type=ExitType.FORCE_EXIT)
+        order_type = ordertype or self._freqtrade.strategy.order_types.get(
+            "force_exit", self._freqtrade.strategy.order_types["exit"]
+        )
+        sub_amount: float | None = None
+        if amount and amount < trade.amount:
+            # Partial exit ...
+            min_exit_stake = self._freqtrade.exchange.get_min_pair_stake_amount(
+                trade.pair, current_rate, trade.stop_loss_pct or 0.0
+            )
+            remaining = (trade.amount - amount) * current_rate
+            if min_exit_stake and remaining < min_exit_stake:
+                raise RPCException(f"Remaining amount of {remaining} would be too small.")
+            sub_amount = amount
+
+        try:
+            return self._freqtrade.execute_trade_exit(
+                trade, current_rate, exit_check, ordertype=order_type,
                 sub_trade_amt=sub_amount,
                 skip_custom_exit_price=price is not None and ordertype == "limit",
             )
-
-            return True
-        return False
+        except (ExchangeError, KeyError, TypeError, ValueError):
+            # No order ID is available here. Do not blindly resubmit after an ambiguous send.
+            mark_recovery(trade, UNKNOWN_FORCE_EXIT)
+            Trade.commit()
+            return False
 
     def _rpc_force_exit(
         self,
@@ -1120,10 +1160,14 @@ class RPC:
         with self._freqtrade._exit_lock:
             if trade_id == "all":
                 # Execute exit for all open orders
+                failed = []
                 for trade in Trade.get_open_trades():
-                    self.__exec_force_exit(trade, ordertype)
+                    if not self.__exec_force_exit(trade, ordertype):
+                        failed.append(trade.id)
                 Trade.commit()
                 self._freqtrade.wallets.update()
+                if failed:
+                    raise RPCException(f"Unresolved force-exit for trades: {failed}")
                 return {"result": "Created exit orders for all open trades."}
 
             # Query for trade

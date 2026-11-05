@@ -14,6 +14,9 @@ from typing import Any
 from schedule import Scheduler
 
 from freqtrade import constants
+from freqtrade.order_recovery import (
+    clear_recovery, mark_recovery, order_evidence_valid, pending_recovery,
+)
 from freqtrade.configuration import remove_exchange_credentials, validate_config_consistency
 from freqtrade.constants import BuySell, Config, EntryExecuteMode, ExchangeConfig, LongShort
 from freqtrade.data.converter import order_book_to_dataframe
@@ -410,41 +413,49 @@ class FreqtradeBot(LoggingMixin):
 
         orders = Order.get_open_orders()
         logger.info(f"Updating {len(orders)} open orders.")
+        # Register the whole recovery batch before any lookup can release an entry gate.
         for order in orders:
+            if order.trade:
+                mark_recovery(order.trade, order.order_id)
+        Trade.commit()
+        for order in orders:
+            if not order.trade:
+                # Preserve orphan records too; the entry gate also checks these records.
+                logger.error("Order %s has no trade; manual reconciliation required", order.order_id)
+                continue
             try:
                 fo = self.exchange.fetch_order_or_stoploss_order(
                     order.order_id, order.ft_pair, order.ft_order_side == "stoploss"
                 )
-                if not order.trade:
-                    # This should not happen, but it does if trades were deleted manually.
-                    # This can only incur on sqlite, which doesn't enforce foreign constraints.
-                    logger.warning(
-                        f"Order {order.order_id} has no trade attached. "
-                        "This may suggest a database corruption. "
-                        f"The expected trade ID is {order.ft_trade_id}. Ignoring this order."
-                    )
+                if not order_evidence_valid(fo, order, order.ft_pair):
+                    logger.warning("Unresolved order %s: incomplete exchange response", order.order_id)
                     continue
-                self.update_trade_state(
-                    order.trade,
-                    order.order_id,
-                    fo,
+                empty_cancel = self.update_trade_state(
+                    order.trade, order.order_id, fo,
                     stoploss_order=(order.ft_order_side == "stoploss"),
                 )
-
+                clear_recovery(order.trade, order.order_id)
+                Trade.commit()
+                if empty_cancel and order.ft_order_side == order.trade.entry_side:
+                    self.handle_cancel_enter(
+                        order.trade, fo, order, constants.CANCEL_REASON["CANCELLED_ON_EXCHANGE"]
+                    )
             except InvalidOrderException as e:
-                logger.warning(f"Error updating Order {order.order_id} due to {e}.")
-                if order.order_date_utc - timedelta(days=5) < datetime.now(UTC):
-                    logger.warning(
-                        "Order is older than 5 days. Assuming order was fully cancelled."
-                    )
-                    fo = order.to_ccxt_object()
-                    fo["status"] = "canceled"
-                    self.handle_cancel_order(
-                        fo, order, order.trade, constants.CANCEL_REASON["TIMEOUT"]
-                    )
-
+                logger.warning("Error updating Order %s due to %s", order.order_id, e)
+                if order.order_date_utc + timedelta(days=5) < datetime.now(UTC):
+                    logger.warning("Order is older than 5 days; still unresolved, retaining references")
             except ExchangeError as e:
-                logger.warning(f"Error updating Order {order.order_id} due to {e}")
+                logger.warning("Error updating Order %s due to %s", order.order_id, e)
+
+    def has_unresolved_orders(self) -> bool:
+        """Gate every risk-increasing submission, including DCA and replacements.
+
+        The DB markers survive restarts and /start; resolving known IDs clears
+        only those IDs. A submission without an ID needs manual/P0.3 recovery.
+        """
+        return any(pending_recovery(t) for t in Trade.get_open_trades()) or any(
+            o.trade is None for o in Order.get_open_orders()
+        )
 
     def update_trades_without_assigned_fees(self) -> None:
         """
@@ -901,6 +912,10 @@ class FreqtradeBot(LoggingMixin):
         :return: True if an entry order is created, False if it fails.
         :raise: DependencyException or it's subclasses like ExchangeError.
         """
+        if self.has_unresolved_orders():
+            logger.warning("Entry blocked: unresolved exchange order state")
+            return False
+
         time_in_force = self.strategy.order_time_in_force["entry"]
 
         side: BuySell = "sell" if is_short else "buy"
@@ -1602,12 +1617,20 @@ class FreqtradeBot(LoggingMixin):
                     order = self.exchange.fetch_order(open_order.order_id, trade.pair)
 
                 except ExchangeError:
+                    mark_recovery(trade, open_order.order_id)
+                    Trade.commit()
                     logger.info(
                         "Cannot query order for %s due to %s", trade, traceback.format_exc()
                     )
                     continue
 
+                if not order_evidence_valid(order, open_order, trade.pair):
+                    mark_recovery(trade, open_order.order_id)
+                    Trade.commit()
+                    continue
                 fully_cancelled = self.update_trade_state(trade, open_order.order_id, order)
+                clear_recovery(trade, open_order.order_id)
+                Trade.commit()
                 not_closed = order["status"] == "open" or fully_cancelled
 
                 if not_closed:
@@ -1752,6 +1775,9 @@ class FreqtradeBot(LoggingMixin):
         Cancel existing order if new price is supplied, and if the cancel is successful,
         places a new order with the remaining capital.
         """
+        if pending_recovery(trade):
+            logger.warning("Replacement deferred: unresolved order state for %s", trade.pair)
+            return
         if not order:
             order = self.exchange.fetch_order(order_obj.order_id, trade.pair)
         res = self.handle_cancel_order(order, order_obj, trade, cancel_reason, replacing=replacing)
@@ -2087,6 +2113,9 @@ class FreqtradeBot(LoggingMixin):
         :param exit_check: CheckTuple with signal and reason
         :return: True if it succeeds False
         """
+        if pending_recovery(trade):
+            logger.warning("Exit deferred: unresolved order quantities need reconciliation")
+            return False
         trade.set_funding_fees(
             self.exchange.get_funding_fees(
                 pair=trade.pair,
