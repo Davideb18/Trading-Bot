@@ -13,6 +13,8 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
+from freqtrade.prop_profile import floors, utc_time, validate_baseline, validate_profile
+
 
 log = logging.getLogger(__name__)
 
@@ -29,43 +31,56 @@ def market_crash(metrics):
     )
 
 
+def reconciled_state(profile, baseline, now, *, halted):
+    """Build a state for explicit offline commissioning, never called by the live guard.
+
+    The operator must reconcile the account and preserve any existing halt before
+    installing this record. An absent file is not proof of a fresh account.
+    """
+    profile = validate_profile(profile)
+    validate_baseline(baseline, profile, now)
+    if type(halted) is not bool:
+        raise ValueError("Explicit reconciled halt status required")
+    return {
+        "schema_version": 1, "risk_schema_version": 2, "profile": profile,
+        "initial_balance": profile["initial_balance"], "baseline": baseline,
+        "current_trading_day": now.astimezone(UTC).date().isoformat(),
+        "nuclear_triggered": halted, "wake_up_lock": True, "data_fault": True,
+        "liquidation_confirmed": False, "last_equity": baseline["equity"],
+        "last_updated": now.isoformat(),
+    }
+
+
 class RiskGuard:
-    def __init__(
-        self, api, state_file, initial=5000.0, daily_limit=0.040, trailing_limit=0.052, interval=5
-    ):
-        if (
-            not finite_number(initial)
-            or initial <= 0
-            or not finite_number(daily_limit)
-            or not 0 < daily_limit <= 0.045
-            or not finite_number(trailing_limit)
-            or not 0 < trailing_limit <= 0.090
-            or not finite_number(interval)
-            or not 0 < interval <= 15
-        ):
-            raise ValueError("Invalid or unsafe prop guard configuration")
+    def __init__(self, api, state_file, *, profile, interval=5, baseline_file=None):
+        self.profile = validate_profile(profile)
+        if not finite_number(interval) or not 0 < interval <= 15:
+            raise ValueError("Invalid guard interval")
         self.api_client = api
         self.state_file = Path(state_file)
-        self.initial_balance = initial
-        self.daily_limit = daily_limit
-        self.trailing_limit = trailing_limit
+        self.baseline_file = Path(baseline_file) if baseline_file else self.state_file.with_name(
+            "risk_manager_prop_baseline.json"
+        )
+        self.initial_balance = self.profile["initial_balance"]
         self.interval = interval
         self._state_lock = threading.RLock()
         self._emergency_lock = threading.Lock()
         self._shutdown = threading.Event()
         self.state_error = None
         self.state = {
+            # Envelope v1 is retained for the unmodified strategy heartbeat reader.
+            # All capital authorization additionally requires risk_schema_version 2.
             "schema_version": 1,
-            "initial_balance": initial,
-            "peak_balance": initial,
-            "day_start_balance": initial,
-            "day_peak_balance": initial,
+            "risk_schema_version": 2,
+            "profile": self.profile,
+            "initial_balance": self.initial_balance,
+            "baseline": None,
             "current_trading_day": None,
             "nuclear_triggered": False,
-            "wake_up_lock": False,
+            "wake_up_lock": True,
             "data_fault": True,
             "liquidation_confirmed": False,
-            "last_equity": initial,
+            "last_equity": self.initial_balance,
             "last_updated": None,
         }
         self._load_state()
@@ -76,38 +91,28 @@ class RiskGuard:
 
     def _load_state(self):
         if not self.state_file.exists():
+            self.state_error = "Missing state requires explicit offline reconciliation"
             return
         try:
             state = json.loads(self.state_file.read_text(encoding="utf-8"))
-            if state.get("schema_version") is None and "initial_balance" in state:
-                state["schema_version"] = 1
-                state.setdefault("last_equity", state.get("peak_balance", self.initial_balance))
-                state.setdefault("data_fault", False)
-                state.setdefault("liquidation_confirmed", False)
-            if state.get("schema_version") != 1:
-                raise ValueError("Legacy/unknown state requires explicit reconciliation")
-            if state.get("initial_balance") != self.initial_balance:
-                raise ValueError("Account allocation changed")
-            for key in ("peak_balance", "day_start_balance", "day_peak_balance"):
-                if not finite_number(state.get(key)) or state[key] <= 0:
-                    raise ValueError(f"Invalid {key}")
-            if not finite_number(state.get("last_equity")):
-                raise ValueError("Invalid last_equity")
+            if (state.get("schema_version") != 1 or state.get("risk_schema_version") != 2
+                    or state.get("profile") != self.profile
+                    or state.get("initial_balance") != self.initial_balance):
+                raise ValueError("Legacy/mismatched state requires explicit reconciliation")
             for key in ("nuclear_triggered", "wake_up_lock", "data_fault", "liquidation_confirmed"):
                 if type(state.get(key)) is not bool:
                     raise ValueError(f"Invalid {key}")
-            timestamp = datetime.fromisoformat(state["last_updated"])
-            if timestamp.tzinfo is None:
-                raise ValueError("State timestamp must be timezone-aware")
-            datetime.strptime(state["current_trading_day"], "%Y-%m-%d")
-            if (
-                state["peak_balance"] < self.initial_balance
-                or state["peak_balance"] < state["day_peak_balance"]
-                or state["day_peak_balance"] < state["day_start_balance"]
-            ):
-                raise ValueError("Inconsistent high-water marks")
+            if not finite_number(state.get("last_equity")):
+                raise ValueError("Invalid last_equity")
+            updated = utc_time(state["last_updated"])
+            if state["baseline"] is not None:
+                validate_baseline(state["baseline"], self.profile, updated)
+                if state["current_trading_day"] != updated.date().isoformat():
+                    raise ValueError("Inconsistent baseline day")
+            elif not state["data_fault"] or not state["wake_up_lock"]:
+                raise ValueError("Missing baseline in authorized state")
             self.state = state
-        except (OSError, ValueError, TypeError, KeyError) as exc:
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
             # Preserve evidence. Never silently reset a corrupted or old account baseline.
             self.state_error = str(exc)
             log.critical("State recovery required: %s", exc)
@@ -188,54 +193,55 @@ class RiskGuard:
         if self.state_error:
             self._pause_on_fault(self.state_error)
             return False
+        try:
+            remote = self.api_client.get_prop_profile()
+            if remote != self.profile:
+                raise ValueError("Freqtrade/supervisor profile mismatch or unavailable")
+            if self.state["last_updated"] and utc_time(self.state["last_updated"]) > now:
+                raise ValueError("Clock moved backwards")
+        except (ValueError, TypeError, KeyError) as exc:
+            self.state_error = str(exc)
+            self._pause_on_fault(str(exc))
+            return False
         equity = self.api_client.get_equity()
         if not finite_number(equity):
             self._pause_on_fault("Missing/nonfinite full-account equity")
             return False
+        baseline = self.state["baseline"]
+        baseline_error = None
+        try:
+            if baseline is None or utc_time(baseline["captured_at"]).date() != now.date():
+                baseline = json.loads(self.baseline_file.read_text(encoding="utf-8"))
+            validate_baseline(baseline, self.profile, now)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            baseline_error = f"Midnight baseline reconciliation required: {exc}"
+            baseline = None
+        # Overall protection remains available even while the daily baseline is unknown.
+        levels = floors(self.profile, baseline["equity"] if baseline else self.initial_balance)
         reason = None
+        if Decimal(str(equity)) <= Decimal(str(levels["operating_overall_floor"])):
+            reason = "Internal static overall floor reached"
+        if baseline and Decimal(str(equity)) <= Decimal(str(levels["operating_daily_floor"])):
+            reason = "Internal static daily floor reached"
         with self._state_lock:
-            state = self.state
-            today = now.date().isoformat()
-            if state["current_trading_day"] is None:
-                # Fresh account only. A missing state is never a license to erase losses.
-                if equity < self.initial_balance - 0.01:
-                    reason = "Missing state for an account with existing profit/loss"
-                else:
-                    state["peak_balance"] = max(self.initial_balance, equity)
-                    state["day_start_balance"] = max(self.initial_balance, equity)
-                    state["day_peak_balance"] = max(self.initial_balance, equity)
-                state["current_trading_day"] = today
-            elif today < state["current_trading_day"]:
-                reason = "Clock moved backwards"
-            elif today != state["current_trading_day"]:
-                # Exact 00:00 equity is unavailable to a polling client. Carry the old
-                # sample across the boundary: conservative for the observed endpoints.
-                # An unobserved spike still cannot be reconstructed from these samples.
-                state["day_start_balance"] = max(state["last_equity"], equity)
-                state["day_peak_balance"] = state["day_start_balance"]
-                state["current_trading_day"] = today
-            state["peak_balance"] = max(state["peak_balance"], equity)
-            state["day_peak_balance"] = max(state["day_peak_balance"], equity)
-            daily_loss = Decimal(str(state["day_peak_balance"])) - Decimal(str(equity))
-            trailing_loss = Decimal(str(state["peak_balance"])) - Decimal(str(equity))
-            # Dollar limits based on the original allocation; equality triggers the halt.
-            if daily_loss >= Decimal(str(self.initial_balance)) * Decimal(str(self.daily_limit)):
-                reason = f"Internal daily loss reached: {daily_loss:.2f} USDT"
-            if trailing_loss >= Decimal(str(self.initial_balance)) * Decimal(
-                str(self.trailing_limit)
-            ):
-                reason = f"Internal trailing loss reached: {trailing_loss:.2f} USDT"
-            state["last_equity"] = equity
-            state["last_updated"] = now.isoformat()
-            state["data_fault"] = False
-            if not state["nuclear_triggered"]:
-                state["wake_up_lock"] = False
+            self.state.update(last_equity=equity, last_updated=now.isoformat(),
+                              baseline=baseline, current_trading_day=now.date().isoformat(),
+                              data_fault=bool(baseline_error), wake_up_lock=bool(baseline_error))
+            self.state.update(levels)
+            if not baseline:
+                self.state["official_daily_floor"] = None
+                self.state["operating_daily_floor"] = None
+            if reason:
+                self.state.update(nuclear_triggered=True, wake_up_lock=True,
+                                  liquidation_confirmed=False, halt_reason=reason)
             saved = self._save_state()
         if not saved:
             self._pause_on_fault(self.state_error)
         if reason:
-            self.trigger_nuclear_option(reason)
+            self._enforce_halt()
             return True
+        if baseline_error:
+            self._pause_on_fault(baseline_error)
         return False
 
     def _handle_shutdown(self, signum, frame):

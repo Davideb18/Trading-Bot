@@ -237,6 +237,7 @@ class OrderTypes(BaseModel):
 
 
 class ShowConfig(BaseModel):
+    prop_profile: dict | None = None
     version: str
     strategy_version: str | None = None
     api_version: float

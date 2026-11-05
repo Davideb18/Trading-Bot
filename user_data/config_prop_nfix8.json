@@ -202,6 +202,14 @@
         "process_throttle_secs": 5
     },
     "prop_guard": {
+        "profile_id": "hyro_one_step",
+        "account_id": null,
+        "challenge_id": null,
+        "phase_id": "evaluation",
+        "challenge_start_utc": null,
+        "phase_start_utc": null,
+        "official_daily_limit_percent": 0.04,
+        "official_max_loss_percent": 0.06,
         "daily_limit_percent": 0.036,
         "max_loss_percent": 0.052,
         "profit_target_percent": 0.1,

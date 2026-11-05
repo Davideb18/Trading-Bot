@@ -141,7 +141,10 @@ class RPC:
         Explicitly does NOT return the full config to avoid leakage of sensitive
         information via rpc.
         """
+        from freqtrade.prop_profile import profile_from_config
+
         val = {
+            "prop_profile": profile_from_config(config) if config.get("prop_guard_enabled") else None,
             "version": __version__,
             "strategy_version": strategy_version,
             "dry_run": config["dry_run"],

@@ -12,6 +12,7 @@ from freqtrade.exchange import Exchange
 from freqtrade.misc import safe_value_fallback
 from freqtrade.persistence import LocalTrade, Trade, WalletHistory
 from freqtrade.prop_capital import prop_capital_available
+from freqtrade.prop_profile import profile_from_config
 from freqtrade.util import dt_floor_day, dt_now
 
 
@@ -36,6 +37,8 @@ class PositionWallet(NamedTuple):
 
 class Wallets:
     def __init__(self, config: Config, exchange: Exchange, is_backtest: bool = False) -> None:
+        if config.get("prop_guard_enabled") and not is_backtest:
+            profile_from_config(config)
         self._config = config
         self._is_backtest = is_backtest
         self._exchange = exchange
@@ -329,7 +332,7 @@ class Wallets:
         if (
             self._config.get("prop_guard_enabled")
             and not self._is_backtest
-            and not prop_capital_available(self._config["user_data_dir"], dt_now())
+            and not prop_capital_available(self._config["user_data_dir"], dt_now(), self._config)
         ):
             return 0.0
         free = self.get_free(self._stake_currency)

@@ -88,22 +88,10 @@ GEMINI_FALLBACK_MODELS = list(dict.fromkeys([
 # ==================================================================================
 # HyroTrader Prop Firm Specific Settings ($5K Trial)
 # ==================================================================================
-# Phase support: 'trial' (5%), '1' / 'phase1' (10%), '2' / 'phase2' (5%)
-PROP_FIRM_PHASE = os.getenv("PROP_FIRM_PHASE", "trial").lower()
+# The same non-secret contract is validated against Freqtrade's resolved configuration.
+from freqtrade.prop_profile import profile_from_config
 
-# Internal daily high-water loss budget: 4.0% of the original allocation (HyroTrader limit: 5.0%).
-GLOBAL_HARD_STOPLOSS_PERCENT = float(os.getenv("GLOBAL_HARD_STOPLOSS_PERCENT", os.getenv("PROP_FIRM_DAILY_LIMIT_PERCENT", "0.040")))
-# Internal trailing loss budget: 5.2% of the original allocation (safe for both 6% 1-Step and 10% 2-Step).
-PROP_FIRM_MAX_LOSS_PERCENT = float(os.getenv("PROP_FIRM_MAX_LOSS_PERCENT", "0.052"))
-# Profit target: Phase 1 = 10%, Phase 2 & Free Trial = 5% (overrideable via env)
-if "PROP_FIRM_PROFIT_TARGET_PERCENT" in os.environ:
-    PROP_FIRM_PROFIT_TARGET_PERCENT = float(os.environ["PROP_FIRM_PROFIT_TARGET_PERCENT"])
-else:
-    PROP_FIRM_PROFIT_TARGET_PERCENT = 0.10 if PROP_FIRM_PHASE in ["1", "phase1", "step1"] else 0.05
-# Max single-day profit that counts toward target: 40% of target.
-PROP_FIRM_DAILY_PROFIT_CAP_PERCENT = float(os.getenv("PROP_FIRM_DAILY_PROFIT_CAP_PERCENT", "0.40"))
-# Minimum trading days required.
-PROP_FIRM_MIN_TRADING_DAYS = int(os.getenv("PROP_FIRM_MIN_TRADING_DAYS", "5"))
+PROFILE_CONFIG = Path(__file__).resolve().parent.parent / "user_data" / "config_prop_nfix8.json"
 
 # Timing
 CHECK_INTERVAL_SECONDS = int(os.getenv("CHECK_INTERVAL_SECONDS", "5"))
@@ -414,6 +402,10 @@ class FreqtradeAPIClient:
         elif isinstance(data, list):
             return data
         return []
+
+    def get_prop_profile(self):
+        data = self.get("/show_config")
+        return data.get("prop_profile") if isinstance(data, dict) else None
 
     def get_bot_state(self) -> str | None:
         """Returns bot state e.g. 'running', 'paused', 'stopped'."""
@@ -1019,13 +1011,8 @@ class RiskManager(RiskGuard):
     """Independent deterministic guard; Gemini is advisory and cannot send bot commands."""
     def __init__(self):
         api = FreqtradeAPIClient(FREQTRADE_API_URL, FREQTRADE_USERNAME, FREQTRADE_PASSWORD)
-        super().__init__(
-            api, STATE_FILE,
-            initial=float(os.getenv("PROP_FIRM_INITIAL_BALANCE", "5000")),
-            daily_limit=GLOBAL_HARD_STOPLOSS_PERCENT,
-            trailing_limit=PROP_FIRM_MAX_LOSS_PERCENT,
-            interval=CHECK_INTERVAL_SECONDS,
-        )
+        profile = profile_from_config(json.loads(PROFILE_CONFIG.read_text(encoding="utf-8")))
+        super().__init__(api, STATE_FILE, profile=profile, interval=CHECK_INTERVAL_SECONDS)
         self.sentiment = SentimentAnalyzer(GEMINI_API_KEY)
         self.macro_monitor = BinanceMacroMonitor()
         signal.signal(signal.SIGTERM, self._handle_shutdown)
@@ -1125,8 +1112,8 @@ class RiskManager(RiskGuard):
                         qualifying_days.add(tr_day)
 
                 # Counted profit toward 10% target with 40% daily cap
-                target_profit = self.initial_balance * PROP_FIRM_PROFIT_TARGET_PERCENT
-                daily_cap = target_profit * PROP_FIRM_DAILY_PROFIT_CAP_PERCENT
+                target_profit = self.initial_balance * self.profile["profit_target_percent"]
+                daily_cap = target_profit * self.profile["daily_profit_cap_percent"]
                 counted_profit = sum(min(d_pnl, daily_cap) if d_pnl > 0 else d_pnl for d_pnl in day_profits.values())
 
                 today_profit = day_profits.get(today_str, 0.0)
@@ -1137,17 +1124,17 @@ class RiskManager(RiskGuard):
                         today_profit, daily_cap
                     )
 
-                if counted_profit >= target_profit and len(qualifying_days) >= PROP_FIRM_MIN_TRADING_DAYS:
+                if counted_profit >= target_profit and len(qualifying_days) >= self.profile["min_trading_days"]:
                     logger.info(
                         "🎉 HYROTRADER ONE-STEP PASSED! Counted profit: $%.2f / $%.2f | Qualifying days: %d/%d.",
-                        counted_profit, target_profit, len(qualifying_days), PROP_FIRM_MIN_TRADING_DAYS
+                        counted_profit, target_profit, len(qualifying_days), self.profile["min_trading_days"]
                     )
                 else:
                     logger.info(
                         "📊 HyroTrader One-Step Status: Counted Profit: $%.2f/$%.2f (%.1f%%) | "
                         "Qualifying Days: %d/%d | Inactivity: %dd/30d",
                         counted_profit, target_profit, (counted_profit / target_profit) * 100.0 if target_profit else 0.0,
-                        len(qualifying_days), PROP_FIRM_MIN_TRADING_DAYS, inactivity_days
+                        len(qualifying_days), self.profile["min_trading_days"], inactivity_days
                     )
             except Exception:
                 logger.exception("Error in HyroTrader rules evaluation loop")
