@@ -44,7 +44,7 @@ def load_env_file():
             pass
 
 if os.getenv("PROP_LOAD_ENV_FILE") == "1":
-    load_env_file()
+    raise ValueError("Implicit .env loading is disabled for the operational supervisor")
 
 # ==================================================================================
 # Logging Setup
@@ -54,17 +54,11 @@ LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 LOG_DIR = Path(__file__).resolve().parent.parent / "user_data" / "logs"
-LOG_DIR.mkdir(parents=True, exist_ok=True)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format=LOG_FORMAT,
-    datefmt=LOG_DATE_FORMAT,
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(LOG_DIR / "risk_manager_prop.log", mode="a"),
-    ],
-)
+def configure_logging():
+    LOG_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, datefmt=LOG_DATE_FORMAT,
+                        handlers=[logging.StreamHandler(sys.stdout),
+                                  logging.FileHandler(LOG_DIR / "risk_manager_prop.log", mode="a")])
 logger = logging.getLogger("HyroTrader.RiskManagerProp")
 
 # ==================================================================================
@@ -72,7 +66,7 @@ logger = logging.getLogger("HyroTrader.RiskManagerProp")
 # ==================================================================================
 
 FREQTRADE_API_URL = os.getenv("FREQTRADE_API_URL", "http://127.0.0.1:8088/api/v1")
-FREQTRADE_USERNAME = os.getenv("FREQTRADE_USERNAME", "freqtrade")
+FREQTRADE_USERNAME = os.getenv("FREQTRADE_USERNAME", "")
 FREQTRADE_PASSWORD = os.getenv("FREQTRADE_PASSWORD", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
@@ -840,8 +834,12 @@ from prop_independent import independent_supervisor
 class RiskManager(RiskGuard):
     """Independent deterministic guard; Gemini is advisory and cannot send bot commands."""
     def __init__(self):
+        from freqtrade.prop_security import supervisor_config, validate_deployment
+        config = supervisor_config(json.loads(PROFILE_CONFIG.read_text(encoding="utf-8")))
+        config['user_data_dir'] = STATE_FILE.parent
+        profile = validate_deployment(config, config['exchange'])
+        configure_logging()
         api = FreqtradeAPIClient(FREQTRADE_API_URL, FREQTRADE_USERNAME, FREQTRADE_PASSWORD)
-        profile = profile_from_config(json.loads(PROFILE_CONFIG.read_text(encoding="utf-8")))
         api, emergency = independent_supervisor(profile, STATE_FILE, api)
         super().__init__(api, STATE_FILE, profile=profile, interval=CHECK_INTERVAL_SECONDS, emergency=emergency)
         self.rules_api = FreqtradeAPIClient(FREQTRADE_API_URL, FREQTRADE_USERNAME, FREQTRADE_PASSWORD)
@@ -980,4 +978,8 @@ class RiskManager(RiskGuard):
 
 
 if __name__ == "__main__":
-    RiskManager().run()
+    try:
+        RiskManager().run()
+    except Exception:
+        logging.getLogger(__name__).error("Supervisor stopped: deployment or runtime validation failed")
+        sys.exit(1)

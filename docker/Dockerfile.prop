@@ -1,3 +1,5 @@
 # Keep the audited RPC and wallet implementation with the strategy.
 FROM freqtradeorg/freqtrade:stable
 COPY --chown=ftuser:ftuser freqtrade /freqtrade/freqtrade
+COPY --chown=ftuser:ftuser scripts/prop_secure_start.py /freqtrade/prop_secure_start.py
+ENTRYPOINT ["python", "/freqtrade/prop_secure_start.py", "core"]

@@ -99,6 +99,9 @@ class FreqtradeBot(LoggingMixin):
 
         # Init objects
         self.config = config
+        if config.get("prop_guard_enabled"):
+            from freqtrade.prop_security import validate_deployment
+            validate_deployment(config, config["exchange"])
         exchange_config: ExchangeConfig = deepcopy(config["exchange"])
         # Remove credentials from original exchange config to avoid accidental credential exposure
         remove_exchange_credentials(config["exchange"], True)

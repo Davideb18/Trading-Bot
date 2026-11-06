@@ -4,16 +4,32 @@ services:
       context: .
       dockerfile: docker/Dockerfile.prop
     image: trading-bot-prop:production
-    restart: unless-stopped
-    container_name: freqtrade_prop
+    restart: "no"
+    user: "${PROP_UID:?Explicit non-root UID required}:${PROP_GID:?Explicit GID required}"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    networks: [prop_control]
     environment:
-      - FREQTRADE__API_SERVER__JWT_SECRET_KEY=${FREQTRADE_JWT_TOKEN:-supersecretjwttoken}
-      - FREQTRADE__API_SERVER__PASSWORD=${FREQTRADE_PASSWORD:-ZeroBurnPassword2026!}
-      - FREQTRADE__API_SERVER__WS_TOKEN=${FREQTRADE_WS_TOKEN:-supersecretwstoken}
+      FREQTRADE__API_SERVER__JWT_SECRET_KEY: ${FREQTRADE_JWT_TOKEN:?Required}
+      FREQTRADE__API_SERVER__PASSWORD: ${FREQTRADE_PASSWORD:?Required}
+      FREQTRADE__API_SERVER__WS_TOKEN: ${FREQTRADE_WS_TOKEN:?Required}
+      FREQTRADE__API_SERVER__USERNAME: ${FREQTRADE_USERNAME:?Required}
+      FREQTRADE__API_SERVER__LISTEN_IP_ADDRESS: 0.0.0.0
+      FREQTRADE__EXCHANGE__KEY: ${PROP_BYBIT_API_KEY:?Required}
+      FREQTRADE__EXCHANGE__SECRET: ${PROP_BYBIT_API_SECRET:?Required}
+      PROP_BYBIT_API_KEY: ${PROP_BYBIT_API_KEY:?Required}
+      PROP_BYBIT_API_SECRET: ${PROP_BYBIT_API_SECRET:?Required}
+      FREQTRADE_USERNAME: ${FREQTRADE_USERNAME:?Required}
+      FREQTRADE_PASSWORD: ${FREQTRADE_PASSWORD:?Required}
+      PROP_EMERGENCY_AUTHORITY: ${PROP_EMERGENCY_AUTHORITY:?Dedicated account shared-host acknowledgement required}
+      PROP_PRIVATE_DOCKER_NETWORK: dedicated-bridge
     volumes:
-      - "./user_data:/freqtrade/user_data"
-    ports:
-      - "8088:8088"
+      - type: bind
+        source: ${PROP_DATA_DIR:?Absolute shared account directory required}
+        target: /freqtrade/user_data
+        bind:
+          create_host_path: false
+    ports: ["127.0.0.1:8088:8088"]
     command: >
       trade
       --logfile /freqtrade/user_data/logs/freqtrade_prop.log
@@ -25,22 +41,35 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.riskmanager-prop
-    container_name: freqtrade_prop_risk_manager
-    restart: unless-stopped
-    depends_on:
-      - freqtrade_prop
+    restart: "no"
+    user: "${PROP_UID:?Explicit non-root UID required}:${PROP_GID:?Explicit GID required}"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    networks: [prop_control]
+    depends_on: [freqtrade_prop]
     environment:
-      - FREQTRADE_API_URL=http://freqtrade_prop:8088/api/v1
-      - FREQTRADE_USERNAME=freqtrade
-      - FREQTRADE_PASSWORD=${FREQTRADE_PASSWORD:-ZeroBurnPassword2026!}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - CHECK_INTERVAL_SECONDS=5
-      - PYTHONPATH=/app
-      - PROP_BYBIT_API_KEY=${PROP_BYBIT_API_KEY:-}
-      - PROP_BYBIT_API_SECRET=${PROP_BYBIT_API_SECRET:-}
-      - PROP_EMERGENCY_AUTHORITY=${PROP_EMERGENCY_AUTHORITY:-}
+      FREQTRADE_API_URL: http://freqtrade_prop:8088/api/v1
+      FREQTRADE_USERNAME: ${FREQTRADE_USERNAME:?Required}
+      FREQTRADE_PASSWORD: ${FREQTRADE_PASSWORD:?Required}
+      FREQTRADE_JWT_TOKEN: ${FREQTRADE_JWT_TOKEN:?Required}
+      FREQTRADE_WS_TOKEN: ${FREQTRADE_WS_TOKEN:?Required}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      CHECK_INTERVAL_SECONDS: 5
+      PYTHONPATH: /app
+      PROP_BYBIT_API_KEY: ${PROP_BYBIT_API_KEY:?Required}
+      PROP_BYBIT_API_SECRET: ${PROP_BYBIT_API_SECRET:?Required}
+      PROP_EMERGENCY_AUTHORITY: ${PROP_EMERGENCY_AUTHORITY:?Dedicated account shared-host acknowledgement required}
+      PROP_PRIVATE_DOCKER_NETWORK: dedicated-bridge
     volumes:
       - "./scripts:/app/scripts:ro"
       - "./freqtrade:/app/freqtrade:ro"
-      - "./user_data:/app/user_data:rw"
-    command: ["python3", "-u", "/app/scripts/llm_risk_manager_prop.py"]
+      - type: bind
+        source: ${PROP_DATA_DIR:?Absolute shared account directory required}
+        target: /app/user_data
+        bind:
+          create_host_path: false
+    command: ["python3", "-u", "/app/scripts/prop_secure_start.py", "supervisor"]
+
+networks:
+  prop_control:
+    driver: bridge

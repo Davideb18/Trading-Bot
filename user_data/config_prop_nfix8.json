@@ -188,14 +188,14 @@
     },
     "api_server": {
         "enabled": true,
-        "listen_ip_address": "0.0.0.0",
+        "listen_ip_address": "127.0.0.1",
         "listen_port": 8088,
         "verbosity": "error",
         "enable_openapi": false,
-        "ws_token": "supersecretwstoken",
+        "ws_token": "",
         "CORS_origins": [],
-        "username": "freqtrade",
-        "password": "ZeroBurnPassword2026!"
+        "username": "",
+        "password": ""
     },
     "bot_name": "freqtrade_prop_nfix8",
     "internals": {
