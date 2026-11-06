@@ -8,12 +8,14 @@ from freqtrade.constants import NON_OPEN_EXCHANGE_STATES
 from freqtrade.exceptions import ExchangeError
 from freqtrade.order_recovery import clear_recovery, mark_recovery, order_evidence_valid
 from freqtrade.prop_controls import read_control, sync_prop_controls
+from freqtrade.emergency_authority import require_core_authority
 
 
 logger = logging.getLogger(__name__)
 
 
 def cancel_fault_entries(bot, trade_model):
+    require_core_authority(bot)
     if not getattr(bot, "config", {}).get("prop_guard_enabled"):
         return
     sync_prop_controls(bot)

@@ -1062,6 +1062,9 @@ class RPC:
         amount: float | None = None,
         price: float | None = None,
     ) -> bool:
+        if self._freqtrade.config.get("prop_guard_enabled"):
+            from freqtrade.emergency_authority import require_core_authority
+            require_core_authority(self._freqtrade)
         if UNKNOWN_FORCE_EXIT in pending_recovery(trade):
             return False
         # Canceling a DCA order does not mean the existing position disappeared.

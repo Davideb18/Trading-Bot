@@ -1,0 +1,5 @@
+FROM python:3.12-slim
+WORKDIR /app
+# Build recipe only. No build/install is performed by the implementation tests.
+RUN pip install --no-cache-dir requests google-genai ccxt==4.5.68
+CMD ["python3", "-u", "/app/scripts/llm_risk_manager_prop.py"]

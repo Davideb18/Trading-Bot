@@ -24,7 +24,7 @@ services:
   freqtrade_prop_risk_manager:
     build:
       context: .
-      dockerfile: docker/Dockerfile.riskmanager
+      dockerfile: docker/Dockerfile.riskmanager-prop
     container_name: freqtrade_prop_risk_manager
     restart: unless-stopped
     depends_on:
@@ -36,6 +36,9 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - CHECK_INTERVAL_SECONDS=5
       - PYTHONPATH=/app
+      - PROP_BYBIT_API_KEY=${PROP_BYBIT_API_KEY:-}
+      - PROP_BYBIT_API_SECRET=${PROP_BYBIT_API_SECRET:-}
+      - PROP_EMERGENCY_AUTHORITY=${PROP_EMERGENCY_AUTHORITY:-}
     volumes:
       - "./scripts:/app/scripts:ro"
       - "./freqtrade:/app/freqtrade:ro"

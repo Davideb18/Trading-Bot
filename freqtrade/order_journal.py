@@ -78,6 +78,8 @@ class OrderJournal:
                     order_id TEXT PRIMARY KEY, pair TEXT, side TEXT, state TEXT, evidence TEXT);
                 CREATE TABLE IF NOT EXISTS fault_events (
                     event_id TEXT PRIMARY KEY, created_ms INTEGER, reason TEXT, acknowledged INTEGER DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS emergency (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS emergency_orders (client_id TEXT PRIMARY KEY, halt_id TEXT NOT NULL);
             """)
             binding = json.dumps({"schema": 1, **identity}, sort_keys=True)
             row = self.db.execute("SELECT value FROM binding WHERE id=1").fetchone()
@@ -155,6 +157,30 @@ class OrderJournal:
         """Call only after the Freqtrade commit. Reconciliation also repairs this crash gap."""
         with self.mutex, self.db:
             self.db.execute("UPDATE intents SET trade_id=? WHERE exchange_id=?", (trade_id, order_id))
+
+    def prepare_emergency(self, request, owner):
+        """Explicit supervisor authority; exchange proof replaces unavailable ORM proof.
+
+        The owner must hold this journal's exclusive lifetime lock. Only market
+        reductions are accepted; normal entry permissions are never relaxed.
+        """
+        with self.mutex:
+            row = self.db.execute("SELECT value FROM emergency WHERE id=1").fetchone()
+            state = json.loads(row[0]) if row else {}
+            if (state.get("owner") != owner or state.get("handoff") is not True
+                    or state.get("phase") != "liquidating"
+                    or request.get("reduceOnly") is not True or request.get("ordertype") != "market"):
+                raise JournalBlocked("No exclusive emergency reduction authority")
+            if self.db.execute("SELECT 1 FROM intents i JOIN emergency_orders e USING(client_id) "
+                               "WHERE i.settled=0").fetchone():
+                raise JournalBlocked("Previous emergency order must be reconciled first")
+            cid = "ftj" + uuid.uuid4().hex
+            with self.db:
+                self.db.execute("INSERT INTO intents(client_id,created_ms,request,state) VALUES (?,?,?,'prepared')",
+                                (cid, int(time.time() * 1000), json.dumps(request)))
+                self.db.execute("INSERT INTO emergency_orders VALUES (?,?)", (cid, state["halt_id"]))
+            self.ready = False
+            return cid
 
     def reconcile(self, snapshot, local_orders, local_positions):
         """Read-only exchange evidence; never fabricate local orders or adopt foreign positions.

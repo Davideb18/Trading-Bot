@@ -834,6 +834,7 @@ Evaluate current market regime.
 # ==================================================================================
 
 from prop_risk_guard import RiskGuard, finite_number, market_crash
+from prop_independent import independent_supervisor
 
 
 class RiskManager(RiskGuard):
@@ -841,7 +842,8 @@ class RiskManager(RiskGuard):
     def __init__(self):
         api = FreqtradeAPIClient(FREQTRADE_API_URL, FREQTRADE_USERNAME, FREQTRADE_PASSWORD)
         profile = profile_from_config(json.loads(PROFILE_CONFIG.read_text(encoding="utf-8")))
-        super().__init__(api, STATE_FILE, profile=profile, interval=CHECK_INTERVAL_SECONDS)
+        api, emergency = independent_supervisor(profile, STATE_FILE, api)
+        super().__init__(api, STATE_FILE, profile=profile, interval=CHECK_INTERVAL_SECONDS, emergency=emergency)
         self.rules_api = FreqtradeAPIClient(FREQTRADE_API_URL, FREQTRADE_USERNAME, FREQTRADE_PASSWORD)
         self.sentiment = SentimentAnalyzer(GEMINI_API_KEY)
         self.macro_monitor = BinanceMacroMonitor()
@@ -971,7 +973,10 @@ class RiskManager(RiskGuard):
         threading.Thread(target=self._macro_loop, daemon=True, name="Macro-Guard").start()
         threading.Thread(target=self._llm_sentinel_loop, daemon=True, name="LLM-Advisory").start()
         threading.Thread(target=self._hyrotrader_rules_loop, daemon=True, name="HyroTrader-Rules").start()
-        super().run()
+        try:
+            super().run()
+        finally:
+            self.emergency.close()
 
 
 if __name__ == "__main__":

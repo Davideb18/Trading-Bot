@@ -8,6 +8,7 @@ from freqtrade.order_journal import JournalBlocked, OrderJournal
 from freqtrade.order_recovery import clear_recovery, mark_recovery, pending_recovery
 from freqtrade.prop_profile import profile_from_config
 from freqtrade.prop_controls import sync_prop_controls
+from freqtrade.emergency_authority import EmergencyTakeover, require_core_authority
 
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,14 @@ def open_journal(config, exchange_config):
                                        "phase_id", "exchange", "environment", "currency")}
     identity.update(key_fingerprint=hashlib.sha256(key.encode()).hexdigest(),
                     database=config["db_url"])
-    return OrderJournal(Path(config["user_data_dir"]) / "order_journal", identity)
+    journal = OrderJournal(Path(config["user_data_dir"]) / "order_journal", identity)
+    row = journal.db.execute("SELECT value FROM emergency WHERE id=1").fetchone()
+    if row:
+        import json
+        if json.loads(row[0]).get("handoff") is True:
+            journal.close()
+            raise EmergencyTakeover("Emergency halt requires explicit exchange/DB reconciliation before restart")
+    return journal
 
 
 def reconcile_journal(bot, trade_model):
@@ -69,6 +77,7 @@ def reconcile_journal(bot, trade_model):
 
 
 def journal_create_order(bot, trade, trade_model, **request):
+    require_core_authority(bot)
     journal = getattr(bot, "order_journal", None)
     if journal is None:
         if bot.config.get("prop_guard_enabled"):
@@ -78,6 +87,7 @@ def journal_create_order(bot, trade, trade_model, **request):
         reconcile_journal(bot, trade_model)
         if not request["reduceOnly"] and sync_prop_controls(bot):
             raise JournalBlocked("Persistent operational entry lock")
+        require_core_authority(bot)
         if ((not request["reduceOnly"] and bot.has_unresolved_orders())
                 or (trade and pending_recovery(trade))):
             raise JournalBlocked("P0.2 recovery lock still active")

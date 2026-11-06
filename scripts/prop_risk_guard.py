@@ -58,11 +58,12 @@ def reconciled_state(profile, baseline, now, *, halted):
 
 
 class RiskGuard:
-    def __init__(self, api, state_file, *, profile, interval=5, baseline_file=None):
+    def __init__(self, api, state_file, *, profile, interval=5, baseline_file=None, emergency=None):
         self.profile = validate_profile(profile)
         if not finite_number(interval) or not 0 < interval <= 15:
             raise ValueError("Invalid guard interval")
         self.api_client = api
+        self.emergency = emergency
         self.state_file = Path(state_file)
         self.baseline_file = Path(baseline_file) if baseline_file else self.state_file.with_name(
             "risk_manager_prop_baseline.json"
@@ -248,6 +249,12 @@ class RiskGuard:
         self._enforce_halt()
 
     def _enforce_halt(self):
+        if self.emergency is not None:
+            confirmed = self.emergency.step()
+            with self._state_lock:
+                self.state["liquidation_confirmed"] = confirmed
+            self._save_state()
+            return confirmed
         # Serializes simultaneous crash/DD requests without blocking state reads.
         if not self._emergency_lock.acquire(blocking=False):
             return False

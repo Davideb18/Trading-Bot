@@ -20,6 +20,7 @@ from freqtrade.journal_execution import (
 from freqtrade.order_journal import JournalBlocked
 from freqtrade.fault_recovery import cancel_fault_entries
 from freqtrade.prop_controls import sync_prop_controls
+from freqtrade.emergency_authority import EmergencyTakeover, require_core_authority
 from freqtrade.order_recovery import (
     clear_recovery, mark_recovery, order_evidence_valid, pending_recovery,
 )
@@ -220,9 +221,13 @@ class FreqtradeBot(LoggingMixin):
         """
         logger.info("Cleaning up modules ...")
         try:
+            require_core_authority(self)
+        except EmergencyTakeover:
+            pass  # Keep the journal owner until all core execution has stopped.
+        try:
             # Wrap db activities in shutdown to avoid problems if database is gone,
             # and raises further exceptions.
-            if self.config["cancel_open_orders_on_exit"]:
+            if not getattr(self, "_emergency_handoff", False) and self.config["cancel_open_orders_on_exit"]:
                 self.cancel_all_open_orders()
 
             self.check_for_open_trades()
@@ -246,7 +251,7 @@ class FreqtradeBot(LoggingMixin):
             # Exceptions here will be happening if the db disappeared.
             # At which point we can no longer commit anyway.
             logger.exception("Error during cleanup")
-        if getattr(self, "order_journal", None):
+        if getattr(self, "order_journal", None) and not getattr(self, "_emergency_handoff", False):
             self.order_journal.close()
 
     def startup(self) -> None:
@@ -281,6 +286,7 @@ class FreqtradeBot(LoggingMixin):
         :return: True if one or more trades has been created or closed, False otherwise
         """
 
+        require_core_authority(self)
         sync_prop_controls(self)
         cancel_fault_entries(self, Trade)
         reconcile_journal(self, Trade)
@@ -337,6 +343,7 @@ class FreqtradeBot(LoggingMixin):
         """
         Close all orders that were left open
         """
+        require_core_authority(self)
         if self.config["cancel_open_orders_on_exit"]:
             self.cancel_all_open_orders()
 
