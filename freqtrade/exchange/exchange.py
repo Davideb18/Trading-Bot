@@ -1444,6 +1444,7 @@ class Exchange:
         time_in_force: str = "GTC",
         reduceOnly: bool = False,
         initial_order: bool = True,
+        client_order_id: str | None = None,
     ) -> CcxtOrder:
         if self._config["dry_run"]:
             dry_order = self.create_dry_run_order(
@@ -1452,6 +1453,8 @@ class Exchange:
             return dry_order
 
         params = self._get_params(side, ordertype, leverage, reduceOnly, time_in_force)
+        if client_order_id is not None:
+            params["clientOrderId"] = client_order_id
 
         try:
             # Set the precision for amount and price(rate) as accepted by the exchange

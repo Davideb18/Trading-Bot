@@ -24,6 +24,107 @@ class Bybit(Exchange):
 
     unified_account = False
 
+    def _journal_pages(self, endpoint, params):
+        """Read every V5 page, or fail closed; never rely on a truncated CCXT list."""
+        rows, cursors = [], set()
+        request = {"category": "linear", "limit": 50, **params}
+        for _ in range(1000):
+            response = endpoint(request.copy())
+            if response.get("retCode") != 0:
+                raise ValueError("Unsuccessful reconciliation response")
+            result = response["result"]
+            if not isinstance(result["list"], list) or result.get("category") != "linear":
+                raise ValueError("Invalid reconciliation page")
+            rows.extend(result["list"])
+            cursor = result["nextPageCursor"]
+            if cursor == "":
+                return rows
+            if not isinstance(cursor, str) or cursor in cursors:
+                raise ValueError("Invalid reconciliation cursor")
+            cursors.add(cursor)
+            request["cursor"] = cursor
+        raise ValueError("Reconciliation pagination limit reached")
+
+    def _journal_market(self, raw):
+        matches = [m for m in self._api.markets.values()
+                   if m["id"] == raw["symbol"] and m.get("swap") and m.get("linear")
+                   and m.get("settle") == "USDT"]
+        if len(matches) != 1:
+            raise ValueError("Unsupported journal market")
+        return matches[0]
+
+    def fetch_journal_snapshot(self, intents):
+        """Dedicated USDT linear account only. No writes, cancellations or ownership guesses.
+
+        Query each outstanding client ID in realtime AND history; validate fills
+        against the execution endpoint. Missing history remains unresolved.
+        """
+        import json
+
+        def parse(raw):
+            return self._order_contracts_to_amount(
+                self._api.parse_order(raw, self._journal_market(raw)))
+
+        opened = self._journal_pages(self._api.privateGetV5OrderRealtime,
+                                     {"settleCoin": "USDT", "openOnly": 0})
+        positions = self._journal_pages(self._api.privateGetV5PositionList,
+                                        {"settleCoin": "USDT"})
+        snapshot = {"complete": True, "open_orders": [parse(o) for o in opened],
+                    "positions": [], "orders": {}, "fills": {}}
+        for raw in positions:
+            market = self._journal_market(raw)
+            if int(raw["positionIdx"]) != 0:
+                raise ValueError("Journal requires one-way position mode")
+            position = self._api.parse_position(raw, market)
+            amount = self._contracts_to_amount(market["symbol"], position["contracts"])
+            if amount:
+                snapshot["positions"].append({"symbol": market["symbol"],
+                                               "side": position["side"], "amount": amount})
+        for intent in intents:
+            cid = intent["client_id"]
+            request = json.loads(intent["request"])
+            market = self._api.market(request["pair"])
+            params = {"symbol": market["id"], "orderLinkId": cid}
+            realtime = self._journal_pages(self._api.privateGetV5OrderRealtime, params)
+            history = self._journal_pages(self._api.privateGetV5OrderHistory, params)
+            candidates = realtime + history
+            if not candidates:
+                continue  # Not-found is never evidence of non-execution.
+            if any(o.get("orderLinkId") != cid for o in candidates):
+                raise ValueError("Exchange did not honor client ID filter")
+            if len({o["orderId"] for o in candidates}) != 1:
+                raise ValueError("Client ID identifies multiple orders")
+            # Refuse inconsistent reads; the next cycle can obtain stable evidence.
+            parsed = [parse(o) for o in candidates]
+            fields = ("id", "status", "amount", "filled", "remaining", "side", "symbol")
+            if any(any(o[k] != parsed[0][k] for k in fields) for o in parsed):
+                raise ValueError("Realtime/history disagree")
+            raw, order = candidates[0], parsed[0]
+            if (raw.get("reduceOnly") is not request["reduceOnly"]
+                    or order["symbol"] != request["pair"]
+                    or order["side"] != request["side"]
+                    or not math.isclose(order["amount"], self.amount_to_contract_precision(
+                        request["pair"], request["amount"]), rel_tol=1e-8, abs_tol=1e-12)):
+                raise ValueError("Order differs from journal request")
+            executions = self._journal_pages(self._api.privateGetV5ExecutionList,
+                {"symbol": market["id"], "orderId": order["id"], "execType": "Trade"})
+            ids, total = set(), 0.0
+            for execution in executions:
+                if (execution["orderId"] != order["id"]
+                        or execution.get("orderLinkId") != cid
+                        or execution["symbol"] != market["id"]
+                        or execution["side"].lower() != request["side"]
+                        or execution["execId"] in ids):
+                    raise ValueError("Invalid execution identity")
+                ids.add(execution["execId"])
+                qty = float(execution["execQty"])
+                if not math.isfinite(qty) or qty <= 0:
+                    raise ValueError("Invalid execution quantity")
+                total += self._contracts_to_amount(request["pair"], qty)
+            snapshot["orders"][cid] = order
+            snapshot["fills"][cid] = total
+        return snapshot
+
     def _parse_account_equity(self, response: dict | None) -> dict | None:
         """Preserve coin equity before CCXT's raw wallet response is discarded.
 

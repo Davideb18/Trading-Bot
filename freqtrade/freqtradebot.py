@@ -14,6 +14,10 @@ from typing import Any
 from schedule import Scheduler
 
 from freqtrade import constants
+from freqtrade.journal_execution import (
+    bind_journal, journal_create_order, open_journal, reconcile_journal,
+)
+from freqtrade.order_journal import JournalBlocked
 from freqtrade.order_recovery import (
     clear_recovery, mark_recovery, order_evidence_valid, pending_recovery,
 )
@@ -96,6 +100,8 @@ class FreqtradeBot(LoggingMixin):
         # Remove credentials from original exchange config to avoid accidental credential exposure
         remove_exchange_credentials(config["exchange"], True)
         try:
+            # Own the shared journal before exchange initialization or RPC startup.
+            self.order_journal = open_journal(config, exchange_config)
             self.exchange = ExchangeResolver.load_exchange(
                 self.config, exchange_config=exchange_config, load_leverage_tiers=True
             )
@@ -104,6 +110,8 @@ class FreqtradeBot(LoggingMixin):
 
             # Check config consistency here since strategies can set certain options
             validate_config_consistency(config)
+            if self.order_journal and self.strategy.order_types.get("stoploss_on_exchange"):
+                raise JournalBlocked("Journal does not support exchange-native stop orders yet")
             # Re-validate exchange compatibility
             self.exchange.validate_config(self.config)
 
@@ -236,6 +244,8 @@ class FreqtradeBot(LoggingMixin):
             # Exceptions here will be happening if the db disappeared.
             # At which point we can no longer commit anyway.
             logger.exception("Error during cleanup")
+        if getattr(self, "order_journal", None):
+            self.order_journal.close()
 
     def startup(self) -> None:
         """
@@ -254,6 +264,7 @@ class FreqtradeBot(LoggingMixin):
         # Only update open orders on startup
         # This will update the database after the initial migration
         self.startup_update_open_orders()
+        reconcile_journal(self, Trade)
         self.update_all_liquidation_prices()
         self.update_funding_fees()
 
@@ -264,6 +275,7 @@ class FreqtradeBot(LoggingMixin):
         :return: True if one or more trades has been created or closed, False otherwise
         """
 
+        reconcile_journal(self, Trade)
         # Check whether markets have to be reloaded and reload them when it's needed
         self.exchange.reload_markets()
 
@@ -453,8 +465,11 @@ class FreqtradeBot(LoggingMixin):
         The DB markers survive restarts and /start; resolving known IDs clears
         only those IDs. A submission without an ID needs manual/P0.3 recovery.
         """
-        return any(pending_recovery(t) for t in Trade.get_open_trades()) or any(
-            o.trade is None for o in Order.get_open_orders()
+        journal = getattr(self, "order_journal", None)
+        return (
+            (journal is not None and not journal.ready)
+            or any(pending_recovery(t) for t in Trade.get_open_trades())
+            or any(o.trade is None for o in Order.get_open_orders())
         )
 
     def update_trades_without_assigned_fees(self) -> None:
@@ -964,7 +979,8 @@ class FreqtradeBot(LoggingMixin):
         if trade and self.handle_similar_open_order(trade, enter_limit_requested, amount, side):
             return False
 
-        order = self.exchange.create_order(
+        order = journal_create_order(
+            self, trade, Trade,
             pair=pair,
             ordertype=order_type,
             side=side,
@@ -1070,6 +1086,7 @@ class FreqtradeBot(LoggingMixin):
         trade.recalc_trade_from_orders()
         Trade.session.add(trade)
         Trade.commit()
+        bind_journal(self, order_id, trade.id)
 
         # Updating wallets
         self.wallets.update()
@@ -2189,7 +2206,8 @@ class FreqtradeBot(LoggingMixin):
 
         try:
             # Execute exit and update trade record
-            order = self.exchange.create_order(
+            order = journal_create_order(
+                self, trade, Trade,
                 pair=trade.pair,
                 ordertype=order_type,
                 side=trade.exit_side,
@@ -2200,6 +2218,11 @@ class FreqtradeBot(LoggingMixin):
                 time_in_force=time_in_force,
                 initial_order=False,
             )
+        except JournalBlocked as e:
+            # Pre-send refusal is not an unknown submission. If dispatch already
+            # happened, journal_create_order has persisted its own recovery marker.
+            logger.warning("Exit blocked by order journal: %s", e)
+            return False
         except InsufficientFundsError as e:
             logger.warning(f"Unable to place order {e}.")
             # Try to figure out what went wrong
@@ -2220,6 +2243,7 @@ class FreqtradeBot(LoggingMixin):
         if order.get("status", "unknown") in ("closed", "expired"):
             self.update_trade_state(trade, order_obj.order_id, order)
         Trade.commit()
+        bind_journal(self, order_obj.order_id, trade.id)
 
         return True
 
