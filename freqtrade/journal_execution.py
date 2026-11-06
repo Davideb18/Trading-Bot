@@ -7,6 +7,7 @@ from pathlib import Path
 from freqtrade.order_journal import JournalBlocked, OrderJournal
 from freqtrade.order_recovery import clear_recovery, mark_recovery, pending_recovery
 from freqtrade.prop_profile import profile_from_config
+from freqtrade.prop_controls import sync_prop_controls
 
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,8 @@ def journal_create_order(bot, trade, trade_model, **request):
         return bot.exchange.create_order(**request)
     with journal.mutex:
         reconcile_journal(bot, trade_model)
+        if not request["reduceOnly"] and sync_prop_controls(bot):
+            raise JournalBlocked("Persistent operational entry lock")
         if ((not request["reduceOnly"] and bot.has_unresolved_orders())
                 or (trade and pending_recovery(trade))):
             raise JournalBlocked("P0.2 recovery lock still active")

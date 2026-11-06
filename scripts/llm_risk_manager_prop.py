@@ -175,7 +175,10 @@ class APIQuotaTracker:
 # Freqtrade API Client (Thread-Safe & Critical Retry Hardened)
 # ==================================================================================
 
-class FreqtradeAPIClient:
+from prop_http import DeadlineClient
+
+
+class FreqtradeAPIClient(DeadlineClient):
     """
     Authenticated communication with Freqtrade REST API.
     Thread-safe implementation with JWT lifecycle, trade control, pause/resume,
@@ -186,186 +189,12 @@ class FreqtradeAPIClient:
     TOKEN_REFRESH_MARGIN = timedelta(minutes=2)
     MAX_RETRIES = 3
 
-    def __init__(self, base_url: str, username: str, password: str):
-        self.base_url = base_url.rstrip("/")
-        self.username = username
-        self.password = password
-        self.access_token: str | None = None
-        self.refresh_token: str | None = None
-        self.token_expiry: datetime | None = None
-        self.session = requests.Session()
-        self.session.headers.update({
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        })
-        self._lock = threading.RLock()
+    def get_prop_control(self):
+        data = self.get("/prop/control")
+        return data if isinstance(data, dict) else None
 
-    def login(self) -> bool:
-        """Authenticate with Freqtrade API using HTTP Basic Auth."""
-        with self._lock:
-            for attempt in range(1, self.MAX_RETRIES + 1):
-                try:
-                    response = self.session.post(
-                        f"{self.base_url}/token/login",
-                        auth=(self.username, self.password),
-                        timeout=(3.0, 10.0),
-                    )
-                    response.raise_for_status()
-                    data = response.json()
-                    self.access_token = data["access_token"]
-                    self.refresh_token = data["refresh_token"]
-                    self.token_expiry = (
-                        datetime.now(timezone.utc)
-                        + self.ACCESS_TOKEN_LIFETIME
-                        - self.TOKEN_REFRESH_MARGIN
-                    )
-                    self.session.headers["Authorization"] = f"Bearer {self.access_token}"
-                    logger.info("🔑 Freqtrade API authentication successful.")
-                    return True
-                except Exception as e:
-                    logger.warning(f"Login attempt {attempt}/{self.MAX_RETRIES} failed: {e}")
-                    if attempt < self.MAX_RETRIES:
-                        time.sleep(2)
-            return False
-
-    def _ensure_authenticated(self) -> bool:
-        """Ensure access token is valid, refreshing if needed."""
-        with self._lock:
-            if not self.access_token:
-                return self.login()
-            if self.token_expiry and datetime.now(timezone.utc) >= self.token_expiry:
-                return self._refresh_token()
-            return True
-
-    def _refresh_token(self) -> bool:
-        """Refresh JWT access token."""
-        with self._lock:
-            try:
-                headers = {"Authorization": f"Bearer {self.refresh_token}"}
-                resp = self.session.post(
-                    f"{self.base_url}/token/refresh",
-                    headers=headers,
-                    timeout=(3.0, 10.0),
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                self.access_token = data["access_token"]
-                self.token_expiry = (
-                    datetime.now(timezone.utc)
-                    + self.ACCESS_TOKEN_LIFETIME
-                    - self.TOKEN_REFRESH_MARGIN
-                )
-                self.session.headers["Authorization"] = f"Bearer {self.access_token}"
-                return True
-            except Exception:
-                return self.login()
-
-    def _request(self, method: str, endpoint: str, **kwargs) -> dict | list | None:
-        """Execute authenticated HTTP request with retries and lock safety."""
-        with self._lock:
-            if not self._ensure_authenticated():
-                return None
-            url = f"{self.base_url}{endpoint}"
-            for attempt in range(1, self.MAX_RETRIES + 1):
-                try:
-                    resp = self.session.request(method, url, timeout=(3.0, 10.0), **kwargs)
-                    if resp.status_code == 401:
-                        if self._refresh_token():
-                            continue
-                        return None
-                    resp.raise_for_status()
-                    return resp.json()
-                except Exception as e:
-                    if attempt < self.MAX_RETRIES:
-                        time.sleep(1)
-                        continue
-                    logger.error(f"API request failed: {method} {endpoint} → {e}")
-                    return None
-            return None
-
-    def get(self, endpoint: str, **kwargs) -> dict | list | None:
-        return self._request("GET", endpoint, **kwargs)
-
-    def post(self, endpoint: str, **kwargs) -> dict | list | None:
-        return self._request("POST", endpoint, **kwargs)
-
-    # ----- Operational Methods & Critical Command Executor -----
-
-    def execute_critical_command(
-        self,
-        command_name: str,
-        method: str,
-        endpoint: str,
-        payload: dict | None = None,
-        expected_state: str | None = None,
-        max_attempts: int = CRITICAL_COMMAND_MAX_ATTEMPTS,
-        backoff_base: float = 1.0,
-    ) -> bool:
-        """
-        Executes critical Freqtrade control commands (/stopbuy, /start, /forceexit)
-        with exponential backoff, detailed HTTP status inspection, and state verification.
-        Logs CRITICAL alerts on retries and failures.
-        """
-        with self._lock:
-            for attempt in range(1, max_attempts + 1):
-                try:
-                    if not self._ensure_authenticated():
-                        logger.critical(
-                            f"🚨 CRITICAL CMD [{command_name}] attempt {attempt}/{max_attempts}: Authentication failed!"
-                        )
-                        delay = backoff_base * (1.5 ** (attempt - 1))
-                        time.sleep(delay)
-                        continue
-
-                    url = f"{self.base_url}{endpoint}"
-                    resp = self.session.request(
-                        method,
-                        url,
-                        json=payload,
-                        timeout=(3.0, 10.0),
-                    )
-
-                    if resp.status_code == 401:
-                        logger.warning(f"⚠️ Token expired during critical command [{command_name}]. Refreshing token...")
-                        if self._refresh_token():
-                            continue
-
-                    if resp.status_code not in (200, 201):
-                        logger.critical(
-                            f"🚨 CRITICAL CMD [{command_name}] attempt {attempt}/{max_attempts} failed! "
-                            f"HTTP {resp.status_code}: {resp.text}"
-                        )
-                        delay = backoff_base * (1.5 ** (attempt - 1))
-                        time.sleep(delay)
-                        continue
-
-                    # If state verification is requested, query /show_config to confirm true bot state
-                    if expected_state:
-                        actual_state = self.get_bot_state()
-                        if actual_state != expected_state.lower():
-                            logger.critical(
-                                f"🚨 STATE MISMATCH for [{command_name}] attempt {attempt}/{max_attempts}! "
-                                f"Expected state '{expected_state}', but Freqtrade reports '{actual_state}'."
-                            )
-                            delay = backoff_base * (1.5 ** (attempt - 1))
-                            time.sleep(delay)
-                            continue
-
-                    logger.info(f"✅ Critical command [{command_name}] successfully executed and verified on attempt {attempt}.")
-                    return True
-
-                except Exception as e:
-                    logger.critical(
-                        f"🚨 CRITICAL CMD [{command_name}] attempt {attempt}/{max_attempts} exception: {e}"
-                    )
-                    delay = backoff_base * (1.5 ** (attempt - 1))
-                    time.sleep(delay)
-
-            logger.critical(
-                f"💥 FATAL: Critical command [{command_name}] failed permanently after {max_attempts} attempts! "
-                f"Operator manual intervention required!"
-            )
-            return False
+    def report_fault(self, reason):
+        return self.post("/prop/control", json={"action": "fault", "reason": str(reason)[:500]}) is not None
 
     def get_balance(self) -> dict | None:
         """Fetch raw balance response containing total, total_bot, and individual currencies."""
@@ -394,14 +223,14 @@ class FreqtradeAPIClient:
             return data
         return None
 
-    def get_trades(self, limit: int = 100) -> list:
+    def get_trades(self, limit: int = 100) -> list | None:
         """Fetch closed/recent trades from Freqtrade REST API."""
         data = self.get(f"/trades?limit={limit}")
         if isinstance(data, dict):
-            return data.get("trades", [])
+            return data.get("trades")
         elif isinstance(data, list):
             return data
-        return []
+        return None
 
     def get_prop_profile(self):
         data = self.get("/show_config")
@@ -419,7 +248,7 @@ class FreqtradeAPIClient:
         return self.execute_critical_command(
             command_name="STOP_BUYING",
             method="POST",
-            endpoint="/stopbuy",
+            endpoint="/prop/pause",
             expected_state="paused",
         )
 
@@ -1013,29 +842,24 @@ class RiskManager(RiskGuard):
         api = FreqtradeAPIClient(FREQTRADE_API_URL, FREQTRADE_USERNAME, FREQTRADE_PASSWORD)
         profile = profile_from_config(json.loads(PROFILE_CONFIG.read_text(encoding="utf-8")))
         super().__init__(api, STATE_FILE, profile=profile, interval=CHECK_INTERVAL_SECONDS)
+        self.rules_api = FreqtradeAPIClient(FREQTRADE_API_URL, FREQTRADE_USERNAME, FREQTRADE_PASSWORD)
         self.sentiment = SentimentAnalyzer(GEMINI_API_KEY)
         self.macro_monitor = BinanceMacroMonitor()
         signal.signal(signal.SIGTERM, self._handle_shutdown)
         signal.signal(signal.SIGINT, self._handle_shutdown)
 
     def _macro_loop(self):
-        macro_paused = False
         while not self._shutdown.is_set():
             try:
                 metrics = self.macro_monitor.get_metrics()
                 if market_crash(metrics):
-                    logger.warning("Acute BTC drop detected (1h=%s%%, 24h=%s%%); pausing new entries (/stopbuy).",
-                                   metrics.get("btc_1h_pct"), metrics.get("btc_24h_pct"))
-                    self.api_client.stop_buying()
-                    macro_paused = True
+                    self.request_macro_pause(True)
                 elif not all(finite_number(metrics.get(k)) for k in ("btc_1h_pct", "btc_24h_pct")):
-                    logger.warning("Macro prices temporarily unavailable; relying on 5s equity guard.")
-                elif macro_paused and not self.nuclear_triggered and not self.state.get("data_fault"):
-                    if metrics.get("btc_1h_pct", -99.0) > -2.5 and metrics.get("btc_24h_pct", -99.0) > -6.0:
-                        logger.info("Macro volatility stabilized; resuming entries (/start).")
-                        if self.api_client.start_trading():
-                            macro_paused = False
+                    self.request_data_fault("Macro prices unavailable")
+                elif metrics["btc_1h_pct"] > -2.5 and metrics["btc_24h_pct"] > -6.0:
+                    self.request_macro_pause(False)
             except Exception:
+                self.request_data_fault("Macro worker failure")
                 logger.exception("Deterministic macro monitor warning")
             self._shutdown.wait(30)
 
@@ -1053,8 +877,10 @@ class RiskManager(RiskGuard):
         """Monitors HyroTrader One-Step compliance: 30d inactivity, 5 qualifying days, 40% daily profit cap."""
         while not self._shutdown.is_set():
             try:
-                open_trades = self.api_client.get_open_trades() or []
-                recent_trades = self.api_client.get_trades(limit=100) or []
+                open_trades = self.rules_api.get_open_trades()
+                recent_trades = self.rules_api.get_trades(limit=100)
+                if not isinstance(open_trades, list) or not isinstance(recent_trades, list):
+                    raise ValueError("Accounting data unavailable")
                 now_utc = datetime.now(timezone.utc)
                 today_str = now_utc.strftime("%Y-%m-%d")
 
@@ -1084,7 +910,7 @@ class RiskManager(RiskGuard):
                         "Executing automated qualifying keep-alive trade ($250 on BTC/USDT) to reset timer.",
                         inactivity_days
                     )
-                    res = self.api_client.post("forceentry", json={"pair": "BTC/USDT:USDT", "side": "long", "stake_amount": 250.0})
+                    res = self.rules_api.post("forceentry", json={"pair": "BTC/USDT:USDT", "side": "long", "stake_amount": 250.0})
                     logger.info("Keep-alive order response: %s", res)
                 elif inactivity_days >= 20:
                     logger.warning("⚠️ HyroTrader Inactivity Warning: %d days without trades (forfeiture at 30d).", inactivity_days)
@@ -1137,6 +963,7 @@ class RiskManager(RiskGuard):
                         len(qualifying_days), self.profile["min_trading_days"], inactivity_days
                     )
             except Exception:
+                self.request_data_fault("Accounting worker failure")
                 logger.exception("Error in HyroTrader rules evaluation loop")
             self._shutdown.wait(60)
 

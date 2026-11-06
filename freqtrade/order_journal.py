@@ -38,6 +38,7 @@ class OrderJournal:
         directory.mkdir(parents=True, exist_ok=True)
         self.mutex = threading.RLock()
         self.ready = False
+        self.last_reconciliation = None
         self.db = None
         self.lock = (directory / "orders.lock").open("a+b")
         try:
@@ -69,6 +70,14 @@ class OrderJournal:
                     key TEXT PRIMARY KEY, pair TEXT, detail TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS checks (
                     id INTEGER PRIMARY KEY CHECK(id=1), checked_ms INTEGER, detail TEXT);
+                CREATE TABLE IF NOT EXISTS control (
+                    id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS control_audit (
+                    event_id TEXT PRIMARY KEY, created_ms INTEGER, value TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS cancellations (
+                    order_id TEXT PRIMARY KEY, pair TEXT, side TEXT, state TEXT, evidence TEXT);
+                CREATE TABLE IF NOT EXISTS fault_events (
+                    event_id TEXT PRIMARY KEY, created_ms INTEGER, reason TEXT, acknowledged INTEGER DEFAULT 0);
             """)
             binding = json.dumps({"schema": 1, **identity}, sort_keys=True)
             row = self.db.execute("SELECT value FROM binding WHERE id=1").fetchone()
@@ -267,4 +276,8 @@ class OrderJournal:
                 self.db.execute("INSERT OR REPLACE INTO checks VALUES (1,?,?)",
                                 (int(time.time() * 1000), json.dumps(errors)))
             self.ready = not errors
+            self.last_reconciliation = {
+                "checked_ms": int(time.time() * 1000), "verified": not errors,
+                "flat": not errors and not snapshot["positions"] and not snapshot["open_orders"],
+            }
             return errors

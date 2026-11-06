@@ -79,6 +79,23 @@ router_public = APIRouter()
 router = APIRouter()
 
 
+@router.get("/prop/control", tags=["Bot Control"])
+def prop_control_status(rpc: RPC = Depends(get_rpc)):
+    return rpc._rpc_prop_control()
+
+
+@router.post("/prop/control", tags=["Bot Control"])
+def prop_control_command(payload: dict, rpc: RPC = Depends(get_rpc)):
+    return rpc._rpc_prop_control(payload.get("action"), payload.get("reason"), payload.get("flags"))
+
+
+@router.post("/prop/pause", tags=["Bot Control"])
+def prop_pause(rpc: RPC = Depends(get_rpc)):
+    if not rpc._freqtrade.config.get("prop_guard_enabled"):
+        raise RPCException("Prop control is not enabled")
+    return rpc._rpc_pause(manual=False)
+
+
 @router_public.get("/ping", response_model=Ping, tags=["Info"])
 @router_public.head("/ping", response_model=Ping, tags=["Info"])
 def ping():

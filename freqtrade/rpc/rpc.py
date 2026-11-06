@@ -989,14 +989,27 @@ class RPC:
 
     def _rpc_start(self) -> dict[str, str]:
         """Handler for start"""
+        if self._freqtrade.config.get("prop_guard_enabled") and self._freqtrade.has_unresolved_orders():
+            raise RPCException("Persistent prop control/reconciliation lock; /start cannot clear it")
         if self._freqtrade.state == State.RUNNING:
             return {"status": "already running"}
 
         self._freqtrade.state = State.RUNNING
         return {"status": "starting trader ..."}
 
+    def _rpc_prop_control(self, action=None, reason=None, flags=None):
+        from freqtrade.prop_controls import control_status, request_control
+
+        if not self._freqtrade.config.get("prop_guard_enabled"):
+            raise RPCException("Prop control is not enabled")
+        if action is None:
+            return control_status(self._freqtrade, Trade, Order)
+        return request_control(self._freqtrade, Trade, Order, action, reason, flags)
+
     def _rpc_stop(self) -> dict[str, str]:
         """Handler for stop"""
+        if self._freqtrade.config.get("prop_guard_enabled"):
+            self._rpc_prop_control("lock", "Authenticated RPC stop")
         if self._freqtrade.state != State.STOPPED:
             self._freqtrade.state = State.STOPPED
             return {"status": "stopping trader ..."}
@@ -1008,10 +1021,12 @@ class RPC:
         self._freqtrade.state = State.RELOAD_CONFIG
         return {"status": "Reloading config ..."}
 
-    def _rpc_pause(self) -> dict[str, str]:
+    def _rpc_pause(self, *, manual: bool = True) -> dict[str, str]:
         """
         Handler to pause trading (stop entering new trades), but handle open trades gracefully.
         """
+        if manual and self._freqtrade.config.get("prop_guard_enabled"):
+            self._rpc_prop_control("lock", "Authenticated RPC pause/stopbuy")
         if self._freqtrade.state == State.RUNNING:
             self._freqtrade.state = State.PAUSED
 

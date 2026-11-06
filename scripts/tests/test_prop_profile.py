@@ -56,6 +56,9 @@ class GuardTests(unittest.TestCase):
         self.api.get_open_trades.return_value = []
         self.api.stop_buying.return_value = True
         self.api.force_exit.return_value = True
+        self.api.get_prop_control.return_value = {
+            "verified": True, "flat": True, "pending_entries": False, "ack": None,
+        }
         self.install()
         self.guard = self.new_guard()
 

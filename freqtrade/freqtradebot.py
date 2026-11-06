@@ -18,6 +18,8 @@ from freqtrade.journal_execution import (
     bind_journal, journal_create_order, open_journal, reconcile_journal,
 )
 from freqtrade.order_journal import JournalBlocked
+from freqtrade.fault_recovery import cancel_fault_entries
+from freqtrade.prop_controls import sync_prop_controls
 from freqtrade.order_recovery import (
     clear_recovery, mark_recovery, order_evidence_valid, pending_recovery,
 )
@@ -264,7 +266,11 @@ class FreqtradeBot(LoggingMixin):
         # Only update open orders on startup
         # This will update the database after the initial migration
         self.startup_update_open_orders()
+        sync_prop_controls(self)
         reconcile_journal(self, Trade)
+        cancel_fault_entries(self, Trade)
+        if self.config.get("prop_guard_enabled"):
+            reconcile_journal(self, Trade)
         self.update_all_liquidation_prices()
         self.update_funding_fees()
 
@@ -275,6 +281,8 @@ class FreqtradeBot(LoggingMixin):
         :return: True if one or more trades has been created or closed, False otherwise
         """
 
+        sync_prop_controls(self)
+        cancel_fault_entries(self, Trade)
         reconcile_journal(self, Trade)
         # Check whether markets have to be reloaded and reload them when it's needed
         self.exchange.reload_markets()
@@ -466,6 +474,8 @@ class FreqtradeBot(LoggingMixin):
         only those IDs. A submission without an ID needs manual/P0.3 recovery.
         """
         journal = getattr(self, "order_journal", None)
+        if getattr(self, "config", {}).get("prop_guard_enabled") and sync_prop_controls(self):
+            return True
         return (
             (journal is not None and not journal.ready)
             or any(pending_recovery(t) for t in Trade.get_open_trades())
