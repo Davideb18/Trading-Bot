@@ -39,6 +39,7 @@ class OrderJournal:
         self.mutex = threading.RLock()
         self.ready = False
         self.last_reconciliation = None
+        self.risk_snapshot = None
         self.db = None
         self.lock = (directory / "orders.lock").open("a+b")
         try:
@@ -80,6 +81,9 @@ class OrderJournal:
                     event_id TEXT PRIMARY KEY, created_ms INTEGER, reason TEXT, acknowledged INTEGER DEFAULT 0);
                 CREATE TABLE IF NOT EXISTS emergency (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS emergency_orders (client_id TEXT PRIMARY KEY, halt_id TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS risk_reservations (
+                    client_id TEXT PRIMARY KEY REFERENCES intents(client_id),
+                    state TEXT NOT NULL, detail TEXT NOT NULL);
             """)
             binding = json.dumps({"schema": 1, **identity}, sort_keys=True)
             row = self.db.execute("SELECT value FROM binding WHERE id=1").fetchone()
@@ -87,6 +91,11 @@ class OrderJournal:
                 raise JournalBlocked("Journal identity/database binding mismatch")
             with self.db:
                 self.db.execute("INSERT OR IGNORE INTO binding VALUES (1, ?)", (binding,))
+                # Old unresolved intents consume unknown risk, never zero risk.
+                for intent in self.intents():
+                    if not json.loads(intent["request"]).get("reduceOnly"):
+                        self.db.execute("INSERT OR IGNORE INTO risk_reservations VALUES (?, 'held', ?)",
+                                        (intent["client_id"], '{"loss_bound": null}'))
         except BaseException:
             self.close()
             raise
@@ -122,6 +131,9 @@ class OrderJournal:
                     "VALUES (?,?,?,?, 'prepared')",
                     (client_id, int(time.time() * 1000), json.dumps(request), trade_id),
                 )
+                if not request.get("reduceOnly"):
+                    self.db.execute("INSERT INTO risk_reservations VALUES (?, 'held', ?)",
+                                    (client_id, '{"loss_bound": null}'))
             self.ready = False
             return client_id
 
@@ -191,6 +203,7 @@ class OrderJournal:
         """
         with self.mutex:
             self.ready = False
+            self.risk_snapshot = None
             # Last cycle's linkage must never authorize an exit after this cycle
             # fails to verify the same pair. Settled history remains immutable.
             with self.db:
@@ -302,6 +315,14 @@ class OrderJournal:
                 self.db.execute("INSERT OR REPLACE INTO checks VALUES (1,?,?)",
                                 (int(time.time() * 1000), json.dumps(errors)))
             self.ready = not errors
+            if not errors:
+                self.risk_snapshot = json.loads(json.dumps(snapshot))
+                # Only complete exchange/ORM reconciliation transfers a reservation
+                # into actual position exposure or proves an empty cancellation.
+                with self.db:
+                    self.db.execute("UPDATE risk_reservations SET state='reconciled' "
+                                    "WHERE state='held' AND client_id IN "
+                                    "(SELECT client_id FROM intents WHERE settled=1)")
             self.last_reconciliation = {
                 "checked_ms": int(time.time() * 1000), "verified": not errors,
                 "flat": not errors and not snapshot["positions"] and not snapshot["open_orders"],

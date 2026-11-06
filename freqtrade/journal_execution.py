@@ -9,6 +9,7 @@ from freqtrade.order_recovery import clear_recovery, mark_recovery, pending_reco
 from freqtrade.prop_profile import profile_from_config
 from freqtrade.prop_controls import sync_prop_controls
 from freqtrade.emergency_authority import EmergencyTakeover, require_core_authority
+from freqtrade.prop_risk_budget import require_risk_budget
 
 
 logger = logging.getLogger(__name__)
@@ -91,6 +92,8 @@ def journal_create_order(bot, trade, trade_model, **request):
         if ((not request["reduceOnly"] and bot.has_unresolved_orders())
                 or (trade and pending_recovery(trade))):
             raise JournalBlocked("P0.2 recovery lock still active")
+        if bot.config.get("prop_guard_enabled"):
+            require_risk_budget(bot, request, trade.id if trade else None)
         cid = journal.prepare(request, trade.id if trade else None)
         try:
             return journal.dispatch(cid, bot.exchange.create_order)
