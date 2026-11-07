@@ -40,7 +40,8 @@ def order_evidence_valid(order, local_order, pair):
         return False
     for key in ("amount", "filled", "remaining"):
         value = order.get(key)
-        if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+        if (not isinstance(value, (int, float)) or type(value) not in (int, float)
+                or not math.isfinite(value) or value < 0):
             return False
     if order["amount"] <= 0 or order["filled"] > order["amount"]:
         return False
@@ -54,6 +55,7 @@ def order_evidence_valid(order, local_order, pair):
         return False
     if order["filled"] > 0:
         price = order.get("average") or order.get("price")
-        if type(price) not in (int, float) or not math.isfinite(price) or price <= 0:
+        if (not isinstance(price, (int, float)) or type(price) not in (int, float)
+                or not math.isfinite(price) or price <= 0):
             return False
     return True

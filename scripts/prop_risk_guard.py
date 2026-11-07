@@ -15,6 +15,7 @@ from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import TypeGuard
 
 from freqtrade.prop_profile import floors, utc_time, validate_baseline, validate_profile
 from freqtrade.prop_controls import publish_fault_event
@@ -23,7 +24,7 @@ from freqtrade.prop_controls import publish_fault_event
 log = logging.getLogger(__name__)
 
 
-def finite_number(value):
+def finite_number(value) -> TypeGuard[float]:
     return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
 
 

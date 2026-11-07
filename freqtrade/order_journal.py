@@ -33,6 +33,17 @@ class OrderJournal:
     or volumes are not coordinated. Never delete the lock file while a process runs.
     """
 
+    @property
+    def db(self) -> sqlite3.Connection:
+        """Open connection; a closed journal fails closed instead of returning None."""
+        if self._db is None:
+            raise JournalBlocked("Order journal is closed")
+        return self._db
+
+    @db.setter
+    def db(self, value) -> None:
+        self._db = value
+
     def __init__(self, directory, identity):
         directory = Path(directory).resolve()
         directory.mkdir(parents=True, exist_ok=True)
@@ -40,7 +51,7 @@ class OrderJournal:
         self.ready = False
         self.last_reconciliation = None
         self.risk_snapshot = None
-        self.db = None
+        self._db = None
         self.lock = (directory / "orders.lock").open("a+b")
         try:
             if os.fstat(self.lock.fileno()).st_size == 0:
@@ -101,9 +112,9 @@ class OrderJournal:
             raise
 
     def close(self):
-        if self.db is not None:
-            self.db.close()
-            self.db = None
+        if self._db is not None:
+            self._db.close()
+            self._db = None
         if not self.lock.closed:
             self.lock.close()  # OS releases the process lock, including on crash.
 

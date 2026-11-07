@@ -9,6 +9,7 @@ import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import requests
 from urllib3.util import Timeout
@@ -47,6 +48,8 @@ class DeadlineClient:
             self._deadline = previous
 
     def remaining(self):
+        if self._deadline is None:
+            raise DeadlineExceeded("No active HTTP operation budget")
         remaining = self._deadline - time.monotonic()
         if remaining <= 0:
             raise DeadlineExceeded("HTTP operation deadline expired")
@@ -57,7 +60,8 @@ class DeadlineClient:
 
     def _single(self, method, endpoint, **kwargs):
         remaining = self.remaining()
-        timeout = Timeout(total=remaining, connect=min(1.0, remaining), read=min(1.5, remaining))
+        # requests accepts urllib3 Timeout objects at runtime; its stubs only list tuples/floats.
+        timeout: Any = Timeout(total=remaining, connect=min(1.0, remaining), read=min(1.5, remaining))
         with self.session.request(method, self.base_url + endpoint, timeout=timeout, stream=True,
                                   allow_redirects=False, **kwargs) as response:
             self.remaining()
@@ -80,7 +84,7 @@ class DeadlineClient:
         with self.operation_budget(self.OPERATION_SECONDS):
             try:
                 status, data = self._single("POST", "/token/login", auth=(self.username, self.password))
-                if status != 200:
+                if status != 200 or not isinstance(data, dict):
                     return False
                 self.access_token, self.refresh_token = data["access_token"], data["refresh_token"]
                 self.token_expiry = datetime.now(timezone.utc) + self.ACCESS_TOKEN_LIFETIME - self.TOKEN_REFRESH_MARGIN
@@ -93,7 +97,7 @@ class DeadlineClient:
         try:
             status, data = self._single("POST", "/token/refresh",
                                        headers={"Authorization": f"Bearer {self.refresh_token}"})
-            if status == 200:
+            if status == 200 and isinstance(data, dict):
                 self.access_token = data["access_token"]
                 self.token_expiry = datetime.now(timezone.utc) + self.ACCESS_TOKEN_LIFETIME - self.TOKEN_REFRESH_MARGIN
                 self.session.headers["Authorization"] = f"Bearer {self.access_token}"
@@ -137,6 +141,10 @@ class DeadlineClient:
 
     def post(self, endpoint, **kwargs):
         return self._request("POST", endpoint, **kwargs)
+
+    def get_bot_state(self):
+        """Implemented by concrete clients that can verify bot state."""
+        raise NotImplementedError
 
     def execute_critical_command(self, command_name, method, endpoint, payload=None,
                                  expected_state=None, max_attempts=1, backoff_base=1.0):

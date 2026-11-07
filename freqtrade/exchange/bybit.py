@@ -138,6 +138,8 @@ class Bybit(Exchange):
         """
         if self.trading_mode != TradingMode.FUTURES or self._config["stake_currency"] != "USDT":
             return None
+        if not isinstance(response, dict):
+            return None
         try:
             if response["retCode"] != 0:
                 return None

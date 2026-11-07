@@ -69,6 +69,13 @@ class EmergencySupervisor:
             self.journal.close()
         self.lease.close()
 
+    @property
+    def owned_journal(self) -> OrderJournal:
+        """Journal acquired by liquidate(); helpers never run without ownership."""
+        if self.journal is None:
+            raise JournalBlocked("Supervisor does not own the order journal")
+        return self.journal
+
     def record(self, **updates):
         connection = self.connection()
         try:
@@ -97,16 +104,16 @@ class EmergencySupervisor:
                 or (previous.get("filled") or 0) > order["filled"]):
             raise UnverifiedAccount("Journal/exchange origin or quantity mismatch")
         terminal = order["status"] != "open"
-        with self.journal.db:
-            emergency = self.journal.db.execute("SELECT 1 FROM emergency_orders WHERE client_id=?",
+        with self.owned_journal.db:
+            emergency = self.owned_journal.db.execute("SELECT 1 FROM emergency_orders WHERE client_id=?",
                                                 (intent["client_id"],)).fetchone()
-            self.journal.db.execute("UPDATE intents SET exchange_id=?,evidence=?,state=?,settled=? WHERE client_id=?",
+            self.owned_journal.db.execute("UPDATE intents SET exchange_id=?,evidence=?,state=?,settled=? WHERE client_id=?",
                 (order["id"], json.dumps(order), order["status"],
                  int(terminal) if emergency else intent["settled"], intent["client_id"]))
 
     def _reconcile(self):
         unresolved = False
-        for intent in self.journal.intents():
+        for intent in self.owned_journal.intents():
             request = json.loads(intent["request"])
             order = self.adapter.lookup(request["pair"], client_id=intent["client_id"])
             if order is None:
@@ -117,8 +124,8 @@ class EmergencySupervisor:
 
     def _cancel(self, intent, order):
         oid, pair = order["id"], order["symbol"]
-        with self.journal.db:
-            self.journal.db.execute("INSERT OR REPLACE INTO cancellations VALUES (?,?,?,'requested',?)",
+        with self.owned_journal.db:
+            self.owned_journal.db.execute("INSERT OR REPLACE INTO cancellations VALUES (?,?,?,'requested',?)",
                                    (oid, pair, order["side"], json.dumps(order)))
         try:
             self.adapter.cancel_entry(order)
@@ -126,18 +133,18 @@ class EmergencySupervisor:
             pass
         proof = self.adapter.lookup(pair, client_id=intent["client_id"])
         if proof is None or proof["status"] == "open":
-            with self.journal.db:
-                self.journal.db.execute("UPDATE cancellations SET state='uncertain' WHERE order_id=?", (oid,))
+            with self.owned_journal.db:
+                self.owned_journal.db.execute("UPDATE cancellations SET state='uncertain' WHERE order_id=?", (oid,))
             return False
         self._evidence(intent, proof)
-        with self.journal.db:
-            self.journal.db.execute("UPDATE cancellations SET state='confirmed',evidence=? WHERE order_id=?",
+        with self.owned_journal.db:
+            self.owned_journal.db.execute("UPDATE cancellations SET state='confirmed',evidence=? WHERE order_id=?",
                                    (json.dumps(proof), oid))
         return True
 
     def _owned_positions(self, positions):
         net = {}
-        for intent in self.journal.intents(active=False):
+        for intent in self.owned_journal.intents(active=False):
             if intent["evidence"]:
                 order = json.loads(intent["evidence"])
                 filled = order.get("filled") or 0

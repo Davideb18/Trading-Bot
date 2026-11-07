@@ -614,7 +614,8 @@ class SentimentAnalyzer:
 
         if gemini_api_key:
             try:
-                from google import genai
+                # Dynamic import; google.genai optional in prop core environments.
+                from google import genai  # type: ignore[import-not-found]
                 self.gemini_client = genai.Client(
                     api_key=gemini_api_key,
                     http_options={"timeout": LLM_TIMEOUT_MS},
@@ -737,7 +738,7 @@ class SentimentAnalyzer:
         headlines: list,
     ) -> dict | None:
         try:
-            from google.genai import types
+            from google.genai import types  # type: ignore[import-not-found]
 
             whitelist_sample = ", ".join(whitelist[:20]) if whitelist else "None"
             headlines_str = "\n".join(f"- {h}" for h in headlines) if headlines else "- No acute news alerts"
@@ -984,7 +985,8 @@ class RiskManager(RiskGuard):
         try:
             super().run()
         finally:
-            self.emergency.close()
+            if self.emergency is not None:
+                self.emergency.close()
 
 
 if __name__ == "__main__":
