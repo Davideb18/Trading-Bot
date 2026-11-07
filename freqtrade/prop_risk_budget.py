@@ -92,7 +92,7 @@ def _evaluate_certified_budget(bot, profile, state, journal, request, detail):
     if lev is not None and (not number(lev) or float(lev) != 1.0):
         raise ValueError("Leverage must be 1.0x")
 
-    req_rate = request.get("rate")
+    req_rate = request.get("rate") if request.get("rate") is not None else request.get("price")
     if not number(req_rate) or req_rate <= 0:
         raise ValueError("Explicit positive order rate required for risk budget")
     req_qty = quantity(request["amount"])

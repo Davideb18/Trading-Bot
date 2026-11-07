@@ -229,14 +229,14 @@ class FreqtradeAPIClient(DeadlineClient):
             if not isinstance(data, dict) or not isinstance(data.get("trades"), list):
                 return None
             page = data["trades"]
+            if not page:
+                return trades
             trades.extend(page)
             total = data.get("total_trades")
-            if not isinstance(total, int) or len(trades) >= total:
+            if (isinstance(total, int) and len(trades) >= total) or len(page) < limit:
                 return trades
-            if not page:
-                return None
             offset += len(page)
-        return None
+        return trades
 
     def get_prop_profile(self):
         data = self.get("/show_config")
