@@ -113,7 +113,16 @@ class OrderJournal:
                 "SELECT * FROM intents" + (" WHERE settled=0" if active else "")
             )]
 
-    def prepare(self, request, trade_id=None):
+    def prepare(self, request, trade_id=None, reservation=None):
+        """Persist intent + held reservation atomically.
+
+        ``reservation`` is the P0.6 authorization decision; stored verbatim so the
+        held row carries the certified loss bound instead of an unknown one.
+        """
+        if reservation is not None and reservation.get("authorized") is not True:
+            raise JournalBlocked("Unauthorized risk reservation")
+        detail = ('{"loss_bound": null}' if reservation is None else json.dumps(
+            {**reservation, "loss_bound": reservation.get("future_loss_bound")}, allow_nan=False))
         with self.mutex:
             pair = request["pair"]
             if request.get("reduceOnly"):
@@ -133,7 +142,7 @@ class OrderJournal:
                 )
                 if not request.get("reduceOnly"):
                     self.db.execute("INSERT INTO risk_reservations VALUES (?, 'held', ?)",
-                                    (client_id, '{"loss_bound": null}'))
+                                    (client_id, detail))
             self.ready = False
             return client_id
 

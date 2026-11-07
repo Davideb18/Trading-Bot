@@ -220,6 +220,14 @@ class RiskBudgetTests(unittest.TestCase):
         created = journal_create_order(self.bot, None, model, **REQUEST)
         self.assertEqual(created['id'], 'ex-1')
         self.bot.exchange.create_order.assert_called_once()
+        cid = self.bot.exchange.create_order.call_args.kwargs['client_order_id']
+        row = self.j.db.execute('SELECT * FROM risk_reservations WHERE client_id=?', (cid,)).fetchone()
+        stored = json.loads(row['detail'])
+        self.assertEqual(row['state'], 'held')
+        self.assertTrue(stored['authorized'])
+        self.assertEqual(stored['loss_bound'], 26.0)
+        with self.assertRaises(JournalBlocked):
+            self.j.prepare(REQUEST, 7, reservation={'authorized': False})
 
     def test_certified_model_denies_when_aggregate_notional_exceeds_1000_usdt_cap(self):
         self.state['remote_identity_verified'] = True

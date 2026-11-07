@@ -377,10 +377,10 @@ class RiskGuard:
         if baseline and Decimal(str(equity)) <= Decimal(str(levels["operating_daily_floor"])):
             reason = "Internal static daily floor reached"
         with self._state_lock:
+            # Recomputed every cycle: no sticky latch from a previous process/state.
             remote_verified = bool(
                 self.emergency is not None
                 or getattr(self.api_client, "direct", None) is not None
-                or self.state.get("remote_identity_verified") is True
             )
             self.state.update(last_equity=equity, last_updated=now.isoformat(),
                               baseline=baseline, current_trading_day=now.date().isoformat(),

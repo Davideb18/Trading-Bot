@@ -92,9 +92,10 @@ def journal_create_order(bot, trade, trade_model, **request):
         if ((not request["reduceOnly"] and bot.has_unresolved_orders())
                 or (trade and pending_recovery(trade))):
             raise JournalBlocked("P0.2 recovery lock still active")
+        decision = None
         if bot.config.get("prop_guard_enabled"):
-            require_risk_budget(bot, request, trade.id if trade else None)
-        cid = journal.prepare(request, trade.id if trade else None)
+            decision = require_risk_budget(bot, request, trade.id if trade else None)
+        cid = journal.prepare(request, trade.id if trade else None, reservation=decision)
         try:
             return journal.dispatch(cid, bot.exchange.create_order)
         except Exception:

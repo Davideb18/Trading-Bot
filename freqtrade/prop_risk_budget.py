@@ -10,6 +10,7 @@ import json
 import time
 import uuid
 from decimal import Decimal
+from typing import Any
 
 from freqtrade.order_journal import JournalBlocked, quantity
 from freqtrade.prop_controls import supervisor_state, sync_prop_controls
@@ -156,7 +157,7 @@ def require_risk_budget(bot, request, trade_id=None):
         return
     journal = bot.order_journal
     with journal.mutex:
-        detail = {"model": "unavailable", "authorized": False}
+        detail: dict[str, Any] = {"model": "unavailable", "authorized": False}
         try:
             profile = profile_from_config(bot.config)
             binding = json.loads(journal.db.execute("SELECT value FROM binding WHERE id=1").fetchone()[0])

@@ -1,9 +1,21 @@
-# P0.6: admission control and unresolved risk model
+# P0.6: admission control and risk model
 
-P0.6 deliberately blocks **all new One-Step entries, DCA and replacements**.
+> **Update (BUG-5 / certified model).** Entries, DCA and replacements are now
+> authorized only when ALL hold: `prop_risk_budget.model ==
+> "hyrotrader_one_step_notional_stress_v1"`, supervisor state reports
+> `remote_identity_verified` (recomputed every guard cycle, never latched),
+> zero unobserved reservations, aggregate notional (positions at mark + open
+> entry orders + request) <= `max_aggregate_notional_usdt` (<= initial balance x
+> `tradable_balance_ratio`, i.e. 1,000 USDT), and operating headroom >=
+> `aggregate_notional x stress_loss_bps / 10000 + min_headroom_buffer_usdt`.
+> Requested quantities are never resized; failing any check records a
+> `risk_denied` intent. An authorized decision is persisted verbatim in the
+> held `risk_reservations` row, including its `loss_bound`. Without the policy
+> or remote attestation the original refuse-all behaviour below still applies.
+
+Original P0.6 baseline: the gate blocks **all new One-Step entries, DCA and
+replacements** unless the certified model above authorizes them.
 Positive headroom is necessary but is not sufficient to authorize an order.
-This is the explicit conservative fallback requested for an unproven risk model;
-it is not a trading-ready implementation of a positive authorization policy.
 
 ## Static model decision
 
