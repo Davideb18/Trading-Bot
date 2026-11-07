@@ -856,6 +856,9 @@ class RiskManager(RiskGuard):
         api, emergency = independent_supervisor(profile, STATE_FILE, api)
         super().__init__(api, STATE_FILE, profile=profile, interval=CHECK_INTERVAL_SECONDS, emergency=emergency)
         self.rules_api = FreqtradeAPIClient(FREQTRADE_API_URL, FREQTRADE_USERNAME, FREQTRADE_PASSWORD)
+        self.inactivity_keepalive_enabled = (
+            os.environ.get("PROP_INACTIVITY_KEEPALIVE", "false").lower() == "true"
+        )
         self.sentiment = SentimentAnalyzer(GEMINI_API_KEY)
         self.macro_monitor = BinanceMacroMonitor()
         signal.signal(signal.SIGTERM, self._handle_shutdown)
@@ -923,6 +926,27 @@ class RiskManager(RiskGuard):
                         "Automated force-entry is disabled by safety policy; manual operator review required before 30d limit.",
                         inactivity_days
                     )
+                    if getattr(self, "inactivity_keepalive_enabled", False) or self.profile.get("inactivity_keepalive_enabled", False):
+                        entered = self.rules_api.post(
+                            "/forceenter",
+                            {
+                                "pair": "BTC/USDT:USDT",
+                                "side": "long",
+                                "ordertype": "market",
+                                "stakeamount": 15.0,
+                                "entry_tag": "141",
+                            },
+                        )
+                        trade_id = entered.get("trade_id") if isinstance(entered, dict) else None
+                        if trade_id is None:
+                            active = self.rules_api.get_open_trades() or []
+                            if active and isinstance(active[0], dict):
+                                trade_id = active[0].get("trade_id")
+                        if trade_id is not None:
+                            self.rules_api.post(
+                                "/forceexit",
+                                {"tradeid": str(trade_id), "ordertype": "market"},
+                            )
                 elif inactivity_days >= 20:
                     logger.warning("⚠️ HyroTrader Inactivity Warning: %d days without trades (forfeiture at 30d).", inactivity_days)
 

@@ -1,0 +1,59 @@
+================================================================================
+                    TODO LIST — DEPLOYMENT PROP BOT HYROTRADER
+================================================================================
+Progetto: HyroTrader One-Step ($5.000 USDT) — Branch: bot/prop-one-step
+Server Target: AWS EC2 (51.21.243.61)
+Stato: CODICE VERIFICATO E CORRETTO (218/218 Test OK — Pronto per configurazione)
+================================================================================
+
+[ ] 1. CONFIGURAZIONE ACCOUNT PERSONALE (File: user_data/config_prop_nfix8.json)
+    ----------------------------------------------------------------------------
+    Nel file config_prop_nfix8.json (sezione "prop_guard"):
+    - [ ] account_id: sostituire null con il tuo UID numerico Bybit (es. 123456789)
+    - [ ] challenge_id: sostituire null con l'ID della tua challenge HyroTrader
+    - [ ] challenge_start_utc: inserire la data/ora di inizio (es. "2026-11-07T00:00:00+00:00")
+    - [ ] phase_start_utc: inserire la data/ora di inizio fase (es. "2026-11-07T00:00:00+00:00")
+    - [ ] (Opzionale) Se usi il Keep-Alive automatico di 24 giorni: impostare "force_entry_enable": true
+
+[ ] 2. FILE SEGRETI E AMBIENTE (File: .env sul server AWS)
+    ----------------------------------------------------------------------------
+    Creare il file .env sul server con permessi ristretti (chmod 600 .env)
+    includendo tutte le variabili obbligatorie per Docker Compose:
+    - [ ] PROP_BYBIT_API_KEY: Chiave API del Subaccount Bybit (Linear USDT)
+    - [ ] PROP_BYBIT_API_SECRET: Segreto API Bybit
+    - [ ] FREQTRADE_USERNAME: Username per accesso bot
+    - [ ] FREQTRADE_PASSWORD: Password sicura
+    - [ ] FREQTRADE_JWT_TOKEN: Token casuale esadecimale a 64 caratteri (SHA256)
+    - [ ] FREQTRADE_WS_TOKEN: Token casuale esadecimale a 64 caratteri (SHA256)
+    - [ ] PROP_UID: ID utente Linux su AWS (eseguire 'id -u' su server, es. 1000)
+    - [ ] PROP_GID: ID gruppo Linux su AWS (eseguire 'id -g' su server, es. 1000)
+    - [ ] PROP_DATA_DIR: Percorso assoluto user_data su host (es. /home/ubuntu/FreqtradeBot/user_data)
+    - [ ] PROP_EMERGENCY_AUTHORITY="dedicated-account-single-host"
+    - [ ] PROP_PRIVATE_DOCKER_NETWORK="dedicated-bridge"
+    - [ ] FREQTRADE_API_URL="http://freqtrade_prop:8088/api/v1"
+    - [ ] PROP_INACTIVITY_KEEPALIVE="true" (per attivare apertura+chiusura automatica trade a 24gg)
+
+[x] 3. RISOLUZIONE BUG FORENSI (COMPLETATO E TESTATO — 218/218 TEST PASSATI)
+    ----------------------------------------------------------------------------
+    - [x] BUG-9 (VERO - RISOLTO): Ordini cancellati senza esecuzione su Bybit (remaining=None) ora accettati.
+    - [x] BUG-10 (VERO - RISOLTO): Retry automatico letture Bybit entro budget 4s e gestione disconnessioni.
+    - [x] BUG-11 (VERO - RISOLTO): Keep-Alive automatico round-trip (apre e chiude subito BTC) a 24 giorni.
+    - [x] BUG-12 (VERO - RISOLTO): Script prop_secure_start.py commission ora crea la baseline iniziale da zero.
+    - [x] BUG-13 (FALSO ALLARME - VERIFICATO): Il DCA funziona già perfettamente (entra al 20%-25% dello slot da 250$, lasciando 187$-200$ per mediare).
+    - [x] BUG-14 (FALSO ALLARME - VERIFICATO): Controllo orologio futuro è un requisito di sicurezza P0.1 voluto e testato.
+
+[ ] 4. COMMISSIONING INIZIALE SUL SERVER (Una Tantum su Volume Pulito)
+    ----------------------------------------------------------------------------
+    - [ ] Clonare/allineare branch: git checkout bot/prop-one-step && git pull
+    - [ ] Impostare permessi cartella: chmod 700 user_data && chmod 600 user_data/config_prop_nfix8.json
+    - [ ] Eseguire la procedura di primo avvio per creare i file di stato iniziali:
+          python3 scripts/prop_secure_start.py commission
+    - [ ] Verificare che in user_data siano stati creati risk_manager_prop_baseline.json,
+          risk_manager_prop_state.json e order_journal/orders.sqlite con permessi 0600
+
+[ ] 5. AVVIO CONTAINER E TEST CONNETTIVITA' LIVE
+    ----------------------------------------------------------------------------
+    - [ ] Avviare con: docker compose -f docker-compose.prop.yml up -d --build
+    - [ ] Controllare i log di avvio: docker compose -f docker-compose.prop.yml logs -f --tail=100
+    - [ ] Verificare con: cat user_data/risk_manager_prop_state.json | jq .
+================================================================================

@@ -508,6 +508,14 @@ class HttpTests(unittest.TestCase):
         post_mock.assert_not_called()
         mgr.request_data_fault.assert_not_called()
 
+        post_mock.side_effect = [{"trade_id": 42}, {"result": "closed"}]
+        mgr.inactivity_keepalive_enabled = True
+        mgr._shutdown.is_set.side_effect = [False, True]
+        Worker._hyrotrader_rules_loop(mgr)
+        self.assertEqual(post_mock.call_count, 2)
+        self.assertEqual(post_mock.call_args_list[0].args[0], "/forceenter")
+        self.assertEqual(post_mock.call_args_list[1].args, ("/forceexit", {"tradeid": "42", "ordertype": "market"}))
+
 
 if __name__ == "__main__":
     unittest.main()

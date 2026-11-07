@@ -19,6 +19,7 @@ from typing import TypeGuard
 
 from freqtrade.prop_profile import floors, utc_time, validate_baseline, validate_profile
 from freqtrade.prop_controls import publish_fault_event
+from freqtrade.supervisor_bybit import UnverifiedAccount
 
 
 log = logging.getLogger(__name__)
@@ -333,6 +334,9 @@ class RiskGuard:
                 raise ValueError("Freqtrade/supervisor profile mismatch or unavailable")
             if self.state["last_updated"] and utc_time(self.state["last_updated"]) > now:
                 raise ValueError("Clock moved backwards")
+        except UnverifiedAccount as exc:
+            self._pause_on_fault(str(exc))
+            return False
         except (ValueError, TypeError, KeyError) as exc:
             self.state_error = str(exc)
             self._pause_on_fault(str(exc))

@@ -414,6 +414,17 @@ except JournalBlocked:
         self.assertFalse(guard.nuclear_triggered)
         self.assertEqual(self.adapter.sent, [])
 
+    def test_unverified_account_during_profile_check_is_fault_not_permanent_state_error(self):
+        self.adapter.verify_identity = Mock(side_effect=UnverifiedAccount("Bybit request failed"))
+        state = reconciled_state(self.profile, baseline(self.profile, now=self.now), self.now, halted=False)
+        self.state_file.write_text(json.dumps(state))
+        guard = RiskGuard(IndependentRiskAPI(self.adapter, Mock()), self.state_file,
+                          profile=self.profile, emergency=self.supervisor)
+        self.assertFalse(guard._check_drawdown(self.now))
+        self.assertIsNone(guard.state_error)
+        self.assertTrue(guard.state["data_fault"])
+        self.assertFalse(guard.nuclear_triggered)
+
 
 class AdapterTests(unittest.TestCase):
     def setUp(self):
@@ -555,6 +566,18 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(result["status"], "closed")
         self.api.privateGetV5ExecutionList.return_value["result"]["list"][0]["execQty"] = "1"
         with self.assertRaises(UnverifiedAccount): self.adapter.lookup(PAIR, client_id="cid")
+
+    def test_transient_read_error_retries_within_deadline_while_create_order_never_retries(self):
+        valid = self.response({"userID": "123", "readOnly": 0})
+        self.api.privateGetV5UserQueryApi.side_effect = [Exception("transient glitch"), valid]
+        self.assertEqual(self.adapter.verify_identity(), self.profile)
+        self.assertEqual(self.api.privateGetV5UserQueryApi.call_count, 2)
+        self.api.create_order = Mock(side_effect=Exception("lost reply"))
+        with self.assertRaises(UnverifiedAccount):
+            self.adapter.create_order(
+                pair=PAIR, side="buy", amount=10, ordertype="market", reduceOnly=True, client_order_id="cid1"
+            )
+        self.api.create_order.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ Markers refer to known local trades/orders. They are not an order-intent journal
 
 import math
 
-from freqtrade.constants import NON_OPEN_EXCHANGE_STATES
+from freqtrade.constants import CANCELED_EXCHANGE_STATES, NON_OPEN_EXCHANGE_STATES
 
 
 RECOVERY_KEY = "core_order_recovery_pending"
@@ -40,6 +40,13 @@ def order_evidence_valid(order, local_order, pair):
         return False
     for key in ("amount", "filled", "remaining"):
         value = order.get(key)
+        if (
+            key == "remaining"
+            and value is None
+            and order.get("status") in CANCELED_EXCHANGE_STATES
+            and order.get("filled") == 0
+        ):
+            value = 0.0
         if (not isinstance(value, (int, float)) or type(value) not in (int, float)
                 or not math.isfinite(value) or value < 0):
             return False

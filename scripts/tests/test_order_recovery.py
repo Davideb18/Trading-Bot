@@ -82,7 +82,8 @@ class Trade:
     def update_order(self, snapshot):
         o = self.select_order_by_order_id(snapshot["id"])
         o.status, o.filled = snapshot["status"], snapshot["filled"]
-        o.remaining = snapshot["remaining"]
+        if snapshot["remaining"] is not None:
+            o.remaining = snapshot["remaining"]
         o.ft_is_open = o.status not in constants.NON_OPEN_EXCHANGE_STATES
 
     def update_trade(self, order, *args):
@@ -444,6 +445,17 @@ class RecoveryTests(unittest.TestCase):
         self.bot.exchange.fetch_order.side_effect = [snapshot(order), snapshot(order, "canceled")]
         self.assertTrue(self.force(trade))
         self.assertEqual(trade.amount, 10)
+
+    def test_bybit_canceled_unfilled_remaining_none_is_valid_evidence(self):
+        trade, order = self.trade_order(base=0)
+        bybit_canceled = snapshot(order, "canceled", filled=0.0) | {"remaining": None}
+        self.assertTrue(order_evidence_valid(bybit_canceled, order, trade.pair))
+        self.assertFalse(order_evidence_valid(snapshot(order, "open", filled=0.0) | {"remaining": None}, order, trade.pair))
+        self.assertFalse(order_evidence_valid(snapshot(order, "canceled", filled=1.0) | {"remaining": None}, order, trade.pair))
+        self.bot.exchange.fetch_order_or_stoploss_order.return_value = bybit_canceled
+        self.bot.startup_update_open_orders()
+        self.assertNotIn(trade.id, Trade.rows)
+        self.assertFalse(self.bot.has_unresolved_orders())
 
 
 if __name__ == "__main__":

@@ -273,6 +273,21 @@ class SecurityTests(unittest.TestCase):
                 cfg, cfg['exchange'], baseline=b, now=now, halted=False, environ=self.env
             )
 
+    def test_secure_start_commission_role_synthesizes_initial_baseline_on_fresh_volume(self):
+        import prop_secure_start as start
+        fresh = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__('shutil').rmtree(fresh, ignore_errors=True))
+        os.chmod(fresh, 0o700)
+        cfg_file = fresh / 'config_prop_nfix8.json'
+        cfg_file.write_text(json.dumps(configured_account()))
+        os.chmod(cfg_file, 0o600)
+        env = dict(self.env, PROP_DATA_DIR=str(fresh))
+        with patch.object(sys, 'argv', ['preflight', 'commission']), patch.dict(os.environ, env, clear=True):
+            start.main()
+        self.assertTrue((fresh / 'risk_manager_prop_baseline.json').is_file())
+        self.assertTrue((fresh / 'risk_manager_prop_state.json').is_file())
+        self.assertTrue((fresh / 'order_journal' / 'orders.sqlite').is_file())
+
 
 if __name__ == '__main__':
     unittest.main()

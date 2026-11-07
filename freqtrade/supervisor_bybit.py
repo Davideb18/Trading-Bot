@@ -40,15 +40,22 @@ class SupervisorBybit:
             self.deadline = previous
 
     def _call(self, method, *args, raw=True):
-        remaining = (self.deadline - time.monotonic()) if self.deadline else 4.0
-        if remaining <= 0:
-            raise UnverifiedAccount("Bybit operation deadline expired")
-        self.api.timeout = max(1, int(min(2.0, remaining) * 1000))
-        try:
-            result = method(*args)
-        except Exception:
-            # Never propagate CCXT exception text (may include credentials/request data).
-            raise UnverifiedAccount("Bybit request failed") from None
+        attempts = 3 if raw else 1
+        result = None
+        for attempt in range(attempts):
+            remaining = (self.deadline - time.monotonic()) if self.deadline else 4.0
+            if remaining <= 0:
+                raise UnverifiedAccount("Bybit operation deadline expired")
+            self.api.timeout = max(1, int(min(2.0, remaining) * 1000))
+            try:
+                result = method(*args)
+                break
+            except Exception:
+                rem = (self.deadline - time.monotonic()) if self.deadline else 4.0
+                if attempt + 1 < attempts and rem > 0.15:
+                    continue
+                # Never propagate CCXT exception text (may include credentials/request data).
+                raise UnverifiedAccount("Bybit request failed") from None
         if self.deadline and time.monotonic() >= self.deadline:
             raise UnverifiedAccount("Late Bybit response")
         if raw:
