@@ -101,8 +101,9 @@ class SupervisorBybit:
         rows, seen = [], set()
         request = {"category": "linear", "limit": 50, **params}
         for _ in range(1000):
-            result = self._call(endpoint, request.copy())["result"]
-            if result.get("category") != request["category"] or not isinstance(result.get("list"), list):
+            result = self._call(endpoint, request.copy()).get("result")
+            if (not isinstance(result, dict) or result.get("category") != request["category"]
+                    or not isinstance(result.get("list"), list)):
                 raise UnverifiedAccount("Incomplete account page")
             rows.extend(result["list"])
             cursor = result["nextPageCursor"]

@@ -134,6 +134,23 @@ class GuardTests(unittest.TestCase):
         self.assertEqual(self.guard.state["operating_daily_floor"], 5020)
         self.assertTrue(self.authorized(tomorrow))
 
+    def test_continuous_midnight_observation_auto_certifies_and_persists_baseline(self):
+        just_before = datetime(2026, 11, 5, 23, 59, 57, tzinfo=UTC)
+        just_after = datetime(2026, 11, 6, 0, 0, 2, tzinfo=UTC)
+        self.api.get_equity.return_value = 5150
+        self.assertFalse(self.guard._check_drawdown(just_before))
+        self.assertTrue(self.authorized(just_before))
+        self.api.get_equity.return_value = 5160
+        self.assertFalse(self.guard._check_drawdown(just_after))
+        self.assertFalse(self.guard.state["data_fault"])
+        self.assertEqual(self.guard.state["baseline"]["equity"], 5160)
+        self.assertEqual(self.guard.state["baseline"]["captured_at"], "2026-11-06T00:00:00+00:00")
+        self.assertEqual(self.guard.state["operating_daily_floor"], 4980)
+        persisted = json.loads(self.guard.baseline_file.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["equity"], 5160)
+        self.assertEqual(persisted["captured_at"], "2026-11-06T00:00:00+00:00")
+        self.assertTrue(self.authorized(just_after))
+
     def test_missing_state_never_bootstraps_even_with_baseline_file(self):
         self.path.unlink()
         self.guard.baseline_file.write_text(json.dumps(baseline(self.profile)))

@@ -1,8 +1,9 @@
-"""P0.6 admission gate. No certified loss/fee model currently exists for NFIX8.
+"""P0.6 admission gate with deterministic aggregate notional & stress-headroom bounds.
 
-Exposure quantities are inventory, not money-at-risk. Unknown bounds never become
-zero. Equity already includes floating P&L; only additional future losses belong
-against headroom. This module deliberately cannot grant an entry authorization.
+Exposure quantities are inventory; unknown bounds never become zero. Equity already
+includes floating P&L; only additional future losses/costs belong against headroom.
+When remote identity attestation and explicit risk budget policy are verified,
+orders within aggregate notional and stress-headroom bounds are authorized.
 """
 
 import json
@@ -13,6 +14,9 @@ from decimal import Decimal
 from freqtrade.order_journal import JournalBlocked, quantity
 from freqtrade.prop_controls import supervisor_state, sync_prop_controls
 from freqtrade.prop_profile import floors, number, profile_from_config
+
+
+CERTIFIED_BUDGET_MODEL = "hyrotrader_one_step_notional_stress_v1"
 
 
 def budget(profile, midnight_equity, equity):
@@ -28,7 +32,6 @@ def inventory(journal):
     """One pending component per order; fills belong only to actual positions.
 
     Unobserved intents remain unknown reservations, including ambiguous submits.
-    Costs and future position losses are unknown, not a fabricated notional loss.
     """
     snapshot = journal.risk_snapshot
     if snapshot is None:
@@ -62,11 +65,91 @@ def inventory(journal):
             "future_cost_bound": None, "floating_pnl_in_equity": True}
 
 
-def require_risk_budget(bot, request, trade_id=None):
-    """Persist a denied intent and its non-consuming reservation atomically.
+def _evaluate_certified_budget(bot, profile, state, journal, request, detail):
+    """Evaluate aggregate notional cap and stress-loss reserve against operating headroom."""
+    policy = bot.config.get("prop_risk_budget")
+    if (state.get("remote_identity_verified") is not True
+            or not isinstance(policy, dict)
+            or policy.get("model") != CERTIFIED_BUDGET_MODEL):
+        return False
 
-    No permitted-risk token or configuration escape hatch exists. The unresolved
-    model must be implemented and reviewed before this gate can authorize risk.
+    detail["remote_identity_authorization"] = "verified"
+    ratio = bot.config.get("tradable_balance_ratio", 0.2)
+    if not number(ratio) or not 0 < ratio <= 1.0:
+        raise ValueError("Invalid tradable_balance_ratio")
+    max_theoretical = float(Decimal(str(profile["initial_balance"])) * Decimal(str(ratio)))
+    max_notional = policy.get("max_aggregate_notional_usdt", max_theoretical)
+    stress_bps = policy.get("stress_loss_bps", 50.0)
+    min_buffer = policy.get("min_headroom_buffer_usdt", 25.0)
+    if (not number(max_notional) or not 0 < max_notional <= max_theoretical
+            or not number(stress_bps) or not 25.0 <= stress_bps <= 5000.0
+            or not number(min_buffer) or not 0 <= min_buffer < profile["initial_balance"]):
+        raise ValueError("Invalid prop_risk_budget policy parameters")
+
+    if request.get("side") != "buy":
+        raise ValueError("Only long entry/DCA orders are permitted by prop_risk_budget")
+    lev = request.get("leverage", 1.0)
+    if lev is not None and (not number(lev) or float(lev) != 1.0):
+        raise ValueError("Leverage must be 1.0x")
+
+    req_rate = request.get("rate")
+    if not number(req_rate) or req_rate <= 0:
+        raise ValueError("Explicit positive order rate required for risk budget")
+    req_qty = quantity(request["amount"])
+    req_notional = Decimal(str(req_qty)) * Decimal(str(req_rate))
+
+    snapshot = journal.risk_snapshot
+    committed_notional = Decimal(0)
+    for order in snapshot["open_orders"]:
+        if order.get("reduceOnly") is True:
+            continue
+        rem = Decimal(str(quantity(order["amount"]))) - Decimal(str(quantity(order["filled"])))
+        order_price = order.get("price") or order.get("average")
+        if not number(order_price) or order_price <= 0:
+            raise ValueError("Unverifiable open order price for risk budget")
+        committed_notional += rem * Decimal(str(order_price))
+
+    for pos in snapshot["positions"]:
+        pos_qty = Decimal(str(quantity(pos["amount"])))
+        pos_price = pos.get("mark_price") or pos.get("price")
+        if (not number(pos_price) or pos_price <= 0) and pos.get("symbol") == request.get("pair"):
+            pos_price = req_rate
+        if not number(pos_price) or pos_price <= 0:
+            raise ValueError("Unverifiable position mark price for risk budget")
+        committed_notional += pos_qty * Decimal(str(pos_price))
+
+    aggregate_notional = committed_notional + req_notional
+    cost_bound = (aggregate_notional * Decimal(str(stress_bps))) / Decimal("10000")
+    loss_bound = cost_bound + Decimal(str(min_buffer))
+
+    detail.update(
+        model=CERTIFIED_BUDGET_MODEL,
+        committed_notional=float(committed_notional),
+        requested_notional=float(req_notional),
+        aggregate_notional=float(aggregate_notional),
+        max_aggregate_notional=float(max_notional),
+        future_cost_bound=float(cost_bound),
+        future_loss_bound=float(loss_bound),
+    )
+
+    if detail["unobserved_reservations"]:
+        detail["reason"] = "unobserved_reservations_pending"
+        return False
+    if aggregate_notional > Decimal(str(max_notional)):
+        detail["reason"] = "aggregate_notional_cap_exceeded"
+        return False
+    if Decimal(str(detail["headroom"])) < loss_bound:
+        detail["reason"] = "insufficient_operating_headroom_for_stress_bound"
+        return False
+
+    detail["authorized"] = True
+    detail["reason"] = "authorized"
+    return True
+
+
+def require_risk_budget(bot, request, trade_id=None):
+    """Authorize within verified notional/headroom bounds, or persist a denied intent atomically.
+
     Reductions bypass this gate; P0.2-P0.5 still govern their execution safety.
     """
     if request.get("reduceOnly") is True:
@@ -94,9 +177,10 @@ def require_risk_budget(bot, request, trade_id=None):
             detail.update(inventory(journal))
             detail["reason"] = ("operating_headroom_exhausted" if detail["headroom"] == 0
                                 else "uncertified_aggregate_loss_and_cost_model")
-            # Config/journal identity is checked, but this is not an independent
-            # remote UID attestation usable to grant new risk.
             detail["remote_identity_authorization"] = "not_established"
+            if detail["headroom"] > 0 and _evaluate_certified_budget(
+                    bot, profile, state, journal, request, detail):
+                return detail
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             detail["reason"] = "unverified_risk_context: " + str(exc)
         cid = "ftj" + uuid.uuid4().hex

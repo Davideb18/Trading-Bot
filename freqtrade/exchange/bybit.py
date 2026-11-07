@@ -78,8 +78,12 @@ class Bybit(Exchange):
             position = self._api.parse_position(raw, market)
             amount = self._contracts_to_amount(market["symbol"], position["contracts"])
             if amount:
-                snapshot["positions"].append({"symbol": market["symbol"],
-                                               "side": position["side"], "amount": amount})
+                pos_entry = {"symbol": market["symbol"],
+                             "side": position["side"], "amount": amount}
+                raw_mark = raw.get("markPrice") or raw.get("avgPrice")
+                if raw_mark not in (None, "", "0"):
+                    pos_entry["mark_price"] = float(raw_mark)
+                snapshot["positions"].append(pos_entry)
         for intent in intents:
             cid = intent["client_id"]
             request = json.loads(intent["request"])

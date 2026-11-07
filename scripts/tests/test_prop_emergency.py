@@ -535,6 +535,8 @@ class AdapterTests(unittest.TestCase):
     def test_incomplete_pagination_is_not_flat(self):
         self.api.privateGetV5OrderRealtime.return_value = self.response({"category": "linear", "list": []})
         with self.assertRaises(KeyError): self.adapter.snapshot()
+        self.api.privateGetV5OrderRealtime.return_value = self.response(None)
+        with self.assertRaises(UnverifiedAccount): self.adapter.snapshot()
 
     def test_out_of_scope_open_order_prevents_account_flat_claim(self):
         self.api.privateGetV5OrderRealtime.side_effect = lambda p: self.response(

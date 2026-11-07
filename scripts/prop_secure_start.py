@@ -4,7 +4,12 @@ import runpy
 import sys
 from pathlib import Path
 
-from freqtrade.prop_security import private_path, supervisor_config, validate_deployment
+from freqtrade.prop_security import (
+    commission_deployment,
+    private_path,
+    supervisor_config,
+    validate_deployment,
+)
 
 
 def main():
@@ -15,7 +20,13 @@ def main():
     private_path(path)
     config = supervisor_config(json.loads(path.read_text()))
     config['user_data_dir'] = root
-    validate_deployment(config, config['exchange'])
+    if role == 'commission':
+        baseline_path = root / 'risk_manager_prop_baseline.json'
+        private_path(baseline_path)
+        baseline = json.loads(baseline_path.read_text(encoding='utf-8'))
+        commission_deployment(config, config['exchange'], baseline=baseline)
+        return
+    validate_deployment(config, config['exchange'], role=role)
     if role == 'core':
         # Keep the redaction factory installed before Freqtrade config logging.
         sys.argv = ['freqtrade', *sys.argv[2:]]

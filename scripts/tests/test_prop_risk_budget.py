@@ -48,7 +48,8 @@ class RiskBudgetTests(unittest.TestCase):
     def deny(self, **changes):
         with self.assertRaises(JournalBlocked):
             require_risk_budget(self.bot, {**REQUEST, **changes}, 7)
-        row = self.j.db.execute('SELECT * FROM risk_reservations ORDER BY rowid DESC').fetchone()
+        with self.j.mutex:
+            row = self.j.db.execute('SELECT * FROM risk_reservations ORDER BY rowid DESC').fetchone()
         self.assertEqual(row['state'], 'denied')
         return json.loads(row['detail'])
 
@@ -200,6 +201,48 @@ class RiskBudgetTests(unittest.TestCase):
         with self.assertRaisesRegex(JournalBlocked, 'P0.6'):
             journal_create_order(self.bot, None, model, **REQUEST)
         self.bot.exchange.create_order.assert_not_called()
+
+    def test_certified_model_authorizes_valid_entry_and_dca_within_notional_and_headroom(self):
+        self.state['remote_identity_verified'] = True
+        self.save()
+        result = require_risk_budget(self.bot, REQUEST, 7)
+        self.assertTrue(result['authorized'])
+        self.assertEqual(result['remote_identity_authorization'], 'verified')
+        self.assertEqual(result['aggregate_notional'], 200.0)
+        self.assertEqual(result['future_cost_bound'], 1.0)
+        self.assertEqual(result['future_loss_bound'], 26.0)
+        self.bot.exchange = SimpleNamespace(
+            fetch_journal_snapshot=Mock(return_value=snapshot()),
+            create_order=Mock(side_effect=lambda **kw: {'id': 'ex-1', 'clientOrderId': kw['client_order_id']}),
+        )
+        self.bot.has_unresolved_orders = lambda: False
+        model = SimpleNamespace(get_trades_proxy=lambda: [], commit=Mock())
+        created = journal_create_order(self.bot, None, model, **REQUEST)
+        self.assertEqual(created['id'], 'ex-1')
+        self.bot.exchange.create_order.assert_called_once()
+
+    def test_certified_model_denies_when_aggregate_notional_exceeds_1000_usdt_cap(self):
+        self.state['remote_identity_verified'] = True
+        self.save()
+        positions = [dict(symbol=PAIR, side='long', amount=8.0, mark_price=100.0)]
+        self.j.reconcile(snapshot(positions=positions), {}, {(PAIR, 'long'): 8.0})
+        allowed = require_risk_budget(self.bot, {**REQUEST, 'amount': 2.0, 'rate': 100.0}, 7)
+        self.assertTrue(allowed['authorized'])
+        self.assertEqual(allowed['aggregate_notional'], 1000.0)
+        denied = self.deny(amount=2.5, rate=100.0)
+        self.assertFalse(denied['authorized'])
+        self.assertEqual(denied['reason'], 'aggregate_notional_cap_exceeded')
+        self.assertEqual(denied['aggregate_notional'], 1050.0)
+
+    def test_certified_model_denies_when_headroom_below_stress_reserve(self):
+        self.state['remote_identity_verified'] = True
+        self.state['last_equity'] = 4845.0  # operating_floor=4820.0 -> headroom=25.0 USDT < 26.0 USDT loss_bound
+        self.save()
+        denied = self.deny(amount=2.0, rate=100.0)
+        self.assertFalse(denied['authorized'])
+        self.assertEqual(denied['reason'], 'insufficient_operating_headroom_for_stress_bound')
+        self.assertEqual(denied['headroom'], 25.0)
+        self.assertEqual(denied['future_loss_bound'], 26.0)
 
 
 if __name__ == '__main__':

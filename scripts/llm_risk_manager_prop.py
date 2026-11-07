@@ -217,13 +217,25 @@ class FreqtradeAPIClient(DeadlineClient):
             return data
         return None
 
-    def get_trades(self, limit: int = 100) -> list | None:
-        """Fetch closed/recent trades from Freqtrade REST API."""
-        data = self.get(f"/trades?limit={limit}")
-        if isinstance(data, dict):
-            return data.get("trades")
-        elif isinstance(data, list):
-            return data
+    def get_trades(self, limit: int = 500) -> list | None:
+        """Fetch all closed/recent trades from Freqtrade REST API with pagination."""
+        trades: list = []
+        offset = 0
+        for _ in range(100):
+            endpoint = f"/trades?limit={limit}" if offset == 0 else f"/trades?limit={limit}&offset={offset}"
+            data = self.get(endpoint)
+            if isinstance(data, list):
+                return data
+            if not isinstance(data, dict) or not isinstance(data.get("trades"), list):
+                return None
+            page = data["trades"]
+            trades.extend(page)
+            total = data.get("total_trades")
+            if not isinstance(total, int) or len(trades) >= total:
+                return trades
+            if not page:
+                return None
+            offset += len(page)
         return None
 
     def get_prop_profile(self):
@@ -837,7 +849,7 @@ class RiskManager(RiskGuard):
         from freqtrade.prop_security import supervisor_config, validate_deployment
         config = supervisor_config(json.loads(PROFILE_CONFIG.read_text(encoding="utf-8")))
         config['user_data_dir'] = STATE_FILE.parent
-        profile = validate_deployment(config, config['exchange'])
+        profile = validate_deployment(config, config['exchange'], role='supervisor')
         configure_logging()
         api = FreqtradeAPIClient(FREQTRADE_API_URL, FREQTRADE_USERNAME, FREQTRADE_PASSWORD)
         api, emergency = independent_supervisor(profile, STATE_FILE, api)
@@ -878,13 +890,13 @@ class RiskManager(RiskGuard):
         while not self._shutdown.is_set():
             try:
                 open_trades = self.rules_api.get_open_trades()
-                recent_trades = self.rules_api.get_trades(limit=100)
+                recent_trades = self.rules_api.get_trades(limit=500)
                 if not isinstance(open_trades, list) or not isinstance(recent_trades, list):
                     raise ValueError("Accounting data unavailable")
                 now_utc = datetime.now(timezone.utc)
                 today_str = now_utc.strftime("%Y-%m-%d")
 
-                # 1. 30-Day Inactivity Sentinel & Auto Keep-Alive
+                # 1. 30-Day Inactivity Sentinel (Alert-Only; no automated force-entry per P0 safety policy)
                 latest_close_dt = None
                 if recent_trades:
                     valid_closes = [
@@ -906,12 +918,10 @@ class RiskManager(RiskGuard):
 
                 if inactivity_days >= 24 and len(open_trades) == 0 and not self.nuclear_triggered:
                     logger.critical(
-                        "🚨 HYROTRADER 24-DAY INACTIVITY DETECTED (%d days flat). "
-                        "Executing automated qualifying keep-alive trade ($250 on BTC/USDT) to reset timer.",
+                        "🚨 HYROTRADER 24-DAY INACTIVITY ALERT (%d days flat). "
+                        "Automated force-entry is disabled by safety policy; manual operator review required before 30d limit.",
                         inactivity_days
                     )
-                    res = self.rules_api.post("forceentry", json={"pair": "BTC/USDT:USDT", "side": "long", "stake_amount": 250.0})
-                    logger.info("Keep-alive order response: %s", res)
                 elif inactivity_days >= 20:
                     logger.warning("⚠️ HyroTrader Inactivity Warning: %d days without trades (forfeiture at 30d).", inactivity_days)
 

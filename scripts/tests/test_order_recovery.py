@@ -410,6 +410,17 @@ class RecoveryTests(unittest.TestCase):
         self.bot.replace_order_failed.assert_not_called()
         self.bot.exchange.create_order.assert_not_called()
 
+    def test_entry_replacement_deferred_before_cancel_when_other_trade_unresolved(self):
+        trade_a, order_a = self.trade_order(order_id="unresolved-a")
+        mark_recovery(trade_a, order_a.order_id)
+        trade_b, order_b = self.trade_order(base=0, order_id="clean-b")
+        self.assertFalse(pending_recovery(trade_b))
+        self.assertTrue(self.bot.has_unresolved_orders())
+        self.bot.handle_replace_order(snapshot(order_b), order_b, trade_b, 101, True, "replace", replacing=True)
+        self.bot.exchange.cancel_order_with_result.assert_not_called()
+        self.bot.replace_order_failed.assert_not_called()
+        self.assertIn(trade_b.id, Trade.rows)
+
     def test_ordinary_replacement_keeps_cancel_boolean_semantics(self):
         trade, order = self.trade_order(base=0)
         self.bot.exchange.cancel_order_with_result.return_value = snapshot(order, "canceled")

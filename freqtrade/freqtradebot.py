@@ -1812,7 +1812,7 @@ class FreqtradeBot(LoggingMixin):
         Cancel existing order if new price is supplied, and if the cancel is successful,
         places a new order with the remaining capital.
         """
-        if pending_recovery(trade):
+        if pending_recovery(trade) or (is_entry and new_order_price and self.has_unresolved_orders()):
             logger.warning("Replacement deferred: unresolved order state for %s", trade.pair)
             return
         if not order:

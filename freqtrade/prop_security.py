@@ -66,10 +66,8 @@ def private_path(path, directory=False):
         raise DeploymentRejected('Protected deployment path unavailable') from None
 
 
-def validate_deployment(config, exchange, environ=None):
-    """Called before exchange construction. Never reads or changes a user .env."""
+def _validate_common(config, exchange, env):
     from freqtrade.prop_profile import profile_from_config
-    env = os.environ if environ is None else environ
     if os.name == 'posix' and os.geteuid() == 0:
         raise DeploymentRejected('Non-root deployment user required')
     api = config.get('api_server', {})
@@ -105,13 +103,36 @@ def validate_deployment(config, exchange, environ=None):
     for field, name in (('key', 'PROP_BYBIT_API_KEY'), ('secret', 'PROP_BYBIT_API_SECRET')):
         if exchange[field] != env.get(name):
             raise DeploymentRejected('Core/supervisor credential mismatch')
+    for field, name in (('key', 'FREQTRADE__EXCHANGE__KEY'), ('secret', 'FREQTRADE__EXCHANGE__SECRET')):
+        if name in env and exchange[field] != env.get(name):
+            raise DeploymentRejected('Core/supervisor credential mismatch')
     for field, name in (('username', 'FREQTRADE_USERNAME'), ('password', 'FREQTRADE_PASSWORD')):
         if api[field] != env.get(name):
+            raise DeploymentRejected('Core/supervisor API credential mismatch')
+    for field, name in (('jwt_secret_key', 'FREQTRADE_JWT_TOKEN'), ('ws_token', 'FREQTRADE_WS_TOKEN')):
+        if name in env and api[field] != env.get(name):
+            raise DeploymentRejected('Core/supervisor API credential mismatch')
+    for field, name in (
+        ('username', 'FREQTRADE__API_SERVER__USERNAME'),
+        ('password', 'FREQTRADE__API_SERVER__PASSWORD'),
+        ('jwt_secret_key', 'FREQTRADE__API_SERVER__JWT_SECRET_KEY'),
+        ('ws_token', 'FREQTRADE__API_SERVER__WS_TOKEN'),
+    ):
+        if name in env and api[field] != env.get(name):
             raise DeploymentRejected('Core/supervisor API credential mismatch')
     for key in ('ccxt_config', 'ccxt_sync_config', 'ccxt_async_config'):
         override = exchange.get(key, {})
         if any(k in override for k in ('apiKey', 'secret', 'urls', 'hostname', 'headers')):
             raise DeploymentRejected('Exchange identity/endpoint overrides forbidden')
+    return profile
+
+
+def validate_deployment(config, exchange, environ=None, *, role='core'):
+    """Called before exchange construction. Never reads or changes a user .env."""
+    if role not in ('core', 'supervisor'):
+        raise DeploymentRejected('Invalid deployment role')
+    env = os.environ if environ is None else environ
+    profile = _validate_common(config, exchange, env)
     root = Path(config['user_data_dir']).absolute()
     private_path(root, True)
     for path in (root / 'logs', root / 'trades_prop.sqlite'):
@@ -120,18 +141,30 @@ def validate_deployment(config, exchange, environ=None):
     if (root / 'logs').is_dir():
         for path in (root / 'logs').iterdir():
             private_path(path)
-    for name in ('risk_manager_prop_state.json', 'risk_manager_prop_baseline.json', 'config_prop_nfix8.json'):
-        private_path(root / name)
+    private_path(root / 'config_prop_nfix8.json')
+    for name in ('risk_manager_prop_state.json', 'risk_manager_prop_baseline.json'):
+        target = root / name
+        if role == 'core' or target.exists() or target.is_symlink():
+            private_path(target)
     journal = root / 'order_journal'
     private_path(journal, True)
     for path in journal.iterdir():
         private_path(path)
     private_path(journal / 'orders.sqlite')
     try:
-        state = json.loads((root / 'risk_manager_prop_state.json').read_text())
-        baseline = json.loads((root / 'risk_manager_prop_baseline.json').read_text())
-        if state['profile'] != profile or baseline['profile'] != profile:
-            raise ValueError()
+        for name in ('risk_manager_prop_state.json', 'risk_manager_prop_baseline.json'):
+            target = root / name
+            if role == 'core':
+                record = json.loads(target.read_text(encoding='utf-8'))
+                if record['profile'] != profile:
+                    raise ValueError()
+            elif target.exists():
+                try:
+                    record = json.loads(target.read_text(encoding='utf-8'))
+                except Exception:
+                    record = None
+                if isinstance(record, dict) and 'profile' in record and record['profile'] != profile:
+                    raise ValueError()
         with closing(sqlite3.connect((journal / 'orders.sqlite').as_uri() + '?mode=ro', uri=True, timeout=.05)) as db:
             binding = json.loads(db.execute('SELECT value FROM binding WHERE id=1').fetchone()[0])
         if (any(binding.get(k) != profile[k] for k in (
@@ -146,14 +179,63 @@ def validate_deployment(config, exchange, environ=None):
     return profile
 
 
+def commission_deployment(config, exchange, *, baseline, now=None, halted=False, environ=None):
+    """Explicit non-clobbering offline commissioning of journal, baseline and state."""
+    from datetime import datetime, timezone
+    from freqtrade.order_journal import OrderJournal
+    from freqtrade.prop_profile import validate_baseline
+    from prop_risk_guard import reconciled_state
+
+    env = os.environ if environ is None else environ
+    os.umask(0o077)
+    profile = _validate_common(config, exchange, env)
+    root = Path(config['user_data_dir']).absolute()
+    private_path(root, True)
+    private_path(root / 'config_prop_nfix8.json')
+    state_path = root / 'risk_manager_prop_state.json'
+    baseline_path = root / 'risk_manager_prop_baseline.json'
+    journal_dir = root / 'order_journal'
+    journal_db = journal_dir / 'orders.sqlite'
+    if state_path.exists() or state_path.is_symlink() or journal_db.exists() or journal_db.is_symlink():
+        raise DeploymentRejected('Refusing to overwrite existing commissioned state or journal')
+    now_utc = datetime.now(timezone.utc) if now is None else now
+    try:
+        validate_baseline(baseline, profile, now_utc)
+        initial_state = reconciled_state(profile, baseline, now_utc, halted=halted)
+    except Exception:
+        raise DeploymentRejected('Invalid commissioning baseline or state parameters') from None
+    baseline_path.write_text(json.dumps(baseline, indent=2, allow_nan=False), encoding='utf-8')
+    os.chmod(baseline_path, 0o600)
+    state_path.write_text(json.dumps(initial_state, indent=2, allow_nan=False), encoding='utf-8')
+    os.chmod(state_path, 0o600)
+    journal_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(journal_dir, 0o700)
+    identity = {k: profile[k] for k in (
+        'profile_id', 'account_id', 'challenge_id', 'phase_id', 'exchange', 'environment', 'currency')}
+    identity['key_fingerprint'] = hashlib.sha256(exchange['key'].encode()).hexdigest()
+    journal = OrderJournal(journal_dir, identity)
+    journal.close()
+    for item in journal_dir.iterdir():
+        os.chmod(item, 0o600)
+    validate_deployment(config, exchange, env, role='core')
+    validate_deployment(config, exchange, env, role='supervisor')
+    return profile
+
+
 def supervisor_config(config, environ=None):
-    """Resolve exactly the same explicit deployment values as Docker's core env."""
+    """Resolve explicit deployment values from supervisor/core environment."""
     import copy
     env = os.environ if environ is None else environ
     config = copy.deepcopy(config)
-    config['exchange'].update(key=env.get('PROP_BYBIT_API_KEY'), secret=env.get('PROP_BYBIT_API_SECRET'))
-    config['api_server'].update(username=env.get('FREQTRADE_USERNAME'), password=env.get('FREQTRADE_PASSWORD'),
-        jwt_secret_key=env.get('FREQTRADE_JWT_TOKEN'), ws_token=env.get('FREQTRADE_WS_TOKEN'))
+    key = env.get('PROP_BYBIT_API_KEY') if 'PROP_BYBIT_API_KEY' in env else env.get('FREQTRADE__EXCHANGE__KEY')
+    secret_val = env.get('PROP_BYBIT_API_SECRET') if 'PROP_BYBIT_API_SECRET' in env else env.get('FREQTRADE__EXCHANGE__SECRET')
+    username = env.get('FREQTRADE_USERNAME') if 'FREQTRADE_USERNAME' in env else env.get('FREQTRADE__API_SERVER__USERNAME')
+    password = env.get('FREQTRADE_PASSWORD') if 'FREQTRADE_PASSWORD' in env else env.get('FREQTRADE__API_SERVER__PASSWORD')
+    jwt_token = env.get('FREQTRADE_JWT_TOKEN') if 'FREQTRADE_JWT_TOKEN' in env else env.get('FREQTRADE__API_SERVER__JWT_SECRET_KEY')
+    ws_token = env.get('FREQTRADE_WS_TOKEN') if 'FREQTRADE_WS_TOKEN' in env else env.get('FREQTRADE__API_SERVER__WS_TOKEN')
+    config['exchange'].update(key=key, secret=secret_val)
+    config['api_server'].update(username=username, password=password,
+        jwt_secret_key=jwt_token, ws_token=ws_token)
     if env.get('PROP_PRIVATE_DOCKER_NETWORK') == 'dedicated-bridge':
         config['api_server']['listen_ip_address'] = '0.0.0.0'
     return config

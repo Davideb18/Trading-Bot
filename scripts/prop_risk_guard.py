@@ -12,7 +12,7 @@ import threading
 import time
 from contextlib import nullcontext
 from copy import deepcopy
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -154,6 +154,34 @@ class RiskGuard:
             self.state_error = f"State write failed: {exc}"
             log.critical(self.state_error)
             return False
+
+    def _can_certify_midnight_rollover(self, now):
+        """True only when the guard has continuous healthy observations across 00:00:00 UTC."""
+        prev_baseline = self.state.get("baseline")
+        last_raw = self.state.get("last_updated")
+        if (prev_baseline is None or not last_raw
+                or self.state.get("data_fault") or self.state.get("nuclear_triggered")):
+            return False
+        try:
+            prev_day = utc_time(prev_baseline["captured_at"]).date()
+            last_updated = utc_time(last_raw)
+        except Exception:
+            return False
+        if prev_day != now.date() - timedelta(days=1) or last_updated.date() != prev_day:
+            return False
+        midnight = datetime(now.year, now.month, now.day, tzinfo=UTC)
+        window = max(15.0, float(self.interval) * 3.0)
+        return (0.0 <= (midnight - last_updated).total_seconds() <= window
+                and 0.0 <= (now - midnight).total_seconds() <= window)
+
+    def _save_baseline(self, baseline):
+        tmp = self.baseline_file.with_suffix(".tmp")
+        self.baseline_file.parent.mkdir(parents=True, exist_ok=True)
+        with tmp.open("w", encoding="utf-8") as handle:
+            json.dump(baseline, handle, indent=2, allow_nan=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        tmp.replace(self.baseline_file)
 
     def request_data_fault(self, reason):
         # No HTTP or sleep, and never hold the memory lock during persistence.
@@ -316,8 +344,28 @@ class RiskGuard:
         baseline_error = None
         try:
             if baseline is None or utc_time(baseline["captured_at"]).date() != now.date():
-                baseline = json.loads(self.baseline_file.read_text(encoding="utf-8"))
-            validate_baseline(baseline, self.profile, now)
+                try:
+                    candidate = json.loads(self.baseline_file.read_text(encoding="utf-8"))
+                    validate_baseline(candidate, self.profile, now)
+                    baseline = candidate
+                except (OSError, ValueError, TypeError, KeyError, AttributeError) as file_exc:
+                    if not self._can_certify_midnight_rollover(now):
+                        raise file_exc
+                    midnight = datetime(now.year, now.month, now.day, tzinfo=UTC)
+                    candidate = {
+                        "schema_version": 1,
+                        "profile": deepcopy(self.profile),
+                        "equity": equity,
+                        "captured_at": midnight.isoformat(),
+                        "verified_at": now.isoformat(),
+                        "source": "bybit_wallet_coin_equity_midnight_rollover",
+                        "confirmed": True,
+                    }
+                    validate_baseline(candidate, self.profile, now)
+                    self._save_baseline(candidate)
+                    baseline = candidate
+            else:
+                validate_baseline(baseline, self.profile, now)
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
             baseline_error = f"Midnight baseline reconciliation required: {exc}"
             baseline = None
@@ -329,8 +377,14 @@ class RiskGuard:
         if baseline and Decimal(str(equity)) <= Decimal(str(levels["operating_daily_floor"])):
             reason = "Internal static daily floor reached"
         with self._state_lock:
+            remote_verified = bool(
+                self.emergency is not None
+                or getattr(self.api_client, "direct", None) is not None
+                or self.state.get("remote_identity_verified") is True
+            )
             self.state.update(last_equity=equity, last_updated=now.isoformat(),
                               baseline=baseline, current_trading_day=now.date().isoformat(),
+                              remote_identity_verified=remote_verified,
                               data_valid=not bool(baseline_error) and self.state["fault_revision"] == fault_revision)
             self.state["data_fault"] = self.state["data_fault"] or bool(baseline_error)
             self.state["wake_up_lock"] = bool(self.state["data_fault"] or self.state["macro_paused"])

@@ -21,6 +21,8 @@ services:
       PROP_BYBIT_API_SECRET: ${PROP_BYBIT_API_SECRET:?Required}
       FREQTRADE_USERNAME: ${FREQTRADE_USERNAME:?Required}
       FREQTRADE_PASSWORD: ${FREQTRADE_PASSWORD:?Required}
+      FREQTRADE_JWT_TOKEN: ${FREQTRADE_JWT_TOKEN:?Required}
+      FREQTRADE_WS_TOKEN: ${FREQTRADE_WS_TOKEN:?Required}
       PROP_EMERGENCY_AUTHORITY: ${PROP_EMERGENCY_AUTHORITY:?Dedicated account shared-host acknowledgement required}
       PROP_PRIVATE_DOCKER_NETWORK: dedicated-bridge
     volumes:

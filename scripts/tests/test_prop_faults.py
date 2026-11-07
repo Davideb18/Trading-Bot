@@ -477,6 +477,37 @@ class HttpTests(unittest.TestCase):
             "currency": "USDT", "source": "bybit_wallet_coin_equity"}})
         self.assertIsNone(client.get_equity())
 
+    def test_get_trades_pagination_and_rules_loop_no_forceentry(self):
+        Client = load_methods("scripts/llm_risk_manager_prop.py", "FreqtradeAPIClient", {"get_trades"}, {})
+        client = Client()
+        client.get = Mock(side_effect=[
+            {"trades": [{"trade_id": 1}, {"trade_id": 2}], "total_trades": 3},
+            {"trades": [{"trade_id": 3}], "total_trades": 3},
+        ])
+        self.assertEqual(client.get_trades(limit=2), [{"trade_id": 1}, {"trade_id": 2}, {"trade_id": 3}])
+        self.assertEqual(client.get.call_args_list[0].args[0], "/trades?limit=2")
+        self.assertEqual(client.get.call_args_list[1].args[0], "/trades?limit=2&offset=2")
+
+        Worker = load_methods("scripts/llm_risk_manager_prop.py", "RiskManager", {"_hyrotrader_rules_loop"},
+            dict(logger=logging.getLogger(__name__), datetime=datetime, timezone=timezone))
+        old_close = int((datetime.now(timezone.utc) - timedelta(days=25)).timestamp() * 1000)
+        post_mock = Mock()
+        mgr = SimpleNamespace(
+            _shutdown=SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock()),
+            rules_api=SimpleNamespace(
+                get_open_trades=lambda: [],
+                get_trades=lambda **kw: [{"close_timestamp": old_close, "profit_abs": 10.0, "cost": 300.0, "profit_ratio": 0.03}],
+                post=post_mock,
+            ),
+            nuclear_triggered=False,
+            initial_balance=5000,
+            profile={"profit_target_percent": 0.1, "daily_profit_cap_percent": 0.4, "min_trading_days": 5},
+            request_data_fault=Mock(),
+        )
+        Worker._hyrotrader_rules_loop(mgr)
+        post_mock.assert_not_called()
+        mgr.request_data_fault.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -215,5 +215,11 @@
         "profit_target_percent": 0.1,
         "daily_profit_cap_percent": 0.4,
         "min_trading_days": 5
+    },
+    "prop_risk_budget": {
+        "model": "hyrotrader_one_step_notional_stress_v1",
+        "max_aggregate_notional_usdt": 1000.0,
+        "stress_loss_bps": 50.0,
+        "min_headroom_buffer_usdt": 25.0
     }
 }

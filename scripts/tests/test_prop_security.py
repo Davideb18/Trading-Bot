@@ -190,9 +190,88 @@ class SecurityTests(unittest.TestCase):
                     patch.object(sys, 'argv', ['preflight', role, 'trade']), patch.dict(os.environ, self.env, clear=True):
                 def launched(*args, **kwargs):
                     check.assert_called_once()
+                    self.assertEqual(check.call_args.kwargs.get('role'), role)
                 core.side_effect = supervisor.side_effect = launched
                 start.main()
                 self.assertEqual(core.call_count + supervisor.call_count, 1)
+
+    def test_compose_core_and_supervisor_env_parity_and_freqtrade_env_fallback(self):
+        import yaml
+        root = Path(__file__).resolve().parents[2]
+        compose = yaml.safe_load((root / 'docker-compose.prop.yml').read_text())
+        core_env = compose['services']['freqtrade_prop']['environment']
+        sup_env = compose['services']['freqtrade_prop_risk_manager']['environment']
+        for key in ('FREQTRADE_JWT_TOKEN', 'FREQTRADE_WS_TOKEN', 'FREQTRADE_USERNAME',
+                    'FREQTRADE_PASSWORD', 'PROP_BYBIT_API_KEY', 'PROP_BYBIT_API_SECRET'):
+            self.assertIn(key, core_env)
+            self.assertIn(key, sup_env)
+        ft_only_env = {
+            'PROP_BYBIT_API_KEY': self.env['PROP_BYBIT_API_KEY'],
+            'PROP_BYBIT_API_SECRET': self.env['PROP_BYBIT_API_SECRET'],
+            'FREQTRADE_USERNAME': self.env['FREQTRADE_USERNAME'],
+            'FREQTRADE_PASSWORD': self.env['FREQTRADE_PASSWORD'],
+            'FREQTRADE__API_SERVER__JWT_SECRET_KEY': self.env['FREQTRADE_JWT_TOKEN'],
+            'FREQTRADE__API_SERVER__WS_TOKEN': self.env['FREQTRADE_WS_TOKEN'],
+            'PROP_EMERGENCY_AUTHORITY': 'dedicated-account-single-host',
+            'PROP_PRIVATE_DOCKER_NETWORK': 'dedicated-bridge',
+            'FREQTRADE_API_URL': 'http://freqtrade_prop:8088/api/v1',
+        }
+        resolved = security.supervisor_config(configured_account(), ft_only_env)
+        resolved['user_data_dir'] = self.root
+        self.assertEqual(security.validate_deployment(resolved, resolved['exchange'], ft_only_env), self.profile)
+        bad_env = dict(ft_only_env, FREQTRADE__API_SERVER__JWT_SECRET_KEY='mismatched-token')
+        with self.assertRaises(security.DeploymentRejected):
+            security.validate_deployment(resolved, resolved['exchange'], bad_env)
+
+    def test_supervisor_role_starts_when_state_or_baseline_missing_or_corrupt_but_core_rejects(self):
+        state_file = self.root / 'risk_manager_prop_state.json'
+        baseline_file = self.root / 'risk_manager_prop_baseline.json'
+        state_file.write_text('{corrupt-json')
+        with self.assertRaises(security.DeploymentRejected):
+            security.validate_deployment(self.config, self.config['exchange'], self.env, role='core')
+        self.assertEqual(
+            security.validate_deployment(self.config, self.config['exchange'], self.env, role='supervisor'),
+            self.profile,
+        )
+        state_file.unlink()
+        baseline_file.unlink()
+        with self.assertRaises(security.DeploymentRejected):
+            security.validate_deployment(self.config, self.config['exchange'], self.env, role='core')
+        self.assertEqual(
+            security.validate_deployment(self.config, self.config['exchange'], self.env, role='supervisor'),
+            self.profile,
+        )
+        foreign = copy.deepcopy(self.profile)
+        foreign['account_id'] = 'foreign-account'
+        state_file.write_text(json.dumps({'profile': foreign}))
+        with self.assertRaises(security.DeploymentRejected):
+            security.validate_deployment(self.config, self.config['exchange'], self.env, role='supervisor')
+
+    def test_commission_deployment_bootstraps_fresh_volume_and_refuses_overwrite(self):
+        from datetime import datetime, timezone
+        from test_prop_profile import baseline as make_baseline
+        now = datetime(2026, 11, 5, 12, 0, tzinfo=timezone.utc)
+        fresh = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__('shutil').rmtree(fresh, ignore_errors=True))
+        (fresh / 'config_prop_nfix8.json').write_text(json.dumps(configured_account()))
+        cfg = copy.deepcopy(self.config)
+        cfg['user_data_dir'] = fresh
+        b = make_baseline(self.profile, equity=5000, now=now)
+        commissioned = security.commission_deployment(
+            cfg, cfg['exchange'], baseline=b, now=now, halted=False, environ=self.env
+        )
+        self.assertEqual(commissioned, self.profile)
+        self.assertTrue((fresh / 'risk_manager_prop_state.json').is_file())
+        self.assertTrue((fresh / 'risk_manager_prop_baseline.json').is_file())
+        self.assertTrue((fresh / 'order_journal' / 'orders.sqlite').is_file())
+        self.assertEqual(
+            security.validate_deployment(cfg, cfg['exchange'], self.env, role='core'),
+            self.profile,
+        )
+        with self.assertRaises(security.DeploymentRejected):
+            security.commission_deployment(
+                cfg, cfg['exchange'], baseline=b, now=now, halted=False, environ=self.env
+            )
 
 
 if __name__ == '__main__':
