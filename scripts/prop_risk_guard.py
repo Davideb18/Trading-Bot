@@ -136,8 +136,8 @@ class RiskGuard:
             self.state_error = str(exc)
             log.critical("State recovery required: %s", exc)
 
-    def _save_state(self):
-        if self.state_error:
+    def _save_state(self, *, force_emergency=False):
+        if self.state_error and not force_emergency:
             return False
         # Only the risk worker writes this file. Workers publish memory-only
         # requests. Never hold the risk-state mutex across filesystem I/O.
@@ -157,33 +157,73 @@ class RiskGuard:
             log.critical(self.state_error)
             return False
 
-    def _can_certify_midnight_rollover(self, now):
-        """True only when the guard has continuous healthy observations across 00:00:00 UTC."""
-        prev_baseline = self.state.get("baseline")
-        last_raw = self.state.get("last_updated")
-        if (prev_baseline is None or not last_raw
-                or self.state.get("data_fault") or self.state.get("nuclear_triggered")):
-            return False
-        try:
-            prev_day = utc_time(prev_baseline["captured_at"]).date()
-            last_updated = utc_time(last_raw)
-        except Exception:
-            return False
-        if prev_day != now.date() - timedelta(days=1) or last_updated.date() != prev_day:
-            return False
-        midnight = datetime(now.year, now.month, now.day, tzinfo=UTC)
-        window = max(15.0, float(self.interval) * 3.0)
-        return (0.0 <= (midnight - last_updated).total_seconds() <= window
-                and 0.0 <= (now - midnight).total_seconds() <= window)
-
     def _save_baseline(self, baseline):
         tmp = self.baseline_file.with_suffix(".tmp")
-        self.baseline_file.parent.mkdir(parents=True, exist_ok=True)
-        with tmp.open("w", encoding="utf-8") as handle:
-            json.dump(baseline, handle, indent=2, allow_nan=False)
-            handle.flush()
-            os.fsync(handle.fileno())
-        tmp.replace(self.baseline_file)
+        try:
+            self.baseline_file.parent.mkdir(parents=True, exist_ok=True)
+            with tmp.open("w", encoding="utf-8") as handle:
+                json.dump(baseline, handle, indent=2, allow_nan=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+            tmp.replace(self.baseline_file)
+            return True
+        except (OSError, ValueError) as exc:
+            log.critical("Baseline write failed: %s", exc)
+            return False
+
+    def _can_certify_midnight_rollover(self, now):
+        prev = self.state.get("baseline")
+        if not isinstance(prev, dict) or not self.state.get("last_updated"):
+            return False
+        if self.state.get("data_fault") or self.state.get("nuclear_triggered") or not self.state.get("data_valid"):
+            return False
+        remote_verified = bool(
+            self.emergency is not None
+            or getattr(self.api_client, "__dict__", {}).get("direct") is not None
+            or self.state.get("remote_identity_verified") is True
+        )
+        if not remote_verified:
+            return False
+        if not finite_number(self.state.get("last_equity")) or self.state["last_equity"] <= 0:
+            return False
+        try:
+            prev_date = utc_time(prev["captured_at"]).date()
+            last_updated = utc_time(self.state["last_updated"])
+        except Exception:
+            return False
+        if prev_date != (now.date() - timedelta(days=1)):
+            return False
+        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        window = max(15.0, float(self.interval) * 3.0)
+        pre_gap = (midnight - last_updated).total_seconds()
+        post_gap = (now - midnight).total_seconds()
+        return 0.0 <= pre_gap <= window and 0.0 <= post_gap <= window
+
+    def _persist_emergency_halt(self, now, equity, levels, reason):
+        if self.state_file.exists():
+            backup = self.state_file.with_suffix(".corrupt.json")
+            if not backup.exists():
+                try:
+                    backup.write_bytes(self.state_file.read_bytes())
+                except OSError:
+                    pass
+        with self._state_lock:
+            self.state.update(
+                current_trading_day=now.date().isoformat(),
+                last_updated=now.isoformat(),
+                last_equity=float(equity),
+                nuclear_triggered=True,
+                wake_up_lock=True,
+                data_fault=True,
+                data_valid=False,
+                liquidation_confirmed=False,
+                halt_reason=reason,
+                official_overall_floor=levels["official_overall_floor"],
+                operating_overall_floor=levels["operating_overall_floor"],
+                official_daily_floor=None,
+                operating_daily_floor=None,
+            )
+        return self._save_state(force_emergency=True)
 
     def request_data_fault(self, reason):
         # No HTTP or sleep, and never hold the memory lock during persistence.
@@ -283,7 +323,7 @@ class RiskGuard:
             confirmed = self.emergency.step()
             with self._state_lock:
                 self.state["liquidation_confirmed"] = confirmed
-            self._save_state()
+            self._save_state(force_emergency=bool(self.nuclear_triggered))
             return confirmed
         # Serializes simultaneous crash/DD requests without blocking state reads.
         if not self._emergency_lock.acquire(blocking=False):
@@ -325,6 +365,26 @@ class RiskGuard:
             return True
         if self.state_error:
             self._pause_on_fault(self.state_error)
+            # Distinguish authorization, monitoring, and emergency liquidation authority (F04):
+            # entries remain locked, but supervisor continues sampling direct equity to protect overall floor.
+            if self.emergency is not None:
+                try:
+                    remote = self.api_client.get_prop_profile()
+                    if remote == self.profile:
+                        equity = self.api_client.get_equity()
+                        if finite_number(equity):
+                            levels = floors(self.profile, self.initial_balance)
+                            if Decimal(str(equity)) <= Decimal(str(levels["operating_overall_floor"])):
+                                reason = "Internal static overall floor reached"
+                                log.critical(
+                                    "Operating overall floor breached during state fault: equity=%s floor=%s",
+                                    equity, levels["operating_overall_floor"],
+                                )
+                                self._persist_emergency_halt(now, float(equity), levels, reason)
+                                self._enforce_halt()
+                                return True
+                except Exception as exc:
+                    log.warning("Could not sample emergency equity during state fault: %s", exc)
             return False
         with self._state_lock:
             fault_revision = self.state["fault_revision"]
@@ -349,25 +409,40 @@ class RiskGuard:
         baseline_error = None
         try:
             if baseline is None or utc_time(baseline["captured_at"]).date() != now.date():
-                try:
-                    candidate = json.loads(self.baseline_file.read_text(encoding="utf-8"))
-                    validate_baseline(candidate, self.profile, now)
-                    baseline = candidate
-                except (OSError, ValueError, TypeError, KeyError, AttributeError) as file_exc:
-                    if not self._can_certify_midnight_rollover(now):
-                        raise file_exc
-                    midnight = datetime(now.year, now.month, now.day, tzinfo=UTC)
-                    candidate = {
-                        "schema_version": 1,
-                        "profile": deepcopy(self.profile),
-                        "equity": equity,
+                loaded = None
+                if self.baseline_file.exists():
+                    try:
+                        candidate = json.loads(self.baseline_file.read_text(encoding="utf-8"))
+                        validate_baseline(candidate, self.profile, now)
+                        loaded = candidate
+                    except Exception:
+                        loaded = None
+                if loaded is not None:
+                    baseline = loaded
+                elif self._can_certify_midnight_rollover(now):
+                    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                    pre_equity = float(self.state["last_equity"])
+                    post_equity = float(equity)
+                    conservative_equity = max(pre_equity, post_equity)
+                    rolled = {
+                        "profile": self.profile,
+                        "equity": conservative_equity,
+                        "pre_midnight_equity": pre_equity,
+                        "pre_midnight_at": utc_time(self.state["last_updated"]).isoformat(),
+                        "post_midnight_equity": post_equity,
+                        "post_midnight_at": now.isoformat(),
                         "captured_at": midnight.isoformat(),
                         "verified_at": now.isoformat(),
-                        "source": "bybit_wallet_coin_equity_midnight_rollover",
+                        "source": "bybit_v5_midnight_conservative_bracket",
                         "confirmed": True,
                     }
+                    validate_baseline(rolled, self.profile, now)
+                    if not self._save_baseline(rolled):
+                        raise OSError("Failed to persist midnight rollover baseline")
+                    baseline = rolled
+                else:
+                    candidate = json.loads(self.baseline_file.read_text(encoding="utf-8"))
                     validate_baseline(candidate, self.profile, now)
-                    self._save_baseline(candidate)
                     baseline = candidate
             else:
                 validate_baseline(baseline, self.profile, now)
@@ -385,7 +460,7 @@ class RiskGuard:
             # Recomputed every cycle: no sticky latch from a previous process/state.
             remote_verified = bool(
                 self.emergency is not None
-                or getattr(self.api_client, "direct", None) is not None
+                or getattr(self.api_client, "__dict__", {}).get("direct") is not None
             )
             self.state.update(last_equity=equity, last_updated=now.isoformat(),
                               baseline=baseline, current_trading_day=now.date().isoformat(),

@@ -1298,6 +1298,17 @@ class RPC:
     def _rpc_cancel_open_order(self, trade_id: int):
         if self._freqtrade.state == State.STOPPED:
             raise RPCException("trader is not running")
+        if (
+            getattr(self._freqtrade, "order_journal", None) is not None
+            or self._freqtrade.config.get("prop_guard_enabled")
+        ):
+            from freqtrade.emergency_authority import require_core_authority
+
+            require_core_authority(self._freqtrade)
+            raise RPCException(
+                "Direct order cancellation via /cancel_open_order is disabled under prop trading profile; "
+                "use /forceexit for reconciled terminal order settlement."
+            )
         with self._freqtrade._exit_lock:
             # Query for trade
             trade = Trade.get_trades(
@@ -1335,6 +1346,23 @@ class RPC:
             if not trade:
                 logger.warning("delete trade: Invalid argument received")
                 raise RPCException(f"Trade with id '{trade_id}' not found.")
+
+            journal = getattr(self._freqtrade, "order_journal", None)
+            if journal is not None or self._freqtrade.config.get("prop_guard_enabled"):
+                from freqtrade.emergency_authority import require_core_authority
+
+                require_core_authority(self._freqtrade)
+                unsettled = False
+                if journal is not None:
+                    row = journal.db.execute(
+                        "SELECT 1 FROM intents WHERE trade_id=? AND settled=0", (trade.id,)
+                    ).fetchone()
+                    unsettled = row is not None
+                if trade.is_open or len(trade.open_orders) > 0 or pending_recovery(trade) or unsettled:
+                    raise RPCException(
+                        f"Cannot delete active or unsettled trade #{trade_id} under prop trading profile. "
+                        "Open trades must be settled via /forceexit to ensure terminal exchange reconciliation."
+                    )
 
             # Try cancelling regular order if that exists
             for open_order in trade.open_orders:

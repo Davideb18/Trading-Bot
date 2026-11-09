@@ -508,13 +508,58 @@ class HttpTests(unittest.TestCase):
         post_mock.assert_not_called()
         mgr.request_data_fault.assert_not_called()
 
-        post_mock.side_effect = [{"trade_id": 42}, {"result": "closed"}]
         mgr.inactivity_keepalive_enabled = True
         mgr._shutdown.is_set.side_effect = [False, True]
         Worker._hyrotrader_rules_loop(mgr)
-        self.assertEqual(post_mock.call_count, 2)
-        self.assertEqual(post_mock.call_args_list[0].args[0], "/forceenter")
-        self.assertEqual(post_mock.call_args_list[1].args, ("/forceexit", {"tradeid": "42", "ordertype": "market"}))
+        post_mock.assert_not_called()
+
+        # When keep-alive is explicitly enabled AND state is healthy, verify keyword json= and strict trade_id
+        post_mock.return_value = {"trade_id": 99}
+        force_exit_mock = Mock(return_value=True)
+        mgr.rules_api.force_exit = force_exit_mock
+        mgr.state = {"data_valid": True, "data_fault": False, "wake_up_lock": False}
+        mgr._shutdown.is_set.side_effect = [False, True]
+        Worker._hyrotrader_rules_loop(mgr)
+        post_mock.assert_called_once_with(
+            "/forceenter",
+            json={"pair": "BTC/USDT:USDT", "side": "long", "ordertype": "market", "stakeamount": 15.0},
+        )
+        force_exit_mock.assert_called_once_with(99)
+
+    def test_rpc_delete_and_cancel_open_order_blocked_under_prop_profile(self):
+        from freqtrade.enums import State
+        trade = SimpleNamespace(id=1, is_open=True, open_orders=[], pair="BTC/USDT:USDT")
+        FakeTrade = SimpleNamespace(
+            id=1,
+            get_trades=lambda trade_filter=None: SimpleNamespace(first=lambda: trade),
+        )
+        Rpc = load_methods(
+            "freqtrade/rpc/rpc.py",
+            "RPC",
+            {"_rpc_delete", "_rpc_cancel_open_order"},
+            dict(
+                State=State,
+                RPCException=RPCException,
+                Trade=FakeTrade,
+                logger=logging.getLogger(__name__),
+                pending_recovery=lambda t: [],
+            ),
+        )
+        rpc = Rpc()
+        bot = SimpleNamespace(
+            state=State.RUNNING,
+            _exit_lock=threading.Lock(),
+            config={"prop_guard_enabled": True},
+            order_journal=None,
+            handle_cancel_order=Mock(),
+        )
+        rpc._freqtrade = bot
+        with self.assertRaisesRegex(RPCException, "disabled under prop trading profile"):
+            rpc._rpc_cancel_open_order(1)
+        bot.handle_cancel_order.assert_not_called()
+
+        with self.assertRaisesRegex(RPCException, "Cannot delete active or unsettled trade"):
+            rpc._rpc_delete(trade.id)
 
 
 if __name__ == "__main__":

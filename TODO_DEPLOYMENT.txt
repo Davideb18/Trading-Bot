@@ -3,16 +3,16 @@
 ================================================================================
 Progetto: HyroTrader One-Step ($5.000 USDT) — Branch: bot/prop-one-step
 Server Target: AWS EC2 (51.21.243.61)
-Stato: CODICE VERIFICATO E CORRETTO (218/218 Test OK — Pronto per configurazione)
+Stato: CODICE VERIFICATO E CORRETTO (221/221 Test OK — Pronto per configurazione)
 ================================================================================
 
 [ ] 1. CONFIGURAZIONE ACCOUNT PERSONALE (File: user_data/config_prop_nfix8.json)
     ----------------------------------------------------------------------------
     Nel file config_prop_nfix8.json (sezione "prop_guard"):
-    - [ ] account_id: sostituire null con il tuo UID numerico Bybit (es. 123456789)
+    - [ ] account_id: sostituire null con il tuo UID numerico Bybit (es. "123456789")
     - [ ] challenge_id: sostituire null con l'ID della tua challenge HyroTrader
-    - [ ] challenge_start_utc: inserire la data/ora di inizio (es. "2026-11-07T00:00:00+00:00")
-    - [ ] phase_start_utc: inserire la data/ora di inizio fase (es. "2026-11-07T00:00:00+00:00")
+    - [ ] challenge_start_utc: inserire la data/ora di inizio (es. "2026-11-09T00:00:00+00:00")
+    - [ ] phase_start_utc: inserire la data/ora di inizio fase (es. "2026-11-09T00:00:00+00:00")
     - [ ] (Opzionale) Se usi il Keep-Alive automatico di 24 giorni: impostare "force_entry_enable": true
 
 [ ] 2. FILE SEGRETI E AMBIENTE (File: .env sul server AWS)
@@ -22,7 +22,7 @@ Stato: CODICE VERIFICATO E CORRETTO (218/218 Test OK — Pronto per configurazio
     - [ ] PROP_BYBIT_API_KEY: Chiave API del Subaccount Bybit (Linear USDT)
     - [ ] PROP_BYBIT_API_SECRET: Segreto API Bybit
     - [ ] FREQTRADE_USERNAME: Username per accesso bot
-    - [ ] FREQTRADE_PASSWORD: Password sicura
+    - [ ] FREQTRADE_PASSWORD: Password sicura (almeno 24 caratteri casuali)
     - [ ] FREQTRADE_JWT_TOKEN: Token casuale esadecimale a 64 caratteri (SHA256)
     - [ ] FREQTRADE_WS_TOKEN: Token casuale esadecimale a 64 caratteri (SHA256)
     - [ ] PROP_UID: ID utente Linux su AWS (eseguire 'id -u' su server, es. 1000)
@@ -31,16 +31,19 @@ Stato: CODICE VERIFICATO E CORRETTO (218/218 Test OK — Pronto per configurazio
     - [ ] PROP_EMERGENCY_AUTHORITY="dedicated-account-single-host"
     - [ ] PROP_PRIVATE_DOCKER_NETWORK="dedicated-bridge"
     - [ ] FREQTRADE_API_URL="http://freqtrade_prop:8088/api/v1"
-    - [ ] PROP_INACTIVITY_KEEPALIVE="true" (per attivare apertura+chiusura automatica trade a 24gg)
+    - [ ] PROP_INACTIVITY_KEEPALIVE="true" (opzionale: attiva micro-trade automatico a 24gg di inattività)
 
-[x] 3. RISOLUZIONE BUG FORENSI (COMPLETATO E TESTATO — 218/218 TEST PASSATI)
+[x] 3. RISOLUZIONE AUDIT CODEX MARCO MIGLIORINI (F01–F09 COMPLETATI — 221/221 TEST OK)
     ----------------------------------------------------------------------------
-    - [x] BUG-9 (VERO - RISOLTO): Ordini cancellati senza esecuzione su Bybit (remaining=None) ora accettati.
-    - [x] BUG-10 (VERO - RISOLTO): Retry automatico letture Bybit entro budget 4s e gestione disconnessioni.
-    - [x] BUG-11 (VERO - RISOLTO): Keep-Alive automatico round-trip (apre e chiude subito BTC) a 24 giorni.
-    - [x] BUG-12 (VERO - RISOLTO): Script prop_secure_start.py commission ora crea la baseline iniziale da zero.
-    - [x] BUG-13 (FALSO ALLARME - VERIFICATO): Il DCA funziona già perfettamente (entra al 20%-25% dello slot da 250$, lasciando 187$-200$ per mediare).
-    - [x] BUG-14 (FALSO ALLARME - VERIFICATO): Controllo orologio futuro è un requisito di sicurezza P0.1 voluto e testato.
+    - [x] F01 (Baseline UTC & Rollover): Rollover automatico a mezzanotte UTC con bracket conservativo max(E_pre, E_post) + certificazione automatica su conto Bybit flat con 0 esecuzioni intraday in commissioning.
+    - [x] F02 (Modello P0.6 Validato v2): Modello a 5 componenti (commissioni taker 12 bps, funding 10 bps, slippage 28 bps, gap latenza 250 bps, buffer 30 USDT, cap slot 250 USDT e aggregato 1000 USDT).
+    - [x] F03 (Allineamento db_url Journal): Unificato db_url a sqlite:////freqtrade/user_data/trades_prop.sqlite tra config, Docker Compose, commissioning e core.
+    - [x] F04 (Preflight & Liquidazione Emergenza su Stato Corrotto): Persistenza atomica dell'halt di emergenza e backup .corrupt.json per garantire che EmergencySupervisor liquidi anche con stato iniziale corrotto.
+    - [x] F05 (Valutazione Mark Price): Rimosso ogni fallback a avgPrice o req_rate per le posizioni aperte.
+    - [x] F06 (Protezione RPC Delete & Cancel): Bloccati /delete e /cancel_open_order su trade aperti o non riconciliati sotto profilo prop.
+    - [x] F07 (Keep-Alive Sicuro): Corretto argomento keyword json= su /forceenter e verifica rigorosa del trade_id prima di /forceexit.
+    - [x] F08 (Contabilità HyroTrader): Paginazione completa fail-closed e filtro rigoroso per phase_start_utc.
+    - [x] F09 (Allineamento Build & Docs): Dipendenze pinnate in Dockerfile.riskmanager-prop e documentazione aggiornata.
 
 [ ] 4. COMMISSIONING INIZIALE SUL SERVER (Una Tantum su Volume Pulito)
     ----------------------------------------------------------------------------

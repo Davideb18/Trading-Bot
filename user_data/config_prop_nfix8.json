@@ -1,5 +1,6 @@
 {
     "strategy": "NostalgiaForInfinityX8_Prop",
+    "db_url": "sqlite:////freqtrade/user_data/trades_prop.sqlite",
     "max_open_trades": 4,
     "stake_currency": "USDT",
     "stake_amount": "unlimited",
@@ -217,9 +218,13 @@
         "min_trading_days": 5
     },
     "prop_risk_budget": {
-        "model": "hyrotrader_one_step_notional_stress_v1",
-        "max_aggregate_notional_usdt": 1000.0,
-        "stress_loss_bps": 50.0,
-        "min_headroom_buffer_usdt": 25.0
+        "model": "hyrotrader_one_step_validated_v2",
+        "max_slot_notional_usdt": 750.0,
+        "max_aggregate_notional_usdt": 1200.0,
+        "roundtrip_fee_bps": 12.0,
+        "funding_bound_bps": 10.0,
+        "execution_slippage_bps": 28.0,
+        "latency_gap_stress_bps": 250.0,
+        "min_headroom_buffer_usdt": 30.0
     }
 }

@@ -80,7 +80,7 @@ class Bybit(Exchange):
             if amount:
                 pos_entry = {"symbol": market["symbol"],
                              "side": position["side"], "amount": amount}
-                raw_mark = raw.get("markPrice") or raw.get("avgPrice")
+                raw_mark = raw.get("markPrice")
                 if raw_mark not in (None, "", "0"):
                     pos_entry["mark_price"] = float(raw_mark)
                 snapshot["positions"].append(pos_entry)

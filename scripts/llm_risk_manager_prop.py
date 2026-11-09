@@ -236,7 +236,8 @@ class FreqtradeAPIClient(DeadlineClient):
             if (isinstance(total, int) and len(trades) >= total) or len(page) < limit:
                 return trades
             offset += len(page)
-        return trades
+        logger.warning("Trades pagination incomplete at %d items (total: %s)", len(trades), total)
+        return None
 
     def get_prop_profile(self):
         data = self.get("/show_config")
@@ -871,12 +872,13 @@ class RiskManager(RiskGuard):
                 if market_crash(metrics):
                     self.request_macro_pause(True)
                 elif not all(finite_number(metrics.get(k)) for k in ("btc_1h_pct", "btc_24h_pct")):
-                    self.request_data_fault("Macro prices unavailable")
+                    logger.warning("Macro prices unavailable from Binance; pausing entries until metrics recover")
+                    self.request_macro_pause(True)
                 elif metrics["btc_1h_pct"] > -2.5 and metrics["btc_24h_pct"] > -6.0:
                     self.request_macro_pause(False)
             except Exception:
-                self.request_data_fault("Macro worker failure")
-                logger.exception("Deterministic macro monitor warning")
+                logger.exception("Deterministic macro monitor warning; pausing entries")
+                self.request_macro_pause(True)
             self._shutdown.wait(30)
 
     def _llm_sentinel_loop(self):
@@ -914,39 +916,60 @@ class RiskManager(RiskGuard):
                         else:
                             latest_close_dt = datetime.fromisoformat(str(latest_close_val).replace("Z", "+00:00"))
 
+                phase_start_raw = self.profile.get("phase_start_utc")
+                phase_start = None
+                if phase_start_raw:
+                    try:
+                        phase_start = datetime.fromisoformat(str(phase_start_raw).replace("Z", "+00:00"))
+                    except Exception:
+                        phase_start = None
+
                 inactivity_days = 0
                 if len(open_trades) > 0:
                     inactivity_days = 0
                 elif latest_close_dt:
                     inactivity_days = (now_utc - latest_close_dt).days
+                elif phase_start:
+                    inactivity_days = (now_utc - phase_start).days
 
                 if inactivity_days >= 24 and len(open_trades) == 0 and not self.nuclear_triggered:
-                    logger.critical(
-                        "🚨 HYROTRADER 24-DAY INACTIVITY ALERT (%d days flat). "
-                        "Automated force-entry is disabled by safety policy; manual operator review required before 30d limit.",
-                        inactivity_days
+                    keepalive_enabled = bool(getattr(self, "inactivity_keepalive_enabled", False))
+                    state = getattr(self, "state", {})
+                    healthy_for_keepalive = (
+                        keepalive_enabled
+                        and isinstance(state, dict)
+                        and state.get("data_valid") is True
+                        and not state.get("data_fault")
+                        and not state.get("wake_up_lock")
                     )
-                    if getattr(self, "inactivity_keepalive_enabled", False) or self.profile.get("inactivity_keepalive_enabled", False):
+                    now_ts = now_utc.timestamp()
+                    last_ka = float(getattr(self, "_last_keepalive_ts", 0.0) or 0.0)
+                    if healthy_for_keepalive and (now_ts - last_ka >= 86400.0):
+                        self._last_keepalive_ts = now_ts
+                        logger.warning(
+                            "⚠️ HYROTRADER 24-DAY INACTIVITY KEEP-ALIVE: Executing micro-trade on BTC/USDT:USDT (%d days flat).",
+                            inactivity_days,
+                        )
                         entered = self.rules_api.post(
                             "/forceenter",
-                            {
+                            json={
                                 "pair": "BTC/USDT:USDT",
                                 "side": "long",
                                 "ordertype": "market",
                                 "stakeamount": 15.0,
-                                "entry_tag": "141",
                             },
                         )
                         trade_id = entered.get("trade_id") if isinstance(entered, dict) else None
-                        if trade_id is None:
-                            active = self.rules_api.get_open_trades() or []
-                            if active and isinstance(active[0], dict):
-                                trade_id = active[0].get("trade_id")
                         if trade_id is not None:
-                            self.rules_api.post(
-                                "/forceexit",
-                                {"tradeid": str(trade_id), "ordertype": "market"},
-                            )
+                            self.rules_api.force_exit(trade_id)
+                        else:
+                            logger.error("Keep-alive forceenter did not return a verified trade_id; skipping force_exit.")
+                    else:
+                        logger.critical(
+                            "🚨 HYROTRADER 24-DAY INACTIVITY ALERT (%d days flat). "
+                            "Automated force-entry is disabled by safety policy; manual operator review required before 30d limit.",
+                            inactivity_days
+                        )
                 elif inactivity_days >= 20:
                     logger.warning("⚠️ HyroTrader Inactivity Warning: %d days without trades (forfeiture at 30d).", inactivity_days)
 
@@ -955,7 +978,27 @@ class RiskManager(RiskGuard):
                 qualifying_days = set()
                 min_qualifying_stake = self.initial_balance * 0.05  # $250 on $5,000
 
+                phase_start_raw = self.profile.get("phase_start_utc")
+                phase_start = None
+                if phase_start_raw:
+                    try:
+                        phase_start = datetime.fromisoformat(str(phase_start_raw).replace("Z", "+00:00"))
+                    except Exception:
+                        phase_start = None
+
                 for tr in recent_trades:
+                    open_dt_raw = tr.get("open_date") or tr.get("open_timestamp")
+                    if phase_start and open_dt_raw:
+                        try:
+                            if isinstance(open_dt_raw, (int, float)):
+                                open_dt = datetime.fromtimestamp(open_dt_raw / 1000.0, tz=timezone.utc)
+                            else:
+                                open_dt = datetime.fromisoformat(str(open_dt_raw).replace("Z", "+00:00"))
+                            if open_dt < phase_start:
+                                continue
+                        except Exception:
+                            pass
+
                     close_dt_raw = tr.get("close_date") or tr.get("close_timestamp")
                     if not close_dt_raw:
                         continue
@@ -987,7 +1030,8 @@ class RiskManager(RiskGuard):
 
                 if counted_profit >= target_profit and len(qualifying_days) >= self.profile["min_trading_days"]:
                     logger.info(
-                        "🎉 HYROTRADER ONE-STEP PASSED! Counted profit: $%.2f / $%.2f | Qualifying days: %d/%d.",
+                        "🎯 HyroTrader evaluation criteria met in local ledger: Counted profit: $%.2f / $%.2f | Qualifying days: %d/%d. "
+                        "Official challenge completion requires portal broker audit.",
                         counted_profit, target_profit, len(qualifying_days), self.profile["min_trading_days"]
                     )
                 else:

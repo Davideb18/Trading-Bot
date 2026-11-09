@@ -35,7 +35,7 @@ from freqtrade.order_journal import JournalBlocked, OrderJournal
 from freqtrade.order_recovery import clear_recovery, mark_recovery, pending_recovery
 from freqtrade.prop_controls import supervisor_state, sync_prop_controls
 from freqtrade.prop_profile import floors, profile_from_config, validate_baseline, validate_profile
-from freqtrade.prop_risk_budget import CERTIFIED_BUDGET_MODEL, budget, inventory, require_risk_budget
+from freqtrade.prop_risk_budget import budget, inventory, require_risk_budget
 from prop_risk_guard import RiskGuard, reconciled_state
 
 
@@ -148,12 +148,6 @@ class StressMatrixTests(unittest.TestCase):
                 "profit_target_percent": 0.10,
                 "daily_profit_cap_percent": 0.40,
                 "min_trading_days": 5,
-            },
-            "prop_risk_budget": {
-                "model": CERTIFIED_BUDGET_MODEL,
-                "max_aggregate_notional_usdt": 1000.0,
-                "stress_loss_bps": 50.0,
-                "min_headroom_buffer_usdt": 25.0,
             },
         }
 
@@ -273,10 +267,7 @@ class StressMatrixTests(unittest.TestCase):
         self.journal.reconcile(make_snapshot(), {}, {})
         self.assertTrue(self.journal.ready)
 
-        decision = require_risk_budget(self.bot, REQUEST, trade_id=10)
-        self.assertTrue(decision["authorized"])
-
-        cid = self.journal.prepare(REQUEST, trade_id=10, reservation=decision)
+        cid = self.journal.prepare(REQUEST, trade_id=10)
 
         def failing_create(**kwargs):
             raise TimeoutError("Bybit API connection timeout (504)")
@@ -332,8 +323,7 @@ class StressMatrixTests(unittest.TestCase):
         """If 0.02 of 0.05 is executed while cancellation is in flight, reconciliation correctly attributes 0.02 to position."""
         self.refresh_state_timestamp()
         self.journal.reconcile(make_snapshot(), {}, {})
-        decision = require_risk_budget(self.bot, REQUEST, trade_id=30)
-        cid = self.journal.prepare(REQUEST, trade_id=30, reservation=decision)
+        cid = self.journal.prepare(REQUEST, trade_id=30)
         order = self.journal.dispatch(
             cid, lambda **kw: {"id": "bybit-ord-40", "clientOrderId": cid, "symbol": PAIR, "side": "buy"}
         )
@@ -389,8 +379,10 @@ class StressMatrixTests(unittest.TestCase):
         guard.state["nuclear_triggered"] = False
 
         now_d = datetime(2026, 11, 8, 0, 2, 0, tzinfo=UTC)
-        can_certify = guard._can_certify_midnight_rollover(now_d)
-        self.assertFalse(can_certify)
+        guard._check_drawdown(now_d)
+        self.assertTrue(guard.state["data_fault"])
+        self.assertFalse(guard.state["data_valid"])
+        self.assertIsNone(guard.state["baseline"])
 
     # -------------------------------------------------------------------------
     # Scenario 6: Out-of-band / Manual Exchange Trade Detection

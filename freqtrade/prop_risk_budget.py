@@ -1,12 +1,12 @@
-"""P0.6 admission gate with deterministic aggregate notional & stress-headroom bounds.
+"""P0.6 admission gate: validated 5-component loss/cost risk budget for NFIX8.
 
-Exposure quantities are inventory; unknown bounds never become zero. Equity already
-includes floating P&L; only additional future losses/costs belong against headroom.
-When remote identity attestation and explicit risk budget policy are verified,
-orders within aggregate notional and stress-headroom bounds are authorized.
+Exposure quantities are inventory, not money-at-risk. Unknown bounds never become
+zero. Equity already includes floating P&L; only additional future losses and fees
+belong against headroom.
 """
 
 import json
+import math
 import time
 import uuid
 from decimal import Decimal
@@ -16,8 +16,7 @@ from freqtrade.order_journal import JournalBlocked, quantity
 from freqtrade.prop_controls import supervisor_state, sync_prop_controls
 from freqtrade.prop_profile import floors, number, profile_from_config
 
-
-CERTIFIED_BUDGET_MODEL = "hyrotrader_one_step_notional_stress_v1"
+CERTIFIED_BUDGET_MODEL = "hyrotrader_one_step_validated_v2"
 
 
 def budget(profile, midnight_equity, equity):
@@ -66,90 +65,115 @@ def inventory(journal):
             "future_cost_bound": None, "floating_pnl_in_equity": True}
 
 
-def _evaluate_certified_budget(bot, profile, state, journal, request, detail):
-    """Evaluate aggregate notional cap and stress-loss reserve against operating headroom."""
-    policy = bot.config.get("prop_risk_budget")
-    if (state.get("remote_identity_verified") is not True
-            or not isinstance(policy, dict)
-            or policy.get("model") != CERTIFIED_BUDGET_MODEL):
-        return False
+def _evaluate_validated_budget(profile, policy, request, detail, snapshot):
+    detail["model"] = CERTIFIED_BUDGET_MODEL
+    leverage = request.get("leverage")
+    if leverage is not None and (not number(leverage) or not math.isclose(float(leverage), 1.0, rel_tol=1e-9, abs_tol=1e-9)):
+        detail["reason"] = "leverage_exceeds_one_step_limit"
+        return
+    initial = Decimal(str(profile["initial_balance"]))
+    required_keys = (
+        "max_slot_notional_usdt",
+        "max_aggregate_notional_usdt",
+        "roundtrip_fee_bps",
+        "funding_bound_bps",
+        "execution_slippage_bps",
+        "latency_gap_stress_bps",
+        "min_headroom_buffer_usdt",
+    )
+    for k in required_keys:
+        if not number(policy.get(k)) or float(policy[k]) <= 0:
+            raise ValueError(f"Invalid prop_risk_budget parameter: {k}")
 
-    detail["remote_identity_authorization"] = "verified"
-    ratio = bot.config.get("tradable_balance_ratio", 0.2)
-    if not number(ratio) or not 0 < ratio <= 1.0:
-        raise ValueError("Invalid tradable_balance_ratio")
-    max_theoretical = float(Decimal(str(profile["initial_balance"])) * Decimal(str(ratio)))
-    max_notional = policy.get("max_aggregate_notional_usdt", max_theoretical)
-    stress_bps = policy.get("stress_loss_bps", 50.0)
-    min_buffer = policy.get("min_headroom_buffer_usdt", 25.0)
-    if (not number(max_notional) or not 0 < max_notional <= max_theoretical
-            or not number(stress_bps) or not 25.0 <= stress_bps <= 5000.0
-            or not number(min_buffer) or not 0 <= min_buffer < profile["initial_balance"]):
-        raise ValueError("Invalid prop_risk_budget policy parameters")
+    max_slot_notional = Decimal(str(policy["max_slot_notional_usdt"]))
+    max_agg_notional = Decimal(str(policy["max_aggregate_notional_usdt"]))
+    fee_bps = Decimal(str(policy["roundtrip_fee_bps"]))
+    funding_bps = Decimal(str(policy["funding_bound_bps"]))
+    slippage_bps = Decimal(str(policy["execution_slippage_bps"]))
+    latency_bps = Decimal(str(policy["latency_gap_stress_bps"]))
+    min_buffer = Decimal(str(policy["min_headroom_buffer_usdt"]))
 
-    if request.get("side") != "buy":
-        raise ValueError("Only long entry/DCA orders are permitted by prop_risk_budget")
-    lev = request.get("leverage", 1.0)
-    if lev is not None and (not number(lev) or float(lev) != 1.0):
-        raise ValueError("Leverage must be 1.0x")
+    if (max_slot_notional > initial * Decimal("0.15")
+            or max_agg_notional > initial * Decimal("0.24")
+            or fee_bps < Decimal("12.0")
+            or funding_bps < Decimal("10.0")
+            or slippage_bps < Decimal("25.0")
+            or latency_bps < Decimal("200.0")
+            or min_buffer < Decimal("25.0")
+            or min_buffer >= initial * Decimal(str(profile["daily_limit_percent"]))):
+        raise ValueError("prop_risk_budget policy parameters violate certified safety bounds")
 
     req_rate = request.get("rate") if request.get("rate") is not None else request.get("price")
-    if not number(req_rate) or req_rate <= 0:
-        raise ValueError("Explicit positive order rate required for risk budget")
-    req_qty = quantity(request["amount"])
-    req_notional = Decimal(str(req_qty)) * Decimal(str(req_rate))
+    if not number(req_rate) or float(req_rate) <= 0:
+        raise ValueError("Positive order rate/price required for notional valuation")
+    req_pair = request.get("pair") or request.get("symbol")
+    if not isinstance(req_pair, str) or not req_pair.strip():
+        raise ValueError("Explicit order pair required")
+    req_amount = quantity(request["amount"])
+    req_notional = Decimal(str(req_amount)) * Decimal(str(float(req_rate)))
 
-    snapshot = journal.risk_snapshot
-    committed_notional = Decimal(0)
+    pair_notional = req_notional
+    existing_notional = Decimal("0")
+    for pos in snapshot["positions"]:
+        amt = quantity(pos["amount"])
+        if amt <= 0:
+            continue
+        mp = pos.get("mark_price")
+        if not number(mp) or float(mp) <= 0:
+            raise ValueError(f"Missing verified mark_price for open position {pos.get('symbol')}")
+        pos_val = Decimal(str(amt)) * Decimal(str(float(mp)))
+        existing_notional += pos_val
+        if pos.get("symbol") == req_pair:
+            pair_notional += pos_val
+
+    pending_notional = Decimal("0")
     for order in snapshot["open_orders"]:
         if order.get("reduceOnly") is True:
             continue
-        rem = Decimal(str(quantity(order["amount"]))) - Decimal(str(quantity(order["filled"])))
-        order_price = order.get("price") or order.get("average")
-        if not number(order_price) or order_price <= 0:
-            raise ValueError("Unverifiable open order price for risk budget")
-        committed_notional += rem * Decimal(str(order_price))
+        rem = quantity(order["amount"]) - quantity(order["filled"])
+        if rem <= 0:
+            continue
+        op = order.get("price")
+        if not number(op) or float(op) <= 0:
+            raise ValueError(f"Missing limit price for open entry order {order.get('id')}")
+        ord_val = Decimal(str(rem)) * Decimal(str(float(op)))
+        pending_notional += ord_val
+        if order.get("symbol") == req_pair:
+            pair_notional += ord_val
 
-    for pos in snapshot["positions"]:
-        pos_qty = Decimal(str(quantity(pos["amount"])))
-        pos_price = pos.get("mark_price") or pos.get("price")
-        if (not number(pos_price) or pos_price <= 0) and pos.get("symbol") == request.get("pair"):
-            pos_price = req_rate
-        if not number(pos_price) or pos_price <= 0:
-            raise ValueError("Unverifiable position mark price for risk budget")
-        committed_notional += pos_qty * Decimal(str(pos_price))
-
-    aggregate_notional = committed_notional + req_notional
-    cost_bound = (aggregate_notional * Decimal(str(stress_bps))) / Decimal("10000")
-    loss_bound = cost_bound + Decimal(str(min_buffer))
+    aggregate_notional = existing_notional + pending_notional + req_notional
+    total_cost_bps = fee_bps + funding_bps
+    total_loss_bps = slippage_bps + latency_bps
+    future_cost_bound = (aggregate_notional * total_cost_bps) / Decimal("10000")
+    future_loss_bound = (aggregate_notional * total_loss_bps) / Decimal("10000")
+    required_headroom = future_cost_bound + future_loss_bound + min_buffer
 
     detail.update(
-        model=CERTIFIED_BUDGET_MODEL,
-        committed_notional=float(committed_notional),
         requested_notional=float(req_notional),
+        pair_notional=float(pair_notional),
+        existing_notional=float(existing_notional),
+        pending_notional=float(pending_notional),
         aggregate_notional=float(aggregate_notional),
-        max_aggregate_notional=float(max_notional),
-        future_cost_bound=float(cost_bound),
-        future_loss_bound=float(loss_bound),
+        future_cost_bound=float(future_cost_bound),
+        future_loss_bound=float(future_loss_bound),
+        loss_bound=float(future_loss_bound + future_cost_bound),
+        min_headroom_buffer=float(min_buffer),
+        required_headroom=float(required_headroom),
     )
 
-    if detail["unobserved_reservations"]:
-        detail["reason"] = "unobserved_reservations_pending"
-        return False
-    if aggregate_notional > Decimal(str(max_notional)):
+    if pair_notional > max_slot_notional:
+        detail["reason"] = "slot_notional_cap_exceeded"
+    elif aggregate_notional > max_agg_notional:
         detail["reason"] = "aggregate_notional_cap_exceeded"
-        return False
-    if Decimal(str(detail["headroom"])) < loss_bound:
+    elif required_headroom > Decimal(str(detail["headroom"])):
         detail["reason"] = "insufficient_operating_headroom_for_stress_bound"
-        return False
-
-    detail["authorized"] = True
-    detail["reason"] = "authorized"
-    return True
+    else:
+        detail["authorized"] = True
+        detail["reason"] = "authorized"
 
 
 def require_risk_budget(bot, request, trade_id=None):
-    """Authorize within verified notional/headroom bounds, or persist a denied intent atomically.
+    """Evaluate P0.6 risk budget and either return an authorized reservation or fail closed.
 
     Reductions bypass this gate; P0.2-P0.5 still govern their execution safety.
     """
@@ -176,12 +200,21 @@ def require_risk_budget(bot, request, trade_id=None):
                 raise ValueError("Invalid requested quantity")
             detail.update(budget(profile, state["baseline"]["equity"], state["last_equity"]))
             detail.update(inventory(journal))
-            detail["reason"] = ("operating_headroom_exhausted" if detail["headroom"] == 0
-                                else "uncertified_aggregate_loss_and_cost_model")
-            detail["remote_identity_authorization"] = "not_established"
-            if detail["headroom"] > 0 and _evaluate_certified_budget(
-                    bot, profile, state, journal, request, detail):
-                return detail
+            remote_verified = state.get("remote_identity_verified") is True
+            detail["remote_identity_authorization"] = "verified" if remote_verified else "not_established"
+            policy = bot.config.get("prop_risk_budget")
+            if detail["unobserved_reservations"]:
+                detail["reason"] = "unobserved_reservations_pending"
+            elif detail["headroom"] == 0:
+                detail["reason"] = "operating_headroom_exhausted"
+            elif not isinstance(policy, dict) or policy.get("model") != CERTIFIED_BUDGET_MODEL:
+                detail["reason"] = "uncertified_aggregate_loss_and_cost_model"
+            elif not remote_verified:
+                detail["reason"] = "remote_identity_not_verified"
+            else:
+                _evaluate_validated_budget(profile, policy, request, detail, journal.risk_snapshot)
+                if detail.get("authorized") is True:
+                    return detail
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             detail["reason"] = "unverified_risk_context: " + str(exc)
         cid = "ftj" + uuid.uuid4().hex

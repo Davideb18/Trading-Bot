@@ -240,22 +240,23 @@ class StrategyTests(unittest.TestCase):
 class WalletCapitalGateTests(unittest.TestCase):
     def test_stale_supervisor_blocks_dca_capital_without_changing_strategy(self):
         from freqtrade.wallets import Wallets
+        from test_prop_profile import configured_account, baseline
+        from prop_risk_guard import reconciled_state
+        from freqtrade.prop_profile import profile_from_config
 
         with tempfile.TemporaryDirectory(dir=ROOT / "user_data/forensic") as temp:
             wallet = Wallets.__new__(Wallets)
-            wallet._config = {"prop_guard_enabled": True, "user_data_dir": temp}
+            cfg = configured_account()
+            cfg.update(prop_guard_enabled=True, user_data_dir=temp)
+            wallet._config = cfg
             wallet._is_backtest = False
             wallet._stake_currency = "USDT"
             wallet.get_free = MagicMock(return_value=5000)
             wallet.get_total_stake_amount = MagicMock(return_value=100)
             path = Path(temp) / "risk_manager_prop_state.json"
-            state = {
-                "schema_version": 1,
-                "last_updated": NOW.isoformat(),
-                "nuclear_triggered": False,
-                "data_fault": False,
-                "wake_up_lock": False,
-            }
+            profile = profile_from_config(cfg)
+            state = reconciled_state(profile, baseline(profile, 5000, NOW), NOW, halted=False)
+            state["wake_up_lock"] = False
             with (
                 patch("freqtrade.wallets.dt_now", return_value=NOW),
                 patch("freqtrade.wallets.Trade.total_open_trades_stakes", return_value=40),

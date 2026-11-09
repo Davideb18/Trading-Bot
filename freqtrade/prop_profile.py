@@ -103,6 +103,18 @@ def validate_baseline(baseline, profile, now):
             or not captured <= verified <= now
             or utc_time(profile["phase_start_utc"]) > now):
         raise ValueError("Baseline must describe this UTC midnight and an active phase")
+    if baseline["source"] == "bybit_v5_midnight_conservative_bracket":
+        pre_eq = baseline.get("pre_midnight_equity")
+        post_eq = baseline.get("post_midnight_equity")
+        if (not number(pre_eq) or pre_eq <= 0 or not number(post_eq) or post_eq <= 0
+                or Decimal(str(baseline["equity"])) < max(Decimal(str(pre_eq)), Decimal(str(post_eq)))):
+            raise ValueError("Conservative midnight bracket must equal or exceed max(pre, post) equity")
+        pre_at = utc_time(baseline["pre_midnight_at"])
+        post_at = utc_time(baseline["post_midnight_at"])
+        if (not pre_at <= captured <= post_at <= verified
+                or (captured - pre_at).total_seconds() > 60
+                or (post_at - captured).total_seconds() > 60):
+            raise ValueError("Midnight bracket observations outside certified window")
     return baseline
 
 

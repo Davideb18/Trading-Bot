@@ -1,17 +1,23 @@
 # P0.6: admission control and risk model
 
-> **Update (BUG-5 / certified model).** Entries, DCA and replacements are now
-> authorized only when ALL hold: `prop_risk_budget.model ==
-> "hyrotrader_one_step_notional_stress_v1"`, supervisor state reports
-> `remote_identity_verified` (recomputed every guard cycle, never latched),
-> zero unobserved reservations, aggregate notional (positions at mark + open
-> entry orders + request) <= `max_aggregate_notional_usdt` (<= initial balance x
-> `tradable_balance_ratio`, i.e. 1,000 USDT), and operating headroom >=
-> `aggregate_notional x stress_loss_bps / 10000 + min_headroom_buffer_usdt`.
-> Requested quantities are never resized; failing any check records a
-> `risk_denied` intent. An authorized decision is persisted verbatim in the
-> held `risk_reservations` row, including its `loss_bound`. Without the policy
-> or remote attestation the original refuse-all behaviour below still applies.
+> **Update (Validated 5-Component Risk Model `hyrotrader_one_step_validated_v2`).**
+> Entries, DCA and replacements are authorized only when ALL hold:
+> 1. `prop_risk_budget.model == "hyrotrader_one_step_validated_v2"`,
+> 2. Supervisor state reports `remote_identity_verified == true` (recomputed every guard cycle, never latched),
+> 3. Zero unobserved reservations (`unobserved_reservations == []`),
+> 4. Leverage is strictly `1.0x`,
+> 5. Every open position has a verified positive `mark_price` from Bybit V5 (no fallback to `avgPrice` or `req_rate`),
+> 6. Pair notional (open position at mark + open entry orders at limit + requested order) `<= max_slot_notional_usdt` (`<= 15%` of `initial_balance`, i.e. `750.0` USDT, accommodating NFIX8 `system_v4` initial stake + full grinding/rebuy),
+> 7. Aggregate notional across all pairs `<= max_aggregate_notional_usdt` (`<= 24%` of `initial_balance`, i.e. `1,200.0` USDT, accommodating the `1,000.0` USDT non-compounding stake pool plus unrealized profit appreciation on open positions),
+> 8. Operating headroom `>= future_cost_bound + future_loss_bound + min_headroom_buffer_usdt`, where:
+>    - `future_cost_bound = aggregate_notional * (roundtrip_fee_bps + funding_bound_bps) / 10000` (with `roundtrip_fee_bps >= 12.0`, `funding_bound_bps >= 10.0`),
+>    - `future_loss_bound = aggregate_notional * (execution_slippage_bps + latency_gap_stress_bps) / 10000` (with `execution_slippage_bps >= 25.0`, `latency_gap_stress_bps >= 200.0`),
+>    - `min_headroom_buffer_usdt >= 25.0` USDT (`30.0` USDT configured).
+>
+> Requested quantities are never resized; failing any check records a `risk_denied`
+> intent. An authorized decision is persisted verbatim in the held `risk_reservations`
+> row, including its decomposed `future_cost_bound`, `future_loss_bound` and `loss_bound`.
+> Without the policy or remote attestation the original refuse-all behaviour below still applies.
 
 Original P0.6 baseline: the gate blocks **all new One-Step entries, DCA and
 replacements** unless the certified model above authorizes them.

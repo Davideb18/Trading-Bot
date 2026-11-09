@@ -425,6 +425,22 @@ except JournalBlocked:
         self.assertTrue(guard.state["data_fault"])
         self.assertFalse(guard.nuclear_triggered)
 
+    def test_corrupt_or_missing_state_file_still_persists_halt_and_liquidates_on_overall_floor_breach(self):
+        self.state_file.write_text("{corrupt-state-json")
+        self.adapter.equity_value = 4740  # Operating overall floor on 5000 balance
+        facade = IndependentRiskAPI(self.adapter, Mock())
+        guard = RiskGuard(facade, self.state_file, profile=self.profile, emergency=self.supervisor)
+        self.assertIsNotNone(guard.state_error)
+        self.assertTrue(guard._check_drawdown(self.now))
+        self.assertTrue(guard.nuclear_triggered)
+        self.assertEqual(self.state_file.with_suffix(".corrupt.json").read_text(), "{corrupt-state-json")
+        persisted = json.loads(self.state_file.read_text())
+        self.assertTrue(persisted["nuclear_triggered"])
+        self.assertEqual(len(self.adapter.sent), 1)
+        self.assertTrue(guard._check_drawdown(self.now))
+        self.assertTrue(guard.state["liquidation_confirmed"])
+        self.assertTrue(json.loads(self.state_file.read_text())["liquidation_confirmed"])
+
 
 class AdapterTests(unittest.TestCase):
     def setUp(self):
@@ -578,6 +594,17 @@ class AdapterTests(unittest.TestCase):
                 pair=PAIR, side="buy", amount=10, ordertype="market", reduceOnly=True, client_order_id="cid1"
             )
         self.api.create_order.assert_called_once()
+
+    def test_certify_flat_midnight_baseline_succeeds_only_when_flat_and_zero_intraday_activity(self):
+        now = datetime(2026, 11, 5, 8, 30, tzinfo=UTC)
+        certified = self.adapter.certify_flat_midnight_baseline(now)
+        self.assertEqual(certified["source"], "bybit_v5_flat_account_verified")
+        self.assertEqual(certified["equity"], 4820.0)
+        self.assertTrue(certified["confirmed"])
+        # If intraday execution exists, must fail closed
+        self.api.privateGetV5ExecutionList.return_value = self.page([{"execId": "e1"}])
+        with self.assertRaises(UnverifiedAccount):
+            self.adapter.certify_flat_midnight_baseline(now)
 
 
 if __name__ == "__main__":

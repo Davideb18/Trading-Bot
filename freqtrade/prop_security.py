@@ -14,6 +14,9 @@ class DeploymentRejected(ValueError):
     pass
 
 
+DEFAULT_PROP_DB_URL = 'sqlite:////freqtrade/user_data/trades_prop.sqlite'
+
+
 def secret(value, label):
     bad = ('password', 'changeme', 'change-me', 'placeholder', 'supersecret',
            'zeroburn', 'example', 'your_', 'your-', 'replace', 'dummy', 'test', 'secret')
@@ -135,12 +138,13 @@ def validate_deployment(config, exchange, environ=None, *, role='core'):
     profile = _validate_common(config, exchange, env)
     root = Path(config['user_data_dir']).absolute()
     private_path(root, True)
-    for path in (root / 'logs', root / 'trades_prop.sqlite'):
-        if path.exists() or path.is_symlink():
-            private_path(path, path.name == 'logs')
-    if (root / 'logs').is_dir():
-        for path in (root / 'logs').iterdir():
-            private_path(path)
+    if role == 'core':
+        for path in (root / 'logs', root / 'trades_prop.sqlite'):
+            if path.exists() or path.is_symlink():
+                private_path(path, path.name == 'logs')
+        if (root / 'logs').is_dir():
+            for path in (root / 'logs').iterdir():
+                private_path(path)
     private_path(root / 'config_prop_nfix8.json')
     for name in ('risk_manager_prop_state.json', 'risk_manager_prop_baseline.json'):
         target = root / name
@@ -167,9 +171,11 @@ def validate_deployment(config, exchange, environ=None, *, role='core'):
                     raise ValueError()
         with closing(sqlite3.connect((journal / 'orders.sqlite').as_uri() + '?mode=ro', uri=True, timeout=.05)) as db:
             binding = json.loads(db.execute('SELECT value FROM binding WHERE id=1').fetchone()[0])
+        db_url = config.get('db_url') or DEFAULT_PROP_DB_URL
         if (any(binding.get(k) != profile[k] for k in (
                 'profile_id', 'account_id', 'challenge_id', 'phase_id', 'exchange', 'environment', 'currency'))
-                or binding.get('key_fingerprint') != hashlib.sha256(exchange['key'].encode()).hexdigest()):
+                or binding.get('key_fingerprint') != hashlib.sha256(exchange['key'].encode()).hexdigest()
+                or binding.get('database') != db_url):
             raise ValueError()
     except Exception:
         raise DeploymentRejected('Unverifiable state or journal identity') from None
@@ -212,7 +218,10 @@ def commission_deployment(config, exchange, *, baseline, now=None, halted=False,
     os.chmod(journal_dir, 0o700)
     identity = {k: profile[k] for k in (
         'profile_id', 'account_id', 'challenge_id', 'phase_id', 'exchange', 'environment', 'currency')}
-    identity['key_fingerprint'] = hashlib.sha256(exchange['key'].encode()).hexdigest()
+    identity.update(
+        key_fingerprint=hashlib.sha256(exchange['key'].encode()).hexdigest(),
+        database=config.get('db_url') or DEFAULT_PROP_DB_URL,
+    )
     journal = OrderJournal(journal_dir, identity)
     journal.close()
     for item in journal_dir.iterdir():

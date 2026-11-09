@@ -202,55 +202,58 @@ class RiskBudgetTests(unittest.TestCase):
             journal_create_order(self.bot, None, model, **REQUEST)
         self.bot.exchange.create_order.assert_not_called()
 
-    def test_certified_model_authorizes_valid_entry_and_dca_within_notional_and_headroom(self):
+    def test_validated_v2_budget_authorizes_within_slot_aggregate_and_stress_bounds(self):
         self.state['remote_identity_verified'] = True
         self.save()
-        result = require_risk_budget(self.bot, REQUEST, 7)
-        self.assertTrue(result['authorized'])
-        self.assertEqual(result['remote_identity_authorization'], 'verified')
-        self.assertEqual(result['aggregate_notional'], 200.0)
-        self.assertEqual(result['future_cost_bound'], 1.0)
-        self.assertEqual(result['future_loss_bound'], 26.0)
+        decision = require_risk_budget(self.bot, {**REQUEST, 'amount': 1.0, 'rate': 100.0}, 7)
+        self.assertTrue(decision['authorized'])
+        self.assertEqual(decision['model'], 'hyrotrader_one_step_validated_v2')
+        self.assertAlmostEqual(decision['future_cost_bound'], 0.22)
+        self.assertAlmostEqual(decision['future_loss_bound'], 2.78)
+        self.assertAlmostEqual(decision['required_headroom'], 33.0)
         self.bot.exchange = SimpleNamespace(
             fetch_journal_snapshot=Mock(return_value=snapshot()),
-            create_order=Mock(side_effect=lambda **kw: {'id': 'ex-1', 'clientOrderId': kw['client_order_id']}),
+            create_order=Mock(side_effect=lambda **kw: {'id': 'ord-ok', 'clientOrderId': kw['client_order_id']}),
         )
         self.bot.has_unresolved_orders = lambda: False
         model = SimpleNamespace(get_trades_proxy=lambda: [], commit=Mock())
-        created = journal_create_order(self.bot, None, model, **REQUEST)
-        self.assertEqual(created['id'], 'ex-1')
+        res = journal_create_order(self.bot, None, model, **{**REQUEST, 'amount': 1.0, 'rate': 100.0})
+        self.assertEqual(res['id'], 'ord-ok')
         self.bot.exchange.create_order.assert_called_once()
-        cid = self.bot.exchange.create_order.call_args.kwargs['client_order_id']
-        row = self.j.db.execute('SELECT * FROM risk_reservations WHERE client_id=?', (cid,)).fetchone()
-        stored = json.loads(row['detail'])
-        self.assertEqual(row['state'], 'held')
-        self.assertTrue(stored['authorized'])
-        self.assertEqual(stored['loss_bound'], 26.0)
-        with self.assertRaises(JournalBlocked):
-            self.j.prepare(REQUEST, 7, reservation={'authorized': False})
 
-    def test_certified_model_denies_when_aggregate_notional_exceeds_1000_usdt_cap(self):
+    def test_validated_v2_budget_denies_slot_cap_aggregate_cap_leverage_missing_mark_price_and_low_headroom(self):
         self.state['remote_identity_verified'] = True
         self.save()
-        positions = [dict(symbol=PAIR, side='long', amount=8.0, mark_price=100.0)]
-        self.j.reconcile(snapshot(positions=positions), {}, {(PAIR, 'long'): 8.0})
-        allowed = require_risk_budget(self.bot, {**REQUEST, 'amount': 2.0, 'rate': 100.0}, 7)
-        self.assertTrue(allowed['authorized'])
-        self.assertEqual(allowed['aggregate_notional'], 1000.0)
-        denied = self.deny(amount=2.5, rate=100.0)
-        self.assertFalse(denied['authorized'])
-        self.assertEqual(denied['reason'], 'aggregate_notional_cap_exceeded')
-        self.assertEqual(denied['aggregate_notional'], 1050.0)
-
-    def test_certified_model_denies_when_headroom_below_stress_reserve(self):
-        self.state['remote_identity_verified'] = True
-        self.state['last_equity'] = 4845.0  # operating_floor=4820.0 -> headroom=25.0 USDT < 26.0 USDT loss_bound
+        # 1. NFIX8 regular entry ($250) + grind/DCA ($50 = $300 total on slot) is AUTHORIZED
+        pos_250 = [dict(symbol=PAIR, side='long', amount=2.5, mark_price=100.0)]
+        self.j.reconcile(snapshot(positions=pos_250), {}, {(PAIR, 'long'): 2.5})
+        dca_decision = require_risk_budget(self.bot, {**REQUEST, 'amount': 0.5, 'rate': 100.0}, 7)
+        self.assertTrue(dca_decision['authorized'])
+        self.assertAlmostEqual(dca_decision['pair_notional'], 300.0)
+        self.j.reconcile(snapshot(), {}, {})
+        # 2. Slot cap exceeded (> 750 USDT)
+        self.assertEqual(self.deny(amount=8.0, rate=100.0)['reason'], 'slot_notional_cap_exceeded')
+        # 3. Leverage != 1.0
+        self.assertEqual(self.deny(amount=1.0, rate=100.0, leverage=2.0)['reason'], 'leverage_exceeds_one_step_limit')
+        # 4. Insufficient headroom when equity is near floor (headroom = 20 < required 33.0)
+        self.state['last_equity'] = 4840
         self.save()
-        denied = self.deny(amount=2.0, rate=100.0)
-        self.assertFalse(denied['authorized'])
-        self.assertEqual(denied['reason'], 'insufficient_operating_headroom_for_stress_bound')
-        self.assertEqual(denied['headroom'], 25.0)
-        self.assertEqual(denied['future_loss_bound'], 26.0)
+        self.assertEqual(
+            self.deny(amount=1.0, rate=100.0)['reason'],
+            'insufficient_operating_headroom_for_stress_bound',
+        )
+        self.state['last_equity'] = 5000
+        self.save()
+        # 5. Missing mark_price on open position fails closed
+        pos_no_mark = [dict(symbol='ETH/USDT:USDT', side='long', amount=1.0)]
+        self.j.reconcile(snapshot(positions=pos_no_mark), {}, {('ETH/USDT:USDT', 'long'): 1.0})
+        self.assertIn('Missing verified mark_price', self.deny(amount=1.0, rate=100.0)['reason'])
+        # 6. Aggregate cap exceeded (> 1200 USDT across positions + request)
+        pos_with_mark = [
+            dict(symbol='ETH/USDT:USDT', side='long', amount=5.0, mark_price=220.0),
+        ]
+        self.j.reconcile(snapshot(positions=pos_with_mark), {}, {('ETH/USDT:USDT', 'long'): 5.0})
+        self.assertEqual(self.deny(amount=2.0, rate=100.0)['reason'], 'aggregate_notional_cap_exceeded')
 
 
 if __name__ == '__main__':

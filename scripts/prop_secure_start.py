@@ -8,11 +8,35 @@ from pathlib import Path
 
 from freqtrade.prop_profile import profile_from_config
 from freqtrade.prop_security import (
+    DeploymentRejected,
     commission_deployment,
     private_path,
     supervisor_config,
     validate_deployment,
 )
+
+
+def _acquire_verified_flat_baseline(config, profile):
+    """Certify 00:00 UTC baseline from Bybit V5 only when account is flat with 0 intraday activity."""
+    try:
+        import ccxt
+        from freqtrade.supervisor_bybit import SupervisorBybit
+
+        exchange = config['exchange']
+        api = ccxt.bybit({
+            'apiKey': exchange['key'],
+            'secret': exchange['secret'],
+            'timeout': 2000,
+            'enableRateLimit': True,
+            'maxRetriesOnFailure': 0,
+            'options': {'defaultType': 'swap', 'defaultSubType': 'linear', 'defaultSettle': 'USDT'},
+        })
+        api.enable_demo_trading(profile['environment'] == 'demo')
+        adapter = SupervisorBybit(api, profile)
+        with adapter.operation_budget(10.0):
+            return adapter.certify_flat_midnight_baseline(datetime.now(timezone.utc))
+    except Exception:
+        raise DeploymentRejected('Missing or unverifiable baseline record for commissioning') from None
 
 
 def main():
@@ -29,25 +53,20 @@ def main():
     private_path(path)
     config = supervisor_config(json.loads(path.read_text()))
     config['user_data_dir'] = root
+    args = sys.argv[2:]
+    for idx, arg in enumerate(args):
+        if arg == '--db-url' and idx + 1 < len(args):
+            config['db_url'] = args[idx + 1]
+        elif arg.startswith('--db-url='):
+            config['db_url'] = arg.split('=', 1)[1]
     if role == 'commission':
         baseline_path = root / 'risk_manager_prop_baseline.json'
         if baseline_path.exists():
             private_path(baseline_path)
             baseline = json.loads(baseline_path.read_text(encoding='utf-8'))
         else:
-            now_utc = datetime.now(timezone.utc)
-            midnight = datetime(now_utc.year, now_utc.month, now_utc.day, tzinfo=timezone.utc)
             profile = profile_from_config(config)
-            equity = float(os.environ.get('PROP_COMMISSION_EQUITY', profile['initial_balance']))
-            baseline = {
-                'schema_version': 1,
-                'profile': profile,
-                'equity': equity,
-                'captured_at': midnight.isoformat(),
-                'verified_at': now_utc.isoformat(),
-                'source': 'bybit_wallet_coin_equity',
-                'confirmed': True,
-            }
+            baseline = _acquire_verified_flat_baseline(config, profile)
         commission_deployment(config, config['exchange'], baseline=baseline)
         return
     validate_deployment(config, config['exchange'], role=role)
