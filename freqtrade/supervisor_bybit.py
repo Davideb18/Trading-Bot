@@ -189,35 +189,12 @@ class SupervisorBybit:
                 "checked_ms": int(time.time() * 1000)}
 
     def certify_flat_midnight_baseline(self, now_utc=None):
-        """Certify 00:00 UTC baseline only if account is flat and has zero intraday activity."""
-        from datetime import UTC, datetime
+        """A flat wallet does not prove historical equity or absence of transfers.
 
-        now = (now_utc or datetime.now(UTC)).astimezone(UTC)
-        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        midnight_ms = int(midnight.timestamp() * 1000)
-        snap = self.snapshot()
-        if snap["positions"] or snap["orders"]:
-            raise UnverifiedAccount("Cannot auto-certify midnight baseline on non-flat account")
-        executions = self._pages(
-            self.api.privateGetV5ExecutionList,
-            {"settleCoin": "USDT", "startTime": midnight_ms},
-        )
-        if executions:
-            raise UnverifiedAccount("Intraday executions exist since 00:00 UTC; explicit baseline required")
-        history = self._pages(
-            self.api.privateGetV5OrderHistory,
-            {"settleCoin": "USDT", "startTime": midnight_ms},
-        )
-        if history:
-            raise UnverifiedAccount("Intraday order history exists since 00:00 UTC; explicit baseline required")
-        return {
-            "profile": self.profile,
-            "equity": float(snap["equity"]),
-            "captured_at": midnight.isoformat(),
-            "verified_at": now.isoformat(),
-            "source": "bybit_v5_flat_account_verified",
-            "confirmed": True,
-        }
+        No request is made: this adapter has no complete, verified capital-flow
+        reconstruction contract. Existing caller must supply reviewed evidence.
+        """
+        raise UnverifiedAccount("Historical midnight equity cannot be inferred from a flat account")
 
     def lookup(self, pair, *, client_id=None, order_id=None):
         market = self.market(pair)

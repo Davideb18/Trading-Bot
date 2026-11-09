@@ -291,43 +291,10 @@ class SecurityTests(unittest.TestCase):
             with self.assertRaises(security.DeploymentRejected):
                 start.main()
 
-    def test_secure_start_commission_auto_certifies_verified_flat_bybit_account(self):
+    def test_commission_cannot_auto_certify_a_flat_wallet(self):
         import prop_secure_start as start
-        from datetime import datetime, timezone
-        fresh = Path(tempfile.mkdtemp())
-        self.addCleanup(lambda: __import__('shutil').rmtree(fresh, ignore_errors=True))
-        os.chmod(fresh, 0o700)
-        cfg_file = fresh / 'config_prop_nfix8.json'
-        cfg_file.write_text(json.dumps(configured_account()))
-        os.chmod(cfg_file, 0o600)
-        env = dict(self.env, PROP_DATA_DIR=str(fresh))
-        now = datetime.now(timezone.utc)
-        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        verified_baseline = {
-            'profile': self.profile,
-            'equity': 5000.0,
-            'captured_at': midnight.isoformat(),
-            'verified_at': now.isoformat(),
-            'source': 'bybit_v5_flat_account_verified',
-            'confirmed': True,
-        }
-        custom_db = 'sqlite:////freqtrade/user_data/trades_prop.sqlite'
-        with patch.object(start, '_acquire_verified_flat_baseline', return_value=verified_baseline) as acquire, \
-                patch.object(sys, 'argv', ['preflight', 'commission', '--db-url', custom_db]), \
-                patch.dict(os.environ, env, clear=True):
-            start.main()
-            acquire.assert_called_once()
-        self.assertTrue((fresh / 'risk_manager_prop_baseline.json').is_file())
-        self.assertTrue((fresh / 'risk_manager_prop_state.json').is_file())
-        self.assertTrue((fresh / 'order_journal' / 'orders.sqlite').is_file())
-        cfg = security.supervisor_config(configured_account(), env)
-        cfg['user_data_dir'] = fresh
-        cfg['db_url'] = custom_db
-        self.assertEqual(security.validate_deployment(cfg, cfg['exchange'], env, role='core'), self.profile)
-        from freqtrade.journal_execution import open_journal
-        j = open_journal(cfg, cfg['exchange'])
-        self.assertIsNotNone(j)
-        j.close()
+        with self.assertRaises(security.DeploymentRejected):
+            start._acquire_verified_flat_baseline(self.config, self.profile)
 
 
 if __name__ == '__main__':

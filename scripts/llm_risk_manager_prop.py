@@ -55,10 +55,19 @@ LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 LOG_DIR = Path(__file__).resolve().parent.parent / "user_data" / "logs"
 def configure_logging():
-    LOG_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    handlers = [logging.StreamHandler(sys.stderr)]
+    degraded = False
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+        handlers.append(logging.FileHandler(LOG_DIR / "risk_manager_prop.log", mode="a"))
+    except OSError:
+        degraded = True
     logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, datefmt=LOG_DATE_FORMAT,
-                        handlers=[logging.StreamHandler(sys.stdout),
-                                  logging.FileHandler(LOG_DIR / "risk_manager_prop.log", mode="a")])
+                        handlers=handlers, force=True)
+    if degraded:
+        logging.getLogger(__name__).error(
+            "File logging unavailable; stderr only. Monitoring health is not established by logging startup.")
+    return not degraded
 logger = logging.getLogger("HyroTrader.RiskManagerProp")
 
 # ==================================================================================

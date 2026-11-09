@@ -103,18 +103,22 @@ def validate_baseline(baseline, profile, now):
             or not captured <= verified <= now
             or utc_time(profile["phase_start_utc"]) > now):
         raise ValueError("Baseline must describe this UTC midnight and an active phase")
-    if baseline["source"] == "bybit_v5_midnight_conservative_bracket":
-        pre_eq = baseline.get("pre_midnight_equity")
-        post_eq = baseline.get("post_midnight_equity")
-        if (not number(pre_eq) or pre_eq <= 0 or not number(post_eq) or post_eq <= 0
-                or Decimal(str(baseline["equity"])) < max(Decimal(str(pre_eq)), Decimal(str(post_eq)))):
-            raise ValueError("Conservative midnight bracket must equal or exceed max(pre, post) equity")
-        pre_at = utc_time(baseline["pre_midnight_at"])
-        post_at = utc_time(baseline["post_midnight_at"])
-        if (not pre_at <= captured <= post_at <= verified
-                or (captured - pre_at).total_seconds() > 60
-                or (post_at - captured).total_seconds() > 60):
-            raise ValueError("Midnight bracket observations outside certified window")
+    evidence = baseline.get("evidence")
+    # An explicit reviewed historical record is an external trust boundary, not
+    # proof reconstructed by polling. A manually entered scalar/confirmed flag,
+    # a flat current wallet or a pre/post bracket cannot satisfy this contract.
+    if (baseline.get("status") != "verified"
+            or baseline["source"] in ("bybit_v5_midnight_conservative_bracket",
+                                      "bybit_v5_flat_account_verified",
+                                      "bybit_wallet_coin_equity_midnight_rollover")
+            or not isinstance(evidence, dict)
+            or evidence.get("kind") != "historical_account_equity"
+            or evidence.get("reviewed") is not True
+            or evidence.get("account_id") != profile["account_id"]
+            or not isinstance(evidence.get("reference"), str) or not evidence["reference"].strip()
+            or not number(evidence.get("equity")) or evidence["equity"] != baseline["equity"]
+            or utc_time(evidence["observed_at"]) != captured):
+        raise ValueError("Reviewed historical midnight equity evidence required")
     return baseline
 
 

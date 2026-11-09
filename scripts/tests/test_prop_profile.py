@@ -35,9 +35,12 @@ def configured_account():
 
 
 def baseline(profile, equity=5000, now=NOW):
-    return {"profile": profile, "confirmed": True, "source": "offline test evidence",
-            "captured_at": now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat(),
-            "verified_at": now.isoformat(), "equity": equity}
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    return {"profile": profile, "confirmed": True, "status": "verified", "source": "offline test evidence",
+            "captured_at": midnight, "verified_at": now.isoformat(), "equity": equity,
+            "evidence": {"kind": "historical_account_equity", "reviewed": True,
+                         "account_id": profile["account_id"], "reference": "offline-fixture",
+                         "equity": equity, "observed_at": midnight}}
 
 
 class GuardTests(unittest.TestCase):
@@ -134,25 +137,27 @@ class GuardTests(unittest.TestCase):
         self.assertEqual(self.guard.state["operating_daily_floor"], 5020)
         self.assertTrue(self.authorized(tomorrow))
 
-    def test_midnight_rollover_conservative_bracket_uses_max_pre_post_equity(self):
-        pre_midnight = datetime(2026, 11, 5, 23, 59, 58, tzinfo=UTC)
-        post_midnight = datetime(2026, 11, 6, 0, 0, 3, tzinfo=UTC)
-        self.install(equity=5000, now=pre_midnight)
+    def test_midnight_bracket_is_only_an_estimate_and_cannot_authorize(self):
+        pre = datetime(2026, 11, 5, 23, 59, 58, tzinfo=UTC)
+        post = datetime(2026, 11, 6, 0, 0, 3, tzinfo=UTC)
+        self.install(equity=5000, now=pre)
         guard = RiskGuard(self.api, self.path, profile=self.profile, emergency=Mock())
         guard.emergency.step.return_value = False
-        self.api.get_equity.return_value = 5000
-        self.assertFalse(guard._check_drawdown(pre_midnight))
-        # Simulate sudden post-midnight drop to 4900: conservative bracket must keep 5000!
-        self.api.get_equity.return_value = 4900
-        self.assertFalse(guard._check_drawdown(post_midnight))
-        self.assertEqual(guard.state["baseline"]["source"], "bybit_v5_midnight_conservative_bracket")
-        self.assertEqual(guard.state["baseline"]["equity"], 5000.0)
-        self.assertEqual(guard.state["operating_daily_floor"], 4820.0)
-        self.assertTrue(self.authorized(post_midnight))
-        # Tampering bracket equity below max(pre, post) must be rejected by validate_baseline
-        bad_bracket = dict(guard.state["baseline"], equity=4900.0)
-        with self.assertRaises(ValueError):
-            validate_baseline(bad_bracket, self.profile, post_midnight)
+        guard._check_drawdown(pre)
+        # An unobserved midnight equity of 5100 is consistent with both 5000 samples.
+        guard._check_drawdown(post)
+        self.assertIsNone(guard.state['baseline'])
+        self.assertEqual(guard.state['baseline_status'], 'estimated')
+        samples = guard.state['baseline_estimate']['samples']
+        self.assertEqual([s['received_at'] for s in samples], [pre.isoformat(), post.isoformat()])
+        self.assertNotIn('captured_at', guard.state['baseline_estimate'])
+        self.assertFalse(guard.state['baseline_estimate']['confirmed'])
+        self.assertFalse(self.authorized(post))
+        self.assertIsNone(guard.state['operating_daily_floor'])
+        self.assertEqual(guard.state['operating_overall_floor'], 4740)
+        restarted = RiskGuard(self.api, self.path, profile=self.profile, emergency=Mock())
+        self.assertEqual(restarted.state['baseline_estimate'], guard.state['baseline_estimate'])
+        self.assertTrue(restarted.state['data_fault'])
 
     def test_missing_state_never_bootstraps_even_with_baseline_file(self):
         self.path.unlink()

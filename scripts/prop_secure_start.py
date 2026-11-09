@@ -17,26 +17,8 @@ from freqtrade.prop_security import (
 
 
 def _acquire_verified_flat_baseline(config, profile):
-    """Certify 00:00 UTC baseline from Bybit V5 only when account is flat with 0 intraday activity."""
-    try:
-        import ccxt
-        from freqtrade.supervisor_bybit import SupervisorBybit
-
-        exchange = config['exchange']
-        api = ccxt.bybit({
-            'apiKey': exchange['key'],
-            'secret': exchange['secret'],
-            'timeout': 2000,
-            'enableRateLimit': True,
-            'maxRetriesOnFailure': 0,
-            'options': {'defaultType': 'swap', 'defaultSubType': 'linear', 'defaultSettle': 'USDT'},
-        })
-        api.enable_demo_trading(profile['environment'] == 'demo')
-        adapter = SupervisorBybit(api, profile)
-        with adapter.operation_budget(10.0):
-            return adapter.certify_flat_midnight_baseline(datetime.now(timezone.utc))
-    except Exception:
-        raise DeploymentRejected('Missing or unverifiable baseline record for commissioning') from None
+    """Commissioning cannot synthesize or fetch an unproven midnight baseline."""
+    raise DeploymentRejected('Reviewed historical midnight baseline required; no automatic reconstruction')
 
 
 def main():

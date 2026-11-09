@@ -49,7 +49,7 @@ def reconciled_state(profile, baseline, now, *, halted):
         raise ValueError("Explicit reconciled halt status required")
     return {
         "schema_version": 1, "risk_schema_version": 2, "profile": profile,
-        "initial_balance": profile["initial_balance"], "baseline": baseline,
+        "initial_balance": profile["initial_balance"], "baseline": baseline, "baseline_status": "verified",
         "current_trading_day": now.astimezone(UTC).date().isoformat(),
         "nuclear_triggered": halted, "wake_up_lock": True, "data_fault": False,
         "control_schema_version": 1, "macro_paused": False, "data_valid": False,
@@ -88,7 +88,7 @@ class RiskGuard:
             "risk_schema_version": 2,
             "profile": self.profile,
             "initial_balance": self.initial_balance,
-            "baseline": None,
+            "baseline": None, "baseline_status": "missing", "monitoring_status": "unavailable",
             "current_trading_day": None,
             "nuclear_triggered": False,
             "wake_up_lock": True,
@@ -133,6 +133,7 @@ class RiskGuard:
             self.state = state
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
             # Preserve evidence. Never silently reset a corrupted or old account baseline.
+            self.state["baseline_status"] = "unverified"
             self.state_error = str(exc)
             log.critical("State recovery required: %s", exc)
 
@@ -172,32 +173,8 @@ class RiskGuard:
             return False
 
     def _can_certify_midnight_rollover(self, now):
-        prev = self.state.get("baseline")
-        if not isinstance(prev, dict) or not self.state.get("last_updated"):
-            return False
-        if self.state.get("data_fault") or self.state.get("nuclear_triggered") or not self.state.get("data_valid"):
-            return False
-        remote_verified = bool(
-            self.emergency is not None
-            or getattr(self.api_client, "__dict__", {}).get("direct") is not None
-            or self.state.get("remote_identity_verified") is True
-        )
-        if not remote_verified:
-            return False
-        if not finite_number(self.state.get("last_equity")) or self.state["last_equity"] <= 0:
-            return False
-        try:
-            prev_date = utc_time(prev["captured_at"]).date()
-            last_updated = utc_time(self.state["last_updated"])
-        except Exception:
-            return False
-        if prev_date != (now.date() - timedelta(days=1)):
-            return False
-        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        window = max(15.0, float(self.interval) * 3.0)
-        pre_gap = (midnight - last_updated).total_seconds()
-        post_gap = (now - midnight).total_seconds()
-        return 0.0 <= pre_gap <= window and 0.0 <= post_gap <= window
+        # Polling never certifies the unobserved instant between observations.
+        return False
 
     def _persist_emergency_halt(self, now, equity, levels, reason):
         if self.state_file.exists():
@@ -222,6 +199,8 @@ class RiskGuard:
                 operating_overall_floor=levels["operating_overall_floor"],
                 official_daily_floor=None,
                 operating_daily_floor=None,
+                baseline_status="unverified",
+                monitoring_status="overall_only",
             )
         return self._save_state(force_emergency=True)
 
@@ -356,6 +335,7 @@ class RiskGuard:
 
     def _check_drawdown(self, now=None):  # noqa: C901 - atomic state update and limits together
         self._drain_control_requests()
+        now_supplied = now
         now = now or datetime.now(UTC)
         if now.tzinfo is None:
             raise ValueError("UTC-aware timestamp required")
@@ -364,27 +344,37 @@ class RiskGuard:
             self._enforce_halt()
             return True
         if self.state_error:
-            self._pause_on_fault(self.state_error)
+            # Latch locally first; never spend the direct-read deadline on RPC.
+            self.request_data_fault("Risk state requires reconciliation")
             # Distinguish authorization, monitoring, and emergency liquidation authority (F04):
             # entries remain locked, but supervisor continues sampling direct equity to protect overall floor.
             if self.emergency is not None:
                 try:
                     remote = self.api_client.get_prop_profile()
-                    if remote == self.profile:
-                        equity = self.api_client.get_equity()
-                        if finite_number(equity):
-                            levels = floors(self.profile, self.initial_balance)
-                            if Decimal(str(equity)) <= Decimal(str(levels["operating_overall_floor"])):
-                                reason = "Internal static overall floor reached"
-                                log.critical(
-                                    "Operating overall floor breached during state fault: equity=%s floor=%s",
-                                    equity, levels["operating_overall_floor"],
-                                )
-                                self._persist_emergency_halt(now, float(equity), levels, reason)
-                                self._enforce_halt()
-                                return True
-                except Exception as exc:
-                    log.warning("Could not sample emergency equity during state fault: %s", exc)
+                    if remote != self.profile:
+                        raise ValueError("Direct identity unavailable")
+                    equity = self.api_client.get_equity()
+                    if not finite_number(equity):
+                        raise ValueError("Direct equity unavailable")
+                    with self._state_lock:
+                        self.state["monitoring_status"] = "overall_only"
+                    levels = floors(self.profile, self.initial_balance)
+                    if Decimal(str(equity)) <= Decimal(str(levels["operating_overall_floor"])):
+                        reason = "Internal static overall floor reached"
+                        log.critical(
+                            "Operating overall floor breached during state fault: equity=%s floor=%s",
+                            equity, levels["operating_overall_floor"],
+                        )
+                        self._persist_emergency_halt(now, float(equity), levels, reason)
+                        self._enforce_halt()
+                        return True
+                except Exception:
+                    self.state["monitoring_status"] = "unavailable"
+                    log.error("Independent risk monitoring unavailable during state fault")
+            else:
+                self.state["monitoring_status"] = "unavailable"
+                log.error("Independent risk monitoring unavailable: no emergency adapter")
+            self._pause_on_fault("Risk state requires reconciliation")
             return False
         with self._state_lock:
             fault_revision = self.state["fault_revision"]
@@ -395,59 +385,50 @@ class RiskGuard:
             if self.state["last_updated"] and utc_time(self.state["last_updated"]) > now:
                 raise ValueError("Clock moved backwards")
         except UnverifiedAccount as exc:
+            self.state["monitoring_status"] = "unavailable"
             self._pause_on_fault(str(exc))
             return False
         except (ValueError, TypeError, KeyError) as exc:
+            self.state["monitoring_status"] = "unavailable"
             self.state_error = str(exc)
             self._pause_on_fault(str(exc))
             return False
         equity = self.api_client.get_equity()
         if not finite_number(equity):
+            self.state["monitoring_status"] = "unavailable"
             self._pause_on_fault("Missing/nonfinite full-account equity")
             return False
+        # Preserve real observations separately from historical midnight evidence.
+        # These are receipt timestamps, not a retrodated exchange measurement.
+        received_at = datetime.now(UTC) if now_supplied is None else now
+        observation = {"equity": float(equity), "received_at": received_at.isoformat(),
+                       "source": "direct_account_equity" if self.emergency is not None else "account_equity_adapter"}
+        previous = self.state.get("equity_observation")
+        self.state["equity_observation"] = observation
+        try:
+            previous_day = utc_time(previous["received_at"]).date() if previous else now.date()
+        except (ValueError, KeyError, TypeError, AttributeError):
+            previous, previous_day = None, now.date()
+        if previous and previous_day != now.date():
+            self.state["baseline_estimate"] = {
+                "status": "estimated", "confirmed": False,
+                "source": "pre_post_observations_not_midnight_evidence",
+                "samples": [previous, observation],
+            }
         baseline = self.state["baseline"]
         baseline_error = None
+        baseline_status = "verified"
         try:
             if baseline is None or utc_time(baseline["captured_at"]).date() != now.date():
-                loaded = None
-                if self.baseline_file.exists():
-                    try:
-                        candidate = json.loads(self.baseline_file.read_text(encoding="utf-8"))
-                        validate_baseline(candidate, self.profile, now)
-                        loaded = candidate
-                    except Exception:
-                        loaded = None
-                if loaded is not None:
-                    baseline = loaded
-                elif self._can_certify_midnight_rollover(now):
-                    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-                    pre_equity = float(self.state["last_equity"])
-                    post_equity = float(equity)
-                    conservative_equity = max(pre_equity, post_equity)
-                    rolled = {
-                        "profile": self.profile,
-                        "equity": conservative_equity,
-                        "pre_midnight_equity": pre_equity,
-                        "pre_midnight_at": utc_time(self.state["last_updated"]).isoformat(),
-                        "post_midnight_equity": post_equity,
-                        "post_midnight_at": now.isoformat(),
-                        "captured_at": midnight.isoformat(),
-                        "verified_at": now.isoformat(),
-                        "source": "bybit_v5_midnight_conservative_bracket",
-                        "confirmed": True,
-                    }
-                    validate_baseline(rolled, self.profile, now)
-                    if not self._save_baseline(rolled):
-                        raise OSError("Failed to persist midnight rollover baseline")
-                    baseline = rolled
-                else:
-                    candidate = json.loads(self.baseline_file.read_text(encoding="utf-8"))
-                    validate_baseline(candidate, self.profile, now)
-                    baseline = candidate
+                candidate = json.loads(self.baseline_file.read_text(encoding="utf-8"))
+                validate_baseline(candidate, self.profile, now)
+                baseline = candidate
             else:
                 validate_baseline(baseline, self.profile, now)
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
-            baseline_error = f"Midnight baseline reconciliation required: {exc}"
+            baseline_error = "Midnight baseline reconciliation required"
+            baseline_status = ("estimated" if self.state.get("baseline_estimate") else
+                               "missing" if isinstance(exc, FileNotFoundError) else "unverified")
             baseline = None
         # Overall protection remains available even while the daily baseline is unknown.
         levels = floors(self.profile, baseline["equity"] if baseline else self.initial_balance)
@@ -463,7 +444,9 @@ class RiskGuard:
                 or getattr(self.api_client, "__dict__", {}).get("direct") is not None
             )
             self.state.update(last_equity=equity, last_updated=now.isoformat(),
-                              baseline=baseline, current_trading_day=now.date().isoformat(),
+                              baseline=baseline, baseline_status=baseline_status,
+                              monitoring_status="overall_only" if baseline_error else "daily_and_overall",
+                              current_trading_day=now.date().isoformat(),
                               remote_identity_verified=remote_verified,
                               data_valid=not bool(baseline_error) and self.state["fault_revision"] == fault_revision)
             self.state["data_fault"] = self.state["data_fault"] or bool(baseline_error)

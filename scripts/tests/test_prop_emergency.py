@@ -595,16 +595,12 @@ class AdapterTests(unittest.TestCase):
             )
         self.api.create_order.assert_called_once()
 
-    def test_certify_flat_midnight_baseline_succeeds_only_when_flat_and_zero_intraday_activity(self):
-        now = datetime(2026, 11, 5, 8, 30, tzinfo=UTC)
-        certified = self.adapter.certify_flat_midnight_baseline(now)
-        self.assertEqual(certified["source"], "bybit_v5_flat_account_verified")
-        self.assertEqual(certified["equity"], 4820.0)
-        self.assertTrue(certified["confirmed"])
-        # If intraday execution exists, must fail closed
-        self.api.privateGetV5ExecutionList.return_value = self.page([{"execId": "e1"}])
+    def test_flat_wallet_cannot_certify_midnight_without_capital_flow_evidence(self):
+        # Even with no executions or orders, transfers/adjustments are unknown.
+        self.adapter.snapshot = Mock(side_effect=AssertionError("No new live reads"))
         with self.assertRaises(UnverifiedAccount):
-            self.adapter.certify_flat_midnight_baseline(now)
+            self.adapter.certify_flat_midnight_baseline()
+        self.adapter.snapshot.assert_not_called()
 
 
 if __name__ == "__main__":

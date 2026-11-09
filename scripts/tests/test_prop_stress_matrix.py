@@ -84,6 +84,10 @@ def make_baseline(profile, equity=5000.0, now=None):
         "verified_at": now.isoformat(),
         "source": "bybit_wallet_coin_equity",
         "confirmed": True,
+        "status": "verified",
+        "evidence": {"kind": "historical_account_equity", "reviewed": True,
+                     "account_id": profile["account_id"], "reference": "offline-fixture",
+                     "equity": float(equity), "observed_at": mid.isoformat()},
     }
 
 
