@@ -60,9 +60,11 @@ class OrderJournal:
             self.lock.seek(0)
             if os.name == "nt":
                 import msvcrt
+
                 msvcrt.locking(self.lock.fileno(), msvcrt.LK_NBLCK, 1)
             else:
                 import fcntl
+
                 fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as e:
             self.lock.close()
@@ -105,8 +107,10 @@ class OrderJournal:
                 # Old unresolved intents consume unknown risk, never zero risk.
                 for intent in self.intents():
                     if not json.loads(intent["request"]).get("reduceOnly"):
-                        self.db.execute("INSERT OR IGNORE INTO risk_reservations VALUES (?, 'held', ?)",
-                                        (intent["client_id"], '{"loss_bound": null}'))
+                        self.db.execute(
+                            "INSERT OR IGNORE INTO risk_reservations VALUES (?, 'held', ?)",
+                            (intent["client_id"], '{"loss_bound": null}'),
+                        )
         except BaseException:
             self.close()
             raise
@@ -120,9 +124,12 @@ class OrderJournal:
 
     def intents(self, active=True):
         with self.mutex:
-            return [dict(r) for r in self.db.execute(
-                "SELECT * FROM intents" + (" WHERE settled=0" if active else "")
-            )]
+            return [
+                dict(r)
+                for r in self.db.execute(
+                    "SELECT * FROM intents" + (" WHERE settled=0" if active else "")
+                )
+            ]
 
     def prepare(self, request, trade_id=None, reservation=None):
         """Persist intent + held reservation atomically.
@@ -132,13 +139,22 @@ class OrderJournal:
         """
         if reservation is not None and reservation.get("authorized") is not True:
             raise JournalBlocked("Unauthorized risk reservation")
-        detail = ('{"loss_bound": null}' if reservation is None else json.dumps(
-            {**reservation, "loss_bound": reservation.get("future_loss_bound")}, allow_nan=False))
+        if reservation is None:
+            detail = '{"loss_bound": null}'
+        else:
+            lb = reservation.get("loss_bound")
+            if lb is None and reservation.get("future_loss_bound") is not None:
+                lb = float(reservation["future_loss_bound"]) + float(
+                    reservation.get("future_cost_bound") or 0.0
+                )
+            detail = json.dumps({**reservation, "loss_bound": lb}, allow_nan=False)
         with self.mutex:
             pair = request["pair"]
             if request.get("reduceOnly"):
-                if any(json.loads(r["request"])["pair"] == pair and not r["linked"]
-                       for r in self.intents()):
+                if any(
+                    json.loads(r["request"])["pair"] == pair and not r["linked"]
+                    for r in self.intents()
+                ):
                     raise JournalBlocked("Unresolved intent on exit pair")
                 if self.db.execute("SELECT 1 FROM findings WHERE pair=?", (pair,)).fetchone():
                     raise JournalBlocked("Unverified position/order on exit pair")
@@ -152,8 +168,9 @@ class OrderJournal:
                     (client_id, int(time.time() * 1000), json.dumps(request), trade_id),
                 )
                 if not request.get("reduceOnly"):
-                    self.db.execute("INSERT INTO risk_reservations VALUES (?, 'held', ?)",
-                                    (client_id, detail))
+                    self.db.execute(
+                        "INSERT INTO risk_reservations VALUES (?, 'held', ?)", (client_id, detail)
+                    )
             self.ready = False
             return client_id
 
@@ -167,11 +184,17 @@ class OrderJournal:
                 ).rowcount
             if changed != 1:
                 raise JournalBlocked("Intent already dispatched; reconcile, do not retry")
-            row = self.db.execute("SELECT * FROM intents WHERE client_id=?", (client_id,)).fetchone()
+            row = self.db.execute(
+                "SELECT * FROM intents WHERE client_id=?", (client_id,)
+            ).fetchone()
             try:
                 order = create_order(**json.loads(row["request"]), client_order_id=client_id)
-                if (not isinstance(order, dict) or not isinstance(order.get("id"), str)
-                        or not order["id"] or order.get("clientOrderId") != client_id):
+                if (
+                    not isinstance(order, dict)
+                    or not isinstance(order.get("id"), str)
+                    or not order["id"]
+                    or order.get("clientOrderId") != client_id
+                ):
                     raise JournalBlocked("Unverifiable create_order acknowledgement")
                 # Acknowledgement alone is not final execution evidence, even if rejected.
                 with self.db:
@@ -182,13 +205,17 @@ class OrderJournal:
                 return order
             except Exception:
                 with self.db:
-                    self.db.execute("UPDATE intents SET state='uncertain' WHERE client_id=?", (client_id,))
+                    self.db.execute(
+                        "UPDATE intents SET state='uncertain' WHERE client_id=?", (client_id,)
+                    )
                 raise
 
     def bind(self, order_id, trade_id):
         """Call only after the Freqtrade commit. Reconciliation also repairs this crash gap."""
         with self.mutex, self.db:
-            self.db.execute("UPDATE intents SET trade_id=? WHERE exchange_id=?", (trade_id, order_id))
+            self.db.execute(
+                "UPDATE intents SET trade_id=? WHERE exchange_id=?", (trade_id, order_id)
+            )
 
     def prepare_emergency(self, request, owner):
         """Explicit supervisor authority; exchange proof replaces unavailable ORM proof.
@@ -199,18 +226,27 @@ class OrderJournal:
         with self.mutex:
             row = self.db.execute("SELECT value FROM emergency WHERE id=1").fetchone()
             state = json.loads(row[0]) if row else {}
-            if (state.get("owner") != owner or state.get("handoff") is not True
-                    or state.get("phase") != "liquidating"
-                    or request.get("reduceOnly") is not True or request.get("ordertype") != "market"):
+            if (
+                state.get("owner") != owner
+                or state.get("handoff") is not True
+                or state.get("phase") != "liquidating"
+                or request.get("reduceOnly") is not True
+                or request.get("ordertype") != "market"
+            ):
                 raise JournalBlocked("No exclusive emergency reduction authority")
-            if self.db.execute("SELECT 1 FROM intents i JOIN emergency_orders e USING(client_id) "
-                               "WHERE i.settled=0").fetchone():
+            if self.db.execute(
+                "SELECT 1 FROM intents i JOIN emergency_orders e USING(client_id) WHERE i.settled=0"
+            ).fetchone():
                 raise JournalBlocked("Previous emergency order must be reconciled first")
             cid = "ftj" + uuid.uuid4().hex
             with self.db:
-                self.db.execute("INSERT INTO intents(client_id,created_ms,request,state) VALUES (?,?,?,'prepared')",
-                                (cid, int(time.time() * 1000), json.dumps(request)))
-                self.db.execute("INSERT INTO emergency_orders VALUES (?,?)", (cid, state["halt_id"]))
+                self.db.execute(
+                    "INSERT INTO intents(client_id,created_ms,request,state) VALUES (?,?,?,'prepared')",
+                    (cid, int(time.time() * 1000), json.dumps(request)),
+                )
+                self.db.execute(
+                    "INSERT INTO emergency_orders VALUES (?,?)", (cid, state["halt_id"])
+                )
             self.ready = False
             return cid
 
@@ -251,12 +287,19 @@ class OrderJournal:
                     intent_pairs = {json.loads(r["request"])["pair"] for r in self.intents()}
                     for key in actual:
                         if key not in local_positions and key[0] not in intent_pairs:
-                            self.db.execute("INSERT OR REPLACE INTO findings VALUES (?,?,?)",
-                                ("external_position:" + key[0] + ":" + key[1], key[0],
-                                 "Position without local trade or journal origin; manual review required"))
+                            self.db.execute(
+                                "INSERT OR REPLACE INTO findings VALUES (?,?,?)",
+                                (
+                                    "external_position:" + key[0] + ":" + key[1],
+                                    key[0],
+                                    "Position without local trade or journal origin; manual review required",
+                                ),
+                            )
                     for pair in mismatches:
-                        self.db.execute("INSERT OR REPLACE INTO findings VALUES (?,?,?)",
-                                        ("position:" + pair, pair, "Local/exchange quantities differ"))
+                        self.db.execute(
+                            "INSERT OR REPLACE INTO findings VALUES (?,?,?)",
+                            ("position:" + pair, pair, "Local/exchange quantities differ"),
+                        )
                     known = {r["client_id"]: r for r in self.intents(active=False)}
                     open_ids = {o.get("id") for o in snapshot["open_orders"]}
                     for oid, local in local_orders.items():
@@ -267,15 +310,19 @@ class OrderJournal:
                         if not oid or not order.get("symbol"):
                             raise ValueError("Malformed open order")
                         if oid not in local_orders and cid not in known:
-                            self.db.execute("INSERT OR REPLACE INTO findings VALUES (?,?,?)",
-                                            ("external:" + oid, order["symbol"], "Unknown open order"))
+                            self.db.execute(
+                                "INSERT OR REPLACE INTO findings VALUES (?,?,?)",
+                                ("external:" + oid, order["symbol"], "Unknown open order"),
+                            )
                         elif oid in local_orders:
                             local = local_orders[oid]
-                            if (order.get("symbol") != local["symbol"]
-                                    or order.get("side") != local["side"]
-                                    or not same(order.get("amount"), local["amount"])
-                                    or not same(order.get("filled"), local["filled"])
-                                    or local["status"] != "open"):
+                            if (
+                                order.get("symbol") != local["symbol"]
+                                or order.get("side") != local["side"]
+                                or not same(order.get("amount"), local["amount"])
+                                or not same(order.get("filled"), local["filled"])
+                                or local["status"] != "open"
+                            ):
                                 errors.append("local_order_mismatch:" + oid)
                     for row in self.intents():
                         cid = row["client_id"]
@@ -285,15 +332,32 @@ class OrderJournal:
                             errors.append("unresolved:" + cid)
                             continue
                         oid = order.get("id")
-                        if (not oid or order.get("clientOrderId") != cid
-                                or (row["exchange_id"] and row["exchange_id"] != oid)
-                                or order.get("symbol") != request["pair"]
-                                or order.get("side") != request["side"]):
+                        if (
+                            not oid
+                            or order.get("clientOrderId") != cid
+                            or (row["exchange_id"] and row["exchange_id"] != oid)
+                            or order.get("symbol") != request["pair"]
+                            or order.get("side") != request["side"]
+                        ):
                             raise ValueError("Order origin/identity mismatch")
-                        amount, filled, remaining = (quantity(order[k]) for k in ("amount", "filled", "remaining"))
+                        amount, filled, remaining = (
+                            quantity(order[k]) for k in ("amount", "filled", "remaining")
+                        )
                         status = order["status"]
-                        if (amount <= 0 or filled > amount or remaining > amount or status not in
-                                ("open", "closed", "canceled", "cancelled", "expired", "rejected")):
+                        if (
+                            amount <= 0
+                            or filled > amount
+                            or remaining > amount
+                            or status
+                            not in (
+                                "open",
+                                "closed",
+                                "canceled",
+                                "cancelled",
+                                "expired",
+                                "rejected",
+                            )
+                        ):
                             raise ValueError("Invalid order evidence")
                         if status == "open" and not same(amount, filled + remaining):
                             raise ValueError("Invalid partial fill")
@@ -308,43 +372,66 @@ class OrderJournal:
                         if quantity(previous.get("filled") or 0) > filled:
                             raise ValueError("Regressing fill evidence")
                         local = local_orders.get(oid)
-                        linked = bool(local and local["symbol"] == request["pair"]
-                                      and local["side"] == request["side"]
-                                      and same(local["filled"], filled)
-                                      and same(local["amount"], amount)
-                                      and local["status"] == status
-                                      and (row["trade_id"] is None or row["trade_id"] == local["trade_id"]))
+                        linked = bool(
+                            local
+                            and local["symbol"] == request["pair"]
+                            and local["side"] == request["side"]
+                            and same(local["filled"], filled)
+                            and same(local["amount"], amount)
+                            and local["status"] == status
+                            and (row["trade_id"] is None or row["trade_id"] == local["trade_id"])
+                        )
                         terminal = status != "open"
                         empty = terminal and filled == 0
-                        settled = terminal and (linked or empty) and request["pair"] not in mismatches
+                        settled = (
+                            terminal and (linked or empty) and request["pair"] not in mismatches
+                        )
                         if not (linked or settled) or request["pair"] in mismatches:
                             errors.append("unbound_or_mismatched:" + cid)
-                        state = ("filled" if status == "closed" else
-                                 "partially_filled" if status == "open" and filled else
-                                 "accepted" if status == "open" else status)
+                        state = (
+                            "filled"
+                            if status == "closed"
+                            else "partially_filled"
+                            if status == "open" and filled
+                            else "accepted"
+                            if status == "open"
+                            else status
+                        )
                         self.db.execute(
                             "UPDATE intents SET state=?,exchange_id=?,evidence=?,linked=?,settled=?,"
                             "trade_id=COALESCE(trade_id,?) WHERE client_id=?",
-                            (state, oid, json.dumps(order), int(linked), int(settled),
-                             local["trade_id"] if linked else None, cid),
+                            (
+                                state,
+                                oid,
+                                json.dumps(order),
+                                int(linked),
+                                int(settled),
+                                local["trade_id"] if linked else None,
+                                cid,
+                            ),
                         )
                 errors += [r[0] for r in self.db.execute("SELECT key FROM findings")]
             except (KeyError, TypeError, ValueError) as e:
                 errors.append("inconclusive:" + str(e))
             with self.db:
-                self.db.execute("INSERT OR REPLACE INTO checks VALUES (1,?,?)",
-                                (int(time.time() * 1000), json.dumps(errors)))
+                self.db.execute(
+                    "INSERT OR REPLACE INTO checks VALUES (1,?,?)",
+                    (int(time.time() * 1000), json.dumps(errors)),
+                )
             self.ready = not errors
             if not errors:
                 self.risk_snapshot = json.loads(json.dumps(snapshot))
                 # Only complete exchange/ORM reconciliation transfers a reservation
                 # into actual position exposure or proves an empty cancellation.
                 with self.db:
-                    self.db.execute("UPDATE risk_reservations SET state='reconciled' "
-                                    "WHERE state='held' AND client_id IN "
-                                    "(SELECT client_id FROM intents WHERE settled=1)")
+                    self.db.execute(
+                        "UPDATE risk_reservations SET state='reconciled' "
+                        "WHERE state='held' AND client_id IN "
+                        "(SELECT client_id FROM intents WHERE settled=1)"
+                    )
             self.last_reconciliation = {
-                "checked_ms": int(time.time() * 1000), "verified": not errors,
+                "checked_ms": int(time.time() * 1000),
+                "verified": not errors,
                 "flat": not errors and not snapshot["positions"] and not snapshot["open_orders"],
             }
             return errors

@@ -71,6 +71,18 @@ def _evaluate_validated_budget(profile, policy, request, detail, snapshot):
     if leverage is not None and (not number(leverage) or not math.isclose(float(leverage), 1.0, rel_tol=1e-9, abs_tol=1e-9)):
         detail["reason"] = "leverage_exceeds_one_step_limit"
         return
+    approval = policy.get("approval")
+    # A verified risk budget requires explicit external reviewed evidence.
+    # Arbitrary parameters, simple boolean flags, or uncertified config names cannot authorize orders.
+    if (policy.get("status") != "approved"
+            or not isinstance(approval, dict)
+            or approval.get("kind") != "risk_budget_approval"
+            or approval.get("reviewed") is not True
+            or approval.get("account_id") != profile["account_id"]
+            or approval.get("challenge_id") != profile["challenge_id"]
+            or not isinstance(approval.get("reference"), str) or not approval["reference"].strip()):
+        detail["reason"] = "unapproved_risk_budget_parameters"
+        return
     initial = Decimal(str(profile["initial_balance"]))
     required_keys = (
         "max_slot_notional_usdt",

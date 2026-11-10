@@ -20,6 +20,28 @@ from test_prop_profile import configured_account, baseline
 from test_order_journal import REQUEST, PAIR, snapshot, order, local
 
 
+def approved_budget_policy(profile):
+    return {
+        "model": "hyrotrader_one_step_validated_v2",
+        "status": "approved",
+        "approval": {
+            "kind": "risk_budget_approval",
+            "reviewed": True,
+            "account_id": profile["account_id"],
+            "challenge_id": profile["challenge_id"],
+            "reference": "offline-risk-policy-cert",
+            "approved_by": "offline-auditor",
+        },
+        "max_slot_notional_usdt": 750.0,
+        "max_aggregate_notional_usdt": 1200.0,
+        "roundtrip_fee_bps": 12.0,
+        "funding_bound_bps": 10.0,
+        "execution_slippage_bps": 28.0,
+        "latency_gap_stress_bps": 250.0,
+        "min_headroom_buffer_usdt": 30.0,
+    }
+
+
 class RiskBudgetTests(unittest.TestCase):
     def setUp(self):
         self.addCleanup(patch.stopall)
@@ -203,6 +225,7 @@ class RiskBudgetTests(unittest.TestCase):
         self.bot.exchange.create_order.assert_not_called()
 
     def test_validated_v2_budget_authorizes_within_slot_aggregate_and_stress_bounds(self):
+        self.bot.config['prop_risk_budget'] = approved_budget_policy(self.profile)
         self.state['remote_identity_verified'] = True
         self.save()
         decision = require_risk_budget(self.bot, {**REQUEST, 'amount': 1.0, 'rate': 100.0}, 7)
@@ -210,6 +233,7 @@ class RiskBudgetTests(unittest.TestCase):
         self.assertEqual(decision['model'], 'hyrotrader_one_step_validated_v2')
         self.assertAlmostEqual(decision['future_cost_bound'], 0.22)
         self.assertAlmostEqual(decision['future_loss_bound'], 2.78)
+        self.assertAlmostEqual(decision['loss_bound'], 3.0)
         self.assertAlmostEqual(decision['required_headroom'], 33.0)
         self.bot.exchange = SimpleNamespace(
             fetch_journal_snapshot=Mock(return_value=snapshot()),
@@ -220,8 +244,18 @@ class RiskBudgetTests(unittest.TestCase):
         res = journal_create_order(self.bot, None, model, **{**REQUEST, 'amount': 1.0, 'rate': 100.0})
         self.assertEqual(res['id'], 'ord-ok')
         self.bot.exchange.create_order.assert_called_once()
+        cid = res['clientOrderId']
+        row = self.j.db.execute('SELECT * FROM risk_reservations WHERE client_id=?', (cid,)).fetchone()
+        stored = json.loads(row['detail'])
+        self.assertEqual(row['state'], 'held')
+        self.assertTrue(stored['authorized'])
+        # loss_bound must be the complete sum (costs + losses = 3.0), never overwritten by partial loss only
+        self.assertAlmostEqual(stored['loss_bound'], 3.0)
+        self.assertAlmostEqual(stored['future_cost_bound'], 0.22)
+        self.assertAlmostEqual(stored['future_loss_bound'], 2.78)
 
     def test_validated_v2_budget_denies_slot_cap_aggregate_cap_leverage_missing_mark_price_and_low_headroom(self):
+        self.bot.config['prop_risk_budget'] = approved_budget_policy(self.profile)
         self.state['remote_identity_verified'] = True
         self.save()
         # 1. NFIX8 regular entry ($250) + grind/DCA ($50 = $300 total on slot) is AUTHORIZED
@@ -254,6 +288,67 @@ class RiskBudgetTests(unittest.TestCase):
         ]
         self.j.reconcile(snapshot(positions=pos_with_mark), {}, {('ETH/USDT:USDT', 'long'): 5.0})
         self.assertEqual(self.deny(amount=2.0, rate=100.0)['reason'], 'aggregate_notional_cap_exceeded')
+
+    def test_unapproved_model_fails_closed_and_cannot_be_bypassed_by_flag_or_name(self):
+        self.state['remote_identity_verified'] = True
+        self.save()
+        # 1. Default config has no reviewed approval -> strictly denied
+        res = self.deny(amount=1.0, rate=100.0)
+        self.assertEqual(res['reason'], 'unapproved_risk_budget_parameters')
+        self.assertFalse(res['authorized'])
+
+        # 2. Trivial boolean flag cannot bypass
+        self.bot.config['prop_risk_budget'] = {
+            **self.bot.config.get('prop_risk_budget', {}),
+            'approved': True, 'certified': True, 'status': 'approved',
+        }
+        res2 = self.deny(amount=1.0, rate=100.0)
+        self.assertEqual(res2['reason'], 'unapproved_risk_budget_parameters')
+
+        # 3. Mismatched account or challenge in approval contract fails closed
+        bad_approval = approved_budget_policy(self.profile)
+        bad_approval['approval']['account_id'] = 'different-account'
+        self.bot.config['prop_risk_budget'] = bad_approval
+        res3 = self.deny(amount=1.0, rate=100.0)
+        self.assertEqual(res3['reason'], 'unapproved_risk_budget_parameters')
+
+        # 4. Empty reference in approval contract fails closed
+        bad_ref = approved_budget_policy(self.profile)
+        bad_ref['approval']['reference'] = '   '
+        self.bot.config['prop_risk_budget'] = bad_ref
+        res4 = self.deny(amount=1.0, rate=100.0)
+        self.assertEqual(res4['reason'], 'unapproved_risk_budget_parameters')
+
+        # 5. Unreviewed approval (reviewed=False) fails closed
+        unreviewed = approved_budget_policy(self.profile)
+        unreviewed['approval']['reviewed'] = False
+        self.bot.config['prop_risk_budget'] = unreviewed
+        res5 = self.deny(amount=1.0, rate=100.0)
+        self.assertEqual(res5['reason'], 'unapproved_risk_budget_parameters')
+
+    def test_inconsistent_policy_parameters_rejected(self):
+        self.state['remote_identity_verified'] = True
+        self.save()
+        base = approved_budget_policy(self.profile)
+        for key, bad_val in [
+            ('roundtrip_fee_bps', 5.0),  # < 12 bps
+            ('funding_bound_bps', 2.0),  # < 10 bps
+            ('execution_slippage_bps', 10.0),  # < 25 bps
+            ('latency_gap_stress_bps', 50.0),  # < 200 bps
+            ('min_headroom_buffer_usdt', 10.0),  # < 25 USDT
+            ('max_slot_notional_usdt', 2000.0),  # > 15% of initial
+            ('max_aggregate_notional_usdt', 3000.0),  # > 24% of initial
+        ]:
+            with self.subTest(key=key, bad_val=bad_val):
+                self.bot.config['prop_risk_budget'] = {**base, key: bad_val}
+                res = self.deny(amount=1.0, rate=100.0)
+                self.assertIn('prop_risk_budget policy parameters violate certified safety bounds', res['reason'])
+
+    def test_reduce_only_bypasses_even_when_model_is_unapproved(self):
+        # Default config without approval still permits reduceOnly exits unconditionally
+        self.bot.config['prop_risk_budget'] = configured_account()['prop_risk_budget']
+        require_risk_budget(self.bot, {**REQUEST, 'reduceOnly': True})
+        self.assertEqual(self.j.intents(active=False), [])
 
 
 if __name__ == '__main__':
