@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
+from snapshot_fixtures import timed_snapshot
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -31,9 +32,9 @@ def order(cid, status="open", filled=0.0):
 
 
 def snapshot(o=None, positions=None):
-    return dict(complete=True, open_orders=[o] if o and o["status"] == "open" else [],
+    return timed_snapshot(dict(complete=True, open_orders=[o] if o and o["status"] == "open" else [],
                 positions=positions or [], orders={o["clientOrderId"]: o} if o else {},
-                fills={o["clientOrderId"]: o["filled"]} if o else {})
+                fills={o["clientOrderId"]: o["filled"]} if o else {}))
 
 
 def local(o):
@@ -394,7 +395,9 @@ class AdapterTests(unittest.TestCase):
 
     @staticmethod
     def page(rows, cursor=""):
-        return {"retCode": 0, "result": {"category": "linear", "list": rows, "nextPageCursor": cursor}}
+        import time
+        return {"retCode": 0, "time": time.time() * 1000,
+                "result": {"category": "linear", "list": rows, "nextPageCursor": cursor}}
 
     def test_pagination_all_pages(self):
         endpoint = Mock(side_effect=[self.page([1], "next"), self.page([2])])

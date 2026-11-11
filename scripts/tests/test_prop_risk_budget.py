@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
+from snapshot_fixtures import reads
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from freqtrade.order_journal import JournalBlocked, OrderJournal
@@ -74,6 +75,7 @@ class RiskBudgetTests(unittest.TestCase):
                           baseline=baseline(self.profile, now=datetime.now(UTC)),
                           data_fault=False, nuclear_triggered=False, macro_paused=False,
                           data_valid=True, wake_up_lock=False, last_equity=5000)
+        self.state['risk_component_reads'] = reads('identity', 'account_mode', 'equity')
         self.save()
 
     def save(self):

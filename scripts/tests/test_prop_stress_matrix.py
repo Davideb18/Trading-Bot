@@ -92,14 +92,15 @@ def make_baseline(profile, equity=5000.0, now=None):
 
 
 def make_snapshot(*, positions=None, open_orders=None, orders=None, fills=None):
-    return {
+    from snapshot_fixtures import timed_snapshot
+    return timed_snapshot({
         "complete": True,
         "positions": list(positions or []),
         "open_orders": list(open_orders or []),
         "orders": dict(orders or {}),
         "fills": dict(fills or {}),
         "checked_ms": int(time.time() * 1000),
-    }
+    })
 
 
 class StressMatrixTests(unittest.TestCase):

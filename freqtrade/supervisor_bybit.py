@@ -3,6 +3,7 @@
 import math
 import time
 from contextlib import contextmanager
+from freqtrade.snapshot_freshness import milliseconds, read_record, validate_reads
 
 
 class AccountMismatch(ValueError):
@@ -40,6 +41,7 @@ class SupervisorBybit:
             self.deadline = previous
 
     def _call(self, method, *args, raw=True):
+        start, monotonic_start = milliseconds(), time.monotonic()
         attempts = 3 if raw else 1
         result = None
         for attempt in range(attempts):
@@ -63,20 +65,31 @@ class SupervisorBybit:
                 raise UnverifiedAccount("Unsuccessful Bybit response")
             if not -2000 <= time.time() * 1000 - number(result["time"]) <= 15000:
                 raise UnverifiedAccount("Stale Bybit response")
+            try:
+                endpoint = getattr(method, "__name__", None)
+                self.last_read = read_record(endpoint if isinstance(endpoint, str) else "response",
+                                             start, monotonic_start, result)
+                if getattr(self, "_snapshot_reads", None) is not None:
+                    self._snapshot_reads.append(self.last_read.copy())
+            except ValueError:
+                raise UnverifiedAccount("Unverified Bybit read interval") from None
         return result
 
     def verify_identity(self):
+        self.identity_reads = []
         if self.profile["environment"] not in ("demo", "live"):
             raise AccountMismatch("Unsupported Bybit environment")
         expected = "https://api-demo.bybit.com" if self.profile["environment"] == "demo" else "https://api.bybit.com"
         if self.api.id != "bybit" or self.api.implode_hostname(self.api.urls["api"]["private"]) != expected:
             raise AccountMismatch("Bybit environment mismatch")
         identity = self._call(self.api.privateGetV5UserQueryApi, {})["result"]
+        self.identity_reads.append({**self.last_read, "component": "identity"})
         if str(identity.get("userID", "")) != self.profile["account_id"]:
             raise AccountMismatch("Remote Bybit UID missing or mismatched")
         if type(identity.get("readOnly")) is not int or identity["readOnly"] != 0:
             raise AccountMismatch("Trading authority is unavailable")
         account = self._call(self.api.privateGetV5AccountInfo, {})["result"]
+        self.identity_reads.append({**self.last_read, "component": "account_mode"})
         status = account.get("unifiedMarginStatus")
         if type(status) is not int or status not in (1, 3, 4, 5, 6):
             raise AccountMismatch("Unsupported account mode")
@@ -104,7 +117,8 @@ class SupervisorBybit:
         if len(equity) != 1:
             raise UnverifiedAccount("USDT equity unavailable")
         self.equity_observation = {"equity": equity[0], "response_time_ms": number(response["time"]),
-                                   "source": "bybit_v5_wallet_response"}
+                                   "source": "bybit_v5_wallet_response",
+                                   "read": {**self.last_read, "component": "equity"}}
         return equity[0]
 
     def _pages(self, endpoint, params):
@@ -156,6 +170,18 @@ class SupervisorBybit:
         return order
 
     def snapshot(self):
+        self._snapshot_reads = []
+        try:
+            result = self._snapshot()
+            validate_reads(self._snapshot_reads)
+            result["reads"] = list(self._snapshot_reads)
+            return result
+        except ValueError:
+            raise UnverifiedAccount("Incoherent account snapshot read interval") from None
+        finally:
+            self._snapshot_reads = None
+
+    def _snapshot(self):
         self.verify_identity()
         equity = self.equity()
         # A linear-USDT-only claim is not inferred merely from a USDT wallet.

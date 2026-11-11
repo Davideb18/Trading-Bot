@@ -113,10 +113,11 @@ class CancellationTests(unittest.TestCase):
                     fee={}, reduceOnly=False)
 
     def snapshot(self):
+        from snapshot_fixtures import timed_snapshot
         p = self.remote
-        return dict(complete=True, open_orders=[p] if p['status'] == 'open' else [],
+        return timed_snapshot(dict(complete=True, open_orders=[p] if p['status'] == 'open' else [],
                     positions=[dict(symbol=PAIR, side='long', amount=p['filled'], mark_price=100.)]
-                    if p['filled'] else [], orders={self.cid: p}, fills={self.cid: p['filled']})
+                    if p['filled'] else [], orders={self.cid: p}, fills={self.cid: p['filled']}))
 
     def exists(self):
         return Trade.session.get(Trade, self.trade_id) is not None

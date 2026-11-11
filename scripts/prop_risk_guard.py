@@ -451,6 +451,14 @@ class RiskGuard:
                 response_day_mismatch = response_at.date() != now.date()
         previous = self.state.get("equity_observation")
         self.state["equity_observation"] = observation
+        # Admission-only provenance; never a historical baseline certificate.
+        # Missing metadata stays missing and cannot be replaced by save time.
+        identity_reads = getattr(self.api_client, "__dict__", {}).get("identity_reads", [])
+        equity_read = (metadata.get("read") if isinstance(metadata, dict)
+                       and metadata.get("equity") == equity else None)
+        self.state["risk_component_reads"] = (
+            list(identity_reads) if isinstance(identity_reads, list) else []
+        ) + ([equity_read] if isinstance(equity_read, dict) else [])
         try:
             previous_day = utc_time(previous["received_at"]).date() if previous else now.date()
         except (ValueError, KeyError, TypeError, AttributeError):

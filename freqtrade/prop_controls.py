@@ -129,6 +129,11 @@ def control_status(bot, trade_model, order_model):
         state = read_control(journal)
         health = journal.last_reconciliation or {}
         fresh = 0 <= time.time() * 1000 - health.get("checked_ms", 0) <= 15000
+        try:
+            from freqtrade.snapshot_freshness import validate_snapshot
+            validate_snapshot(journal.risk_snapshot)
+        except (ValueError, TypeError, KeyError, AttributeError):
+            fresh = False
         trades = trade_model.get_open_trades()
         local_pending = any(pending_recovery(t) for t in trades)
         pending_entries = any(o.side == t.entry_side for t in trades for o in t.open_orders)

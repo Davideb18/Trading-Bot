@@ -24,12 +24,18 @@ class Bybit(Exchange):
 
     unified_account = False
 
-    def _journal_pages(self, endpoint, params):
+    def _journal_pages(self, endpoint, params, reads=None, component="page"):
         """Read every V5 page, or fail closed; never rely on a truncated CCXT list."""
+        import time
+        from freqtrade.snapshot_freshness import milliseconds, read_record
         rows, cursors = [], set()
         request = {"category": "linear", "limit": 50, **params}
         for _ in range(1000):
+            start, monotonic_start = milliseconds(), time.monotonic()
             response = endpoint(request.copy())
+            record = read_record(component, start, monotonic_start, response)
+            if reads is not None:
+                reads.append(record)
             if response.get("retCode") != 0:
                 raise ValueError("Unsuccessful reconciliation response")
             result = response["result"]
@@ -60,17 +66,19 @@ class Bybit(Exchange):
         against the execution endpoint. Missing history remains unresolved.
         """
         import json
+        from freqtrade.snapshot_freshness import validate_snapshot
+        reads = []
 
         def parse(raw):
             return self._order_contracts_to_amount(
                 self._api.parse_order(raw, self._journal_market(raw)))
 
         opened = self._journal_pages(self._api.privateGetV5OrderRealtime,
-                                     {"settleCoin": "USDT", "openOnly": 0})
+                                     {"settleCoin": "USDT", "openOnly": 0}, reads, "open_orders")
         positions = self._journal_pages(self._api.privateGetV5PositionList,
-                                        {"settleCoin": "USDT"})
+                                        {"settleCoin": "USDT"}, reads, "positions")
         snapshot = {"complete": True, "open_orders": [parse(o) for o in opened],
-                    "positions": [], "orders": {}, "fills": {}}
+                    "positions": [], "orders": {}, "fills": {}, "reads": reads}
         for raw in positions:
             market = self._journal_market(raw)
             if int(raw["positionIdx"]) != 0:
@@ -89,8 +97,8 @@ class Bybit(Exchange):
             request = json.loads(intent["request"])
             market = self._api.market(request["pair"])
             params = {"symbol": market["id"], "orderLinkId": cid}
-            realtime = self._journal_pages(self._api.privateGetV5OrderRealtime, params)
-            history = self._journal_pages(self._api.privateGetV5OrderHistory, params)
+            realtime = self._journal_pages(self._api.privateGetV5OrderRealtime, params, reads, "realtime:" + cid)
+            history = self._journal_pages(self._api.privateGetV5OrderHistory, params, reads, "history:" + cid)
             candidates = realtime + history
             if not candidates:
                 continue  # Not-found is never evidence of non-execution.
@@ -111,7 +119,7 @@ class Bybit(Exchange):
                         request["pair"], request["amount"]), rel_tol=1e-8, abs_tol=1e-12)):
                 raise ValueError("Order differs from journal request")
             executions = self._journal_pages(self._api.privateGetV5ExecutionList,
-                {"symbol": market["id"], "orderId": order["id"], "execType": "Trade"})
+                {"symbol": market["id"], "orderId": order["id"], "execType": "Trade"}, reads, "executions:" + cid)
             ids, total = set(), 0.0
             for execution in executions:
                 if (execution["orderId"] != order["id"]
@@ -127,6 +135,24 @@ class Bybit(Exchange):
                 total += self._contracts_to_amount(request["pair"], qty)
             snapshot["orders"][cid] = order
             snapshot["fills"][cid] = total
+        # Bracket history/execution pagination with a second account read.
+        # Compare quantities/order state, not changing mark prices. This detects
+        # observed fills during acquisition; it is not an atomic exchange snapshot.
+        final_opened = self._journal_pages(self._api.privateGetV5OrderRealtime,
+            {"settleCoin": "USDT", "openOnly": 0}, reads, "open_orders_end")
+        final_positions = self._journal_pages(self._api.privateGetV5PositionList,
+            {"settleCoin": "USDT"}, reads, "positions_end")
+
+        def signature(rows, fields):
+            return sorted(json.dumps({k: row.get(k) for k in fields}, sort_keys=True) for row in rows)
+
+        order_fields = ("orderId", "orderLinkId", "symbol", "side", "qty", "cumExecQty",
+                        "leavesQty", "orderStatus", "price", "reduceOnly", "positionIdx")
+        position_fields = ("symbol", "side", "size", "positionIdx", "tradeMode")
+        if (signature(opened, order_fields) != signature(final_opened, order_fields)
+                or signature(positions, position_fields) != signature(final_positions, position_fields)):
+            raise ValueError("Account changed during reconciliation reads")
+        validate_snapshot(snapshot)
         return snapshot
 
     def _parse_account_equity(self, response: dict | None) -> dict | None:

@@ -52,7 +52,8 @@ class FaultTests(unittest.TestCase):
         self.identity = {k: self.profile[k] for k in ("account_id", "challenge_id", "phase_id", "profile_id")}
         self.journal = OrderJournal(Path(self.tmp.name) / "order_journal", self.identity)
         self.addCleanup(lambda: self.journal.close())
-        self.empty = dict(complete=True, open_orders=[], orders={}, fills={}, positions=[])
+        from snapshot_fixtures import timed_snapshot
+        self.empty = timed_snapshot(dict(complete=True, open_orders=[], orders={}, fills={}, positions=[]))
         self.journal.reconcile(self.empty, {}, {})
         self.bot = self.recovery.bot
         self.bot.config, self.bot.order_journal = self.config, self.journal
@@ -307,6 +308,7 @@ class FaultTests(unittest.TestCase):
         self.assertTrue(read_control(self.journal)["data_fault"])
 
     def test_cancellation_and_journal_reconcile_without_duplicate_submission(self):
+        from snapshot_fixtures import timed_snapshot
         self.fault()
         trade, o = self.recovery.trade_order(base=0)
         request = dict(pair=trade.pair, side="buy", amount=2, rate=100, leverage=1,
@@ -317,7 +319,8 @@ class FaultTests(unittest.TestCase):
         self.journal.dispatch(cid, Mock(return_value=opened))
         self.bot.exchange.fetch_order.side_effect = [opened, canceled]
         cancel_fault_entries(self.bot, Trade)
-        self.assertEqual(self.journal.reconcile({**self.empty, "orders": {cid: canceled}, "fills": {cid: 0}}, {}, {}), [])
+        evidence = timed_snapshot({**self.empty, "orders": {cid: canceled}, "fills": {cid: 0}})
+        self.assertEqual(self.journal.reconcile(evidence, {}, {}), [])
         self.assertEqual(self.journal.intents(), [])
         self.bot.exchange.create_order.assert_not_called()
         self.assertTrue(sync_prop_controls(self.bot))

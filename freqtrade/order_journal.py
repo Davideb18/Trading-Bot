@@ -257,6 +257,7 @@ class OrderJournal:
         Positions are positive base quantities keyed by (symbol, long/short).
         External-order findings are latched: disappearance is not proof of ownership.
         """
+        from freqtrade.snapshot_freshness import validate_snapshot
         with self.mutex:
             self.ready = False
             self.risk_snapshot = None
@@ -268,6 +269,7 @@ class OrderJournal:
             try:
                 if snapshot.get("complete") is not True:
                     raise ValueError("Incomplete exchange snapshot")
+                validate_snapshot(snapshot)
                 observations = snapshot["orders"]
                 actual = {}
                 for p in snapshot["positions"]:
@@ -410,6 +412,9 @@ class OrderJournal:
                                 cid,
                             ),
                         )
+                    # Expiry during ORM reconciliation must roll back tentative
+                    # settlements, not merely block the next admission.
+                    validate_snapshot(snapshot)
                 errors += [r[0] for r in self.db.execute("SELECT key FROM findings")]
             except (KeyError, TypeError, ValueError) as e:
                 errors.append("inconclusive:" + str(e))
@@ -431,6 +436,7 @@ class OrderJournal:
                     )
             self.last_reconciliation = {
                 "checked_ms": int(time.time() * 1000),
+                "reads": snapshot.get("reads"),
                 "verified": not errors,
                 "flat": not errors and not snapshot["positions"] and not snapshot["open_orders"],
             }

@@ -21,8 +21,11 @@ class IndependentRiskAPI:
         return self.control.deadline_expired()
 
     def get_prop_profile(self):
+        self.identity_reads = []
         try:
-            return self.direct.verify_identity()
+            profile = self.direct.verify_identity()
+            self.identity_reads = getattr(self.direct, "identity_reads", [])
+            return profile
         except AccountMismatch:
             raise
         except (KeyError, ValueError, TypeError):

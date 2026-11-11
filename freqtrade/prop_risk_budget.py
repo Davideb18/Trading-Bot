@@ -17,6 +17,7 @@ from freqtrade.order_journal import JournalBlocked, quantity
 from freqtrade.prop_controls import supervisor_state, sync_prop_controls
 from freqtrade.prop_profile import floors, number, profile_from_config
 from freqtrade.prop_risk_approval import reviewed_policy
+from freqtrade.snapshot_freshness import validate_risk_reads
 
 CERTIFIED_BUDGET_MODEL = "hyrotrader_one_step_validated_v2"
 
@@ -222,6 +223,9 @@ def require_risk_budget(bot, request, trade_id=None):
             elif not remote_verified:
                 detail["reason"] = "remote_identity_not_verified"
             else:
+                validate_risk_reads(journal.risk_snapshot, state)
+                detail["risk_component_reads"] = deepcopy(
+                    journal.risk_snapshot["reads"] + state["risk_component_reads"])
                 _evaluate_validated_budget(profile, policy, request, detail, journal.risk_snapshot, config)
                 if detail.get("authorized") is True:
                     return detail
