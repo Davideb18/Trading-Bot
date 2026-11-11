@@ -293,6 +293,8 @@ class FreqtradeBot(LoggingMixin):
 
         require_core_authority(self)
         sync_prop_controls(self)
+        with self._exit_lock:
+            self.manage_open_orders()
         cancel_fault_entries(self, Trade)
         reconcile_journal(self, Trade)
         # Check whether markets have to be reloaded and reload them when it's needed

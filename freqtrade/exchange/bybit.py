@@ -91,6 +91,9 @@ class Bybit(Exchange):
                 raw_mark = raw.get("markPrice")
                 if raw_mark not in (None, "", "0"):
                     pos_entry["mark_price"] = float(raw_mark)
+                    pos_read = next((r for r in reversed(reads) if r.get("component") == "positions"), None)
+                    if pos_read and pos_read.get("received_ms"):
+                        pos_entry["mark_price_observed_ms"] = pos_read["received_ms"]
                 snapshot["positions"].append(pos_entry)
         for intent in intents:
             cid = intent["client_id"]

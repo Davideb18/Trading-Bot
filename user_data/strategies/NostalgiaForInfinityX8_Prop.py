@@ -378,7 +378,7 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
 
   # Non rebuy modes
   regular_mode_stake_multiplier_spot = [1.0]
-  regular_mode_stake_multiplier_futures = [1.0]
+  regular_mode_stake_multiplier_futures = [0.50]
   regular_mode_use_grind_stops = False
 
   regular_mode_rebuy_stakes_spot = [0.10, 0.10, 0.10]
@@ -617,7 +617,7 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
   system_v3_derisk_level_3_stake_spot = 0.10
   system_v3_derisk_level_3_stake_futures = 0.10
 
-  system_v3_2_stake_multiplier = 1.0
+  system_v3_2_stake_multiplier = 0.50
   system_v3_2_derisk_level_1_enable = True
   system_v3_2_derisk_level_1_spot = [-0.06, -0.12]
   system_v3_2_derisk_level_1_futures = [-0.18, -0.35]
@@ -712,7 +712,7 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
   system_name_use = system_v4_name
 
   system_v4_max_stake = 1.0  # ratio of first entry
-  system_v4_stake_multiplier = 1.0
+  system_v4_stake_multiplier = 0.50
 
   # Bad-trade exits. Enable for new v4 trades without changing older open trades.
   system_v4_bad_trade_exit_enable = True
@@ -1244,7 +1244,7 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
       exchange_name = strategy_config["exchange"]["name"]
       runmode_value = strategy_config["runmode"].value
       self.target_profit_cache = Cache(
-        strategy_config["user_data_dir"]
+        pathlib.Path(strategy_config["user_data_dir"])
         / (
           "nfix8-profit_max-"
           + bot_name
@@ -5356,9 +5356,17 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
         state = json.loads(state_path.read_text())
         updated = datetime.fromisoformat(state["last_updated"])
         age = current_time.timestamp() - updated.timestamp()
-        if (state.get("schema_version") != 1 or updated.tzinfo is None
-            or not 0 <= age <= 15 or state.get("nuclear_triggered") is not False
-            or state.get("data_fault") is not False or state.get("wake_up_lock") is not False):
+        if (state.get("schema_version") != 1
+            or updated.tzinfo is None
+            or not 0 <= age <= 15
+            or state.get("nuclear_triggered") is not False
+            or state.get("data_fault") is not False
+            or state.get("wake_up_lock") is not False
+            or state.get("macro_paused") is True):
+          return False
+        if "risk_schema_version" in state and state.get("risk_schema_version") != 2:
+          return False
+        if "data_valid" in state and state.get("data_valid") is not True:
           return False
       except (OSError, ValueError, KeyError, TypeError):
         return False
