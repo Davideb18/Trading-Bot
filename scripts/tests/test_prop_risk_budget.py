@@ -15,13 +15,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from freqtrade.order_journal import JournalBlocked, OrderJournal
 from freqtrade.prop_profile import profile_from_config
 from freqtrade.prop_risk_budget import budget, inventory, require_risk_budget
+from freqtrade.prop_risk_approval import policy_identity, APPROVAL_SCHEMA
 from freqtrade.journal_execution import journal_create_order
 from test_prop_profile import configured_account, baseline
 from test_order_journal import REQUEST, PAIR, snapshot, order, local
 
 
 def approved_budget_policy(profile):
-    return {
+    policy = {
         "model": "hyrotrader_one_step_validated_v2",
         "status": "approved",
         "approval": {
@@ -40,6 +41,17 @@ def approved_budget_policy(profile):
         "latency_gap_stress_bps": 250.0,
         "min_headroom_buffer_usdt": 30.0,
     }
+    # Synthetic review fixture only. Never imported by commissioning or runtime.
+    seal_test_policy(profile, policy, configured_account())
+    return policy
+
+
+def seal_test_policy(profile, policy, config, request=REQUEST):
+    policy['approval'].update(
+        schema_version=APPROVAL_SCHEMA,
+        reviewed_at=datetime.now(UTC).isoformat(),
+        policy_fingerprint=policy_identity(profile, policy, config, request)[1],
+    )
 
 
 class RiskBudgetTests(unittest.TestCase):
@@ -341,6 +353,9 @@ class RiskBudgetTests(unittest.TestCase):
         ]:
             with self.subTest(key=key, bad_val=bad_val):
                 self.bot.config['prop_risk_budget'] = {**base, key: bad_val}
+                # This test exercises numeric bounds with a matching review;
+                # stale reviews are covered separately by approval regression tests.
+                seal_test_policy(self.profile, self.bot.config['prop_risk_budget'], self.config)
                 res = self.deny(amount=1.0, rate=100.0)
                 self.assertIn('prop_risk_budget policy parameters violate certified safety bounds', res['reason'])
 

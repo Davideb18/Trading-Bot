@@ -9,12 +9,14 @@ import json
 import math
 import time
 import uuid
+from copy import deepcopy
 from decimal import Decimal
 from typing import Any
 
 from freqtrade.order_journal import JournalBlocked, quantity
 from freqtrade.prop_controls import supervisor_state, sync_prop_controls
 from freqtrade.prop_profile import floors, number, profile_from_config
+from freqtrade.prop_risk_approval import reviewed_policy
 
 CERTIFIED_BUDGET_MODEL = "hyrotrader_one_step_validated_v2"
 
@@ -65,22 +67,15 @@ def inventory(journal):
             "future_cost_bound": None, "floating_pnl_in_equity": True}
 
 
-def _evaluate_validated_budget(profile, policy, request, detail, snapshot):
+def _evaluate_validated_budget(profile, policy, request, detail, snapshot, config):
     detail["model"] = CERTIFIED_BUDGET_MODEL
     leverage = request.get("leverage")
-    if leverage is not None and (not number(leverage) or not math.isclose(float(leverage), 1.0, rel_tol=1e-9, abs_tol=1e-9)):
+    if not number(leverage) or not math.isclose(float(leverage), 1.0, rel_tol=1e-9, abs_tol=1e-9):
         detail["reason"] = "leverage_exceeds_one_step_limit"
         return
-    approval = policy.get("approval")
     # A verified risk budget requires explicit external reviewed evidence.
     # Arbitrary parameters, simple boolean flags, or uncertified config names cannot authorize orders.
-    if (policy.get("status") != "approved"
-            or not isinstance(approval, dict)
-            or approval.get("kind") != "risk_budget_approval"
-            or approval.get("reviewed") is not True
-            or approval.get("account_id") != profile["account_id"]
-            or approval.get("challenge_id") != profile["challenge_id"]
-            or not isinstance(approval.get("reference"), str) or not approval["reference"].strip()):
+    if not reviewed_policy(profile, policy, config, request, detail):
         detail["reason"] = "unapproved_risk_budget_parameters"
         return
     initial = Decimal(str(profile["initial_balance"]))
@@ -195,7 +190,10 @@ def require_risk_budget(bot, request, trade_id=None):
     with journal.mutex:
         detail: dict[str, Any] = {"model": "unavailable", "authorized": False}
         try:
-            profile = profile_from_config(bot.config)
+            # Evaluate one detached configuration snapshot; approval cannot be
+            # checked against one set of parameters and priced against another.
+            config = deepcopy(bot.config)
+            profile = profile_from_config(config)
             binding = json.loads(journal.db.execute("SELECT value FROM binding WHERE id=1").fetchone()[0])
             if any(binding.get(k) != profile[k] for k in (
                     "profile_id", "account_id", "challenge_id", "phase_id",
@@ -214,7 +212,7 @@ def require_risk_budget(bot, request, trade_id=None):
             detail.update(inventory(journal))
             remote_verified = state.get("remote_identity_verified") is True
             detail["remote_identity_authorization"] = "verified" if remote_verified else "not_established"
-            policy = bot.config.get("prop_risk_budget")
+            policy = config.get("prop_risk_budget")
             if detail["unobserved_reservations"]:
                 detail["reason"] = "unobserved_reservations_pending"
             elif detail["headroom"] == 0:
@@ -224,7 +222,7 @@ def require_risk_budget(bot, request, trade_id=None):
             elif not remote_verified:
                 detail["reason"] = "remote_identity_not_verified"
             else:
-                _evaluate_validated_budget(profile, policy, request, detail, journal.risk_snapshot)
+                _evaluate_validated_budget(profile, policy, request, detail, journal.risk_snapshot, config)
                 if detail.get("authorized") is True:
                     return detail
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
