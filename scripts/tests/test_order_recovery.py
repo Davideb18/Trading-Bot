@@ -28,7 +28,9 @@ from freqtrade.exceptions import DependencyException, ExchangeError, InvalidOrde
 from freqtrade.order_recovery import (
     RECOVERY_KEY, UNKNOWN_FORCE_EXIT, clear_recovery, mark_recovery,
     order_evidence_valid, pending_recovery,
+    verified_prop_cancel,
 )
+from freqtrade.journal_execution import delete_verified_empty_trade
 
 
 class RPCException(Exception):
@@ -169,6 +171,8 @@ class RecoveryTests(unittest.TestCase):
                   CANCEL_REASON=constants.CANCEL_REASON, isclose=math.isclose,
                   mark_recovery=mark_recovery, clear_recovery=clear_recovery,
                   pending_recovery=pending_recovery, order_evidence_valid=order_evidence_valid,
+                  verified_prop_cancel=verified_prop_cancel,
+                  delete_verified_empty_trade=delete_verified_empty_trade,
                   UNKNOWN_FORCE_EXIT=UNKNOWN_FORCE_EXIT,
                   safe_value_fallback2=lambda first, second, k1, k2: first.get(k1, second.get(k2)),
                   sleep=lambda _: None)

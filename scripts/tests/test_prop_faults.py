@@ -224,6 +224,10 @@ class FaultTests(unittest.TestCase):
         cancel_fault_entries(self.bot, Trade)
         self.bot.exchange.cancel_order.assert_called_once_with(o.order_id, trade.pair)
         self.assertEqual(self.journal.db.execute("SELECT state FROM cancellations").fetchone()[0], "confirmed")
+        # Terminal cancellation alone does not establish account-wide absence of exposure.
+        self.assertIn(trade.id, Trade.rows)
+        self.bot.exchange.fetch_journal_snapshot.return_value = self.empty
+        self.bot.manage_open_orders()
         self.assertNotIn(trade.id, Trade.rows)
         self.assertTrue(sync_prop_controls(self.bot))
 

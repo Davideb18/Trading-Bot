@@ -34,6 +34,46 @@ la logica di contabilizzazione del monitor non è stata corretta in P0.1.
 
 ## Stato e baseline
 
+### Patch 4: rollover UTC senza baseline attendibile
+
+Il giorno valutato segue la ricezione UTC dell'equity, non l'avvio del ciclo.
+Lo stato conserva separatamente `cycle_started_at`, `received_at` e, quando
+disponibile, `response_at` del server Bybit. Quest'ultimo è il timestamp della
+risposta: non certifica l'istante esatto di misurazione dell'equity. Se risposta
+e ricezione appartengono a giorni diversi, il campione non abilita il controllo
+daily del nuovo giorno. Nessun campione viene retrodatato.
+
+Una baseline accettata deve soddisfare `validate_baseline`: oltre ai campi
+descritti sotto, richiede `status: verified` ed evidenza revisionata di tipo
+`historical_account_equity`, con account, valore, istante e riferimento coerenti.
+Il riferimento è un confine di fiducia esterno; compilare questi campi non
+autentica automaticamente una fonte o un valore manuale.
+
+Senza baseline valida rimangono nulli i floor daily. Lo stato dichiara
+`daily_monitoring_available: false`, `overnight_policy_required: true` e
+`monitoring_status: overall_only` soltanto se l'equity permette il controllo
+overall; altrimenti il monitoraggio è `unavailable`. Il fault resta persistente
+e blocca ingressi, DCA e replacement. Il ritorno della baseline non cancella il
+fault né riavvia automaticamente il trading.
+
+Dopo il controllo overall, il supervisore tenta una fotografia indipendente
+dell'account entro la deadline già esistente. `overnight_exposure.status` distingue
+`present` (posizioni o ordini aperti), `flat_observed` e `unknown`. Una fotografia
+flat non prova la baseline storica né garantisce che l'account resti flat.
+La query non precede un'emergenza overall già rilevata e non usa fallback RPC.
+Il gap daily è segnalato nei log, nello stato e nei fault del journal. Con stato
+corrotto si preserva il file originale e si usa il journal per la segnalazione
+persistente; con storage indisponibile restano soltanto log, latch in memoria e
+blocco per heartbeat, senza promessa di durabilità.
+
+Questa patch **non rende sicuro mantenere esposizione overnight** senza baseline
+attendibile. Non introduce liquidazioni per il solo gap daily o per una stima.
+Prima del deployment occorre approvare una fonte affidabile della baseline e/o
+una politica esplicita per esposizione e ordini overnight (per esempio riduzione
+preventiva con verifica flat). Le eventuali chiusure software restano soggette a
+disponibilità exchange, journal e handoff esclusivo: non garantiscono una perdita
+massima. Riduzioni ed emergenza esistenti restano invariate.
+
 Il file `risk_manager_prop_state.json` mantiene l'envelope `schema_version: 1`
 per il lettore heartbeat della strategia invariata. Il wallet richiede anche
 `risk_schema_version: 2`, contratto corrispondente, baseline del giorno UTC e

@@ -1098,10 +1098,11 @@ class RPC:
                 if order["side"] == trade.entry_side and order["status"] != "closed":
                     clear_recovery(trade, oo.order_id)
                     self._freqtrade.handle_cancel_enter(
-                        trade, order, oo, CANCEL_REASON["FORCE_EXIT"]
+                        trade, order, oo, CANCEL_REASON["FORCE_EXIT"], verified_terminal=True
                     )
                 elif order["side"] == trade.exit_side and order["status"] != "closed":
-                    self._freqtrade.handle_cancel_exit(trade, order, oo, CANCEL_REASON["FORCE_EXIT"])
+                    self._freqtrade.handle_cancel_exit(trade, order, oo, CANCEL_REASON["FORCE_EXIT"],
+                                                       verified_terminal=True)
                     clear_recovery(trade, oo.order_id)
                 else:
                     self._freqtrade.update_trade_state(trade, oo.order_id, order)

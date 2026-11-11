@@ -16,6 +16,7 @@ from schedule import Scheduler
 from freqtrade import constants
 from freqtrade.journal_execution import (
     bind_journal, journal_create_order, open_journal, reconcile_journal,
+    delete_verified_empty_trade,
 )
 from freqtrade.order_journal import JournalBlocked
 from freqtrade.fault_recovery import cancel_fault_entries
@@ -23,6 +24,7 @@ from freqtrade.prop_controls import sync_prop_controls
 from freqtrade.emergency_authority import EmergencyTakeover, require_core_authority
 from freqtrade.order_recovery import (
     clear_recovery, mark_recovery, order_evidence_valid, pending_recovery,
+    verified_prop_cancel,
 )
 from freqtrade.configuration import remove_exchange_credentials, validate_config_consistency
 from freqtrade.constants import BuySell, Config, EntryExecuteMode, ExchangeConfig, LongShort
@@ -1681,6 +1683,12 @@ class FreqtradeBot(LoggingMixin):
                     else:
                         self.replace_order(order, open_order, trade)
 
+            # Retry deferred empty-trade cleanup after journal evidence becomes available.
+            if (self.config.get("prop_guard_enabled") and not trade.has_open_orders
+                    and trade.is_open and trade.nr_of_successful_entries == 0
+                    and Trade.session.get(Trade, trade.id) is not None):
+                delete_verified_empty_trade(self, trade, Trade)
+
     def handle_cancel_order(
         self, order: CcxtOrder, order_obj: Order, trade: Trade, reason: str, replacing: bool = False
     ) -> bool:
@@ -1729,6 +1737,9 @@ class FreqtradeBot(LoggingMixin):
         :param msg: Error message.
         """
         logger.warning(msg)
+        if self.config.get("prop_guard_enabled"):
+            delete_verified_empty_trade(self, trade, Trade)
+            return
         if trade.nr_of_successful_entries == 0:
             # this is the first entry and we didn't get filled yet, delete trade
             logger.warning(f"Removing {trade} from database.")
@@ -1934,6 +1945,7 @@ class FreqtradeBot(LoggingMixin):
         order_obj: Order,
         reason: str,
         replacing: bool | None = False,
+        *, verified_terminal: bool = False,
     ) -> bool:
         """
         entry cancel - cancel order
@@ -1959,7 +1971,12 @@ class FreqtradeBot(LoggingMixin):
                         f"as the filled amount of {filled_val} would result in an unexitable trade."
                     )
                     return False
-            corder = self.exchange.cancel_order_with_result(order_id, trade.pair, trade.amount)
+            if self.config.get("prop_guard_enabled"):
+                corder = verified_prop_cancel(self, trade, order_obj, Trade)
+                if corder is None:
+                    return False
+            else:
+                corder = self.exchange.cancel_order_with_result(order_id, trade.pair, trade.amount)
             order_obj.ft_cancel_reason = reason
             # if replacing, retry fetching the order 3 times if the status is not what we need
             if replacing:
@@ -1980,11 +1997,29 @@ class FreqtradeBot(LoggingMixin):
                 return False
         else:
             # Order was cancelled already, so we can reuse the existing dict
-            corder = order
+            if self.config.get("prop_guard_enabled"):
+                corder = verified_prop_cancel(self, trade, order_obj, Trade,
+                                              terminal_evidence=order if verified_terminal else None)
+                if corder is None:
+                    return False
+            else:
+                corder = order
             if order_obj.ft_cancel_reason is None:
                 order_obj.ft_cancel_reason = constants.CANCEL_REASON["CANCELLED_ON_EXCHANGE"]
 
         logger.info(f"{side} order {order_obj.ft_cancel_reason} for {trade}.")
+
+        if self.config.get("prop_guard_enabled"):
+            self.update_trade_state(trade, order_id, corder)
+            clear_recovery(trade, order_id)
+            Trade.commit()
+            empty = corder["filled"] == 0
+            if empty and not replacing:
+                delete_verified_empty_trade(self, trade, Trade)
+            self.wallets.update()
+            self._notify_enter_cancel(
+                trade, order_type=self.strategy.order_types["entry"], reason=order_obj.ft_cancel_reason)
+            return empty
 
         # Using filled to determine the filled amount
         filled_amount = safe_value_fallback2(corder, order, "filled", "filled")
@@ -2019,7 +2054,8 @@ class FreqtradeBot(LoggingMixin):
         return was_trade_fully_canceled
 
     def handle_cancel_exit(
-        self, trade: Trade, order: CcxtOrder, order_obj: Order, reason: str
+        self, trade: Trade, order: CcxtOrder, order_obj: Order, reason: str,
+        *, verified_terminal: bool = False,
     ) -> bool:
         """
         exit order cancel - cancel order and update trade
@@ -2027,6 +2063,34 @@ class FreqtradeBot(LoggingMixin):
         """
         order_id = order_obj.order_id
         cancelled = False
+        if self.config.get("prop_guard_enabled"):
+            # Preserve the existing dust-position refusal before requesting cancellation.
+            filled = order.get("filled", 0.0) or 0.0
+            if order["status"] == "open" and filled > 0:
+                remaining_stake = trade.stake_amount - filled * trade.open_rate / trade.leverage
+                minimum = self.exchange.get_min_pair_stake_amount(
+                    trade.pair, trade.open_rate, self.strategy.stoploss)
+                if minimum and remaining_stake < minimum:
+                    return False
+            proof = verified_prop_cancel(self, trade, order_obj, Trade,
+                                         terminal_evidence=order if verified_terminal else None)
+            if proof is None:
+                return False
+            order_obj.ft_cancel_reason = reason
+            self.update_trade_state(trade, order_id, proof)
+            clear_recovery(trade, order_id)
+            Trade.commit()
+            if proof["status"] in constants.CANCELED_EXCHANGE_STATES:
+                trade.exit_reason = None
+                trade.close_rate = None
+                trade.close_rate_requested = None
+            self.wallets.update()
+            if proof["status"] == "closed":
+                return False  # Filled is not a canceled order available for replacement.
+            self._notify_exit_cancel(
+                trade, order_type=self.strategy.order_types["exit"], reason=reason,
+                order_id=order_id, sub_trade=trade.amount != proof["amount"])
+            return proof["status"] in constants.CANCELED_EXCHANGE_STATES
         # Cancelled orders may have the status of 'canceled' or 'closed'
         if order["status"] not in constants.NON_OPEN_EXCHANGE_STATES:
             filled_amt: float = order.get("filled", 0.0) or 0.0

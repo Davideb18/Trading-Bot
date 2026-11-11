@@ -1,6 +1,7 @@
 """Freqtrade integration for the durable order journal; no second execution path."""
 
 import hashlib
+import json
 import logging
 from pathlib import Path
 
@@ -13,6 +14,34 @@ from freqtrade.prop_risk_budget import require_risk_budget
 
 
 logger = logging.getLogger(__name__)
+
+
+def delete_verified_empty_trade(bot, trade, trade_model):
+    """Prop cleanup requires terminal ORM evidence and fresh account reconciliation."""
+    from freqtrade.constants import CANCELED_EXCHANGE_STATES
+
+    require_core_authority(bot)
+    journal = getattr(bot, "order_journal", None)
+    if (journal is None or not trade.orders or trade.has_open_orders
+            or trade.amount != 0
+            or any(o.filled is None or o.filled != 0 or o.status not in CANCELED_EXCHANGE_STATES
+                   for o in trade.orders)):
+        return False
+    with journal.mutex:
+        reconcile_journal(bot, trade_model)
+        if not journal.ready or pending_recovery(trade):
+            return False
+        if any(i["trade_id"] == trade.id or json.loads(i["request"])["pair"] == trade.pair
+               for i in journal.intents()):
+            return False
+        snapshot = journal.risk_snapshot
+        if (snapshot is None or any(p["symbol"] == trade.pair and p["amount"] != 0
+                                    for p in snapshot["positions"])
+                or any(o["symbol"] == trade.pair for o in snapshot["open_orders"])):
+            return False
+        require_core_authority(bot)
+        trade.delete()
+        return True
 
 
 def open_journal(config, exchange_config):

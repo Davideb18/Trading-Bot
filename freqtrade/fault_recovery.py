@@ -79,7 +79,8 @@ def cancel_fault_entries(bot, trade_model):
                         pass
                     elif order["status"] != "closed":
                         # Existing P0.2 handler accounts partial fills and empty entries.
-                        bot.handle_cancel_enter(trade, order, local_order, "prop_operational_fault")
+                        bot.handle_cancel_enter(trade, order, local_order, "prop_operational_fault",
+                                                verified_terminal=True)
                     else:
                         bot.update_trade_state(trade, oid, order)
                     trade_model.commit()

@@ -1,6 +1,7 @@
 """Runtime wiring for direct risk reads; ordinary trading remains in Freqtrade."""
 
 import os
+from datetime import UTC, datetime
 from contextlib import contextmanager
 
 from freqtrade.emergency_supervisor import EmergencySupervisor
@@ -28,10 +29,23 @@ class IndependentRiskAPI:
             raise UnverifiedAccount("Incomplete account identity response") from None
 
     def get_equity(self):
+        self.equity_observation = None
         try:
-            return self.direct.equity()
+            equity = self.direct.equity()
+            self.equity_observation = getattr(self.direct, 'equity_observation', None)
+            return equity
         except (UnverifiedAccount, KeyError, ValueError, TypeError):
             return None
+
+    def get_account_exposure(self):
+        """Read-only full-account evidence, under the existing shared cycle deadline.
+
+        No RPC fallback and no liquidation authority is granted by this observation.
+        """
+        snapshot = self.direct.snapshot()
+        return {"positions_count": len(snapshot["positions"]),
+                "open_orders_count": len(snapshot["orders"]),
+                "received_at": datetime.now(UTC).isoformat(), "source": "direct_account_snapshot"}
 
     def __getattr__(self, name):
         # These calls only coordinate ordinary operation. Emergency execution

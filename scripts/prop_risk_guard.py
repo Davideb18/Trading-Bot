@@ -333,6 +333,33 @@ class RiskGuard:
         finally:
             self._emergency_lock.release()
 
+    def _daily_unavailable(self, now, *, read_exposure=True):
+        """Report an unknown daily floor; never derive a liquidation threshold from a guess."""
+        exposure = {"status": "unknown", "checked_at": now.isoformat()}
+        # Only an explicit independent adapter method qualifies, never an RPC delegate.
+        reader = getattr(type(self.api_client), "get_account_exposure", None)
+        if read_exposure and reader is not None:
+            try:
+                sample = reader(self.api_client)
+                if (not isinstance(sample, dict)
+                        or sample.get("source") != "direct_account_snapshot"
+                        or any(type(sample.get(k)) is not int or sample[k] < 0
+                               for k in ("positions_count", "open_orders_count"))):
+                    raise ValueError("Unverified exposure")
+                exposure = {**sample, "status": "present" if (
+                    sample["positions_count"] or sample["open_orders_count"]) else "flat_observed"}
+            except Exception:
+                pass  # Unknown is never flat; overall evaluation already has priority.
+        with self._state_lock:
+            self.state.update(daily_monitoring_available=False, overnight_exposure=exposure,
+                              overnight_policy_required=True)
+            self.state.setdefault("daily_unavailable_since", now.isoformat())
+        reason = "Daily floor unverifiable; exposure=" + exposure["status"] + "; overnight policy required"
+        log.critical(reason)
+        # The journal fault survives restart, including when the main risk file is corrupt.
+        self.request_data_fault(reason)
+        return reason
+
     def _check_drawdown(self, now=None):  # noqa: C901 - atomic state update and limits together
         self._drain_control_requests()
         now_supplied = now
@@ -366,14 +393,19 @@ class RiskGuard:
                             equity, levels["operating_overall_floor"],
                         )
                         self._persist_emergency_halt(now, float(equity), levels, reason)
+                        self._daily_unavailable(now, read_exposure=False)
                         self._enforce_halt()
                         return True
+                    self._daily_unavailable(datetime.now(UTC) if now_supplied is None else now)
                 except Exception:
                     self.state["monitoring_status"] = "unavailable"
                     log.error("Independent risk monitoring unavailable during state fault")
+                    self._daily_unavailable(now, read_exposure=False)
             else:
                 self.state["monitoring_status"] = "unavailable"
                 log.error("Independent risk monitoring unavailable: no emergency adapter")
+            if "overnight_exposure" not in self.state:
+                self._daily_unavailable(now, read_exposure=False)
             self._pause_on_fault("Risk state requires reconciliation")
             return False
         with self._state_lock:
@@ -386,23 +418,37 @@ class RiskGuard:
                 raise ValueError("Clock moved backwards")
         except UnverifiedAccount as exc:
             self.state["monitoring_status"] = "unavailable"
+            self._daily_unavailable(now, read_exposure=False)
             self._pause_on_fault(str(exc))
             return False
         except (ValueError, TypeError, KeyError) as exc:
             self.state["monitoring_status"] = "unavailable"
+            self._daily_unavailable(now, read_exposure=False)
             self.state_error = str(exc)
             self._pause_on_fault(str(exc))
             return False
         equity = self.api_client.get_equity()
         if not finite_number(equity):
             self.state["monitoring_status"] = "unavailable"
+            self._daily_unavailable(now, read_exposure=False)
             self._pause_on_fault("Missing/nonfinite full-account equity")
             return False
         # Preserve real observations separately from historical midnight evidence.
         # These are receipt timestamps, not a retrodated exchange measurement.
         received_at = datetime.now(UTC) if now_supplied is None else now
+        cycle_started_at = now
+        now = received_at  # Baseline day and comparisons follow receipt, not cycle start.
         observation = {"equity": float(equity), "received_at": received_at.isoformat(),
+                       "cycle_started_at": cycle_started_at.isoformat(),
                        "source": "direct_account_equity" if self.emergency is not None else "account_equity_adapter"}
+        metadata = getattr(self.api_client, "__dict__", {}).get("equity_observation")
+        response_day_mismatch = False
+        if isinstance(metadata, dict) and metadata.get("equity") == equity:
+            response_ms = metadata.get("response_time_ms")
+            if finite_number(response_ms):
+                response_at = datetime.fromtimestamp(response_ms / 1000, UTC)
+                observation.update(response_at=response_at.isoformat(), source=metadata["source"])
+                response_day_mismatch = response_at.date() != now.date()
         previous = self.state.get("equity_observation")
         self.state["equity_observation"] = observation
         try:
@@ -412,6 +458,7 @@ class RiskGuard:
         if previous and previous_day != now.date():
             self.state["baseline_estimate"] = {
                 "status": "estimated", "confirmed": False,
+                "utc_day": now.date().isoformat(),
                 "source": "pre_post_observations_not_midnight_evidence",
                 "samples": [previous, observation],
             }
@@ -419,6 +466,8 @@ class RiskGuard:
         baseline_error = None
         baseline_status = "verified"
         try:
+            if response_day_mismatch:
+                raise ValueError("Equity response and receipt belong to different UTC days")
             if baseline is None or utc_time(baseline["captured_at"]).date() != now.date():
                 candidate = json.loads(self.baseline_file.read_text(encoding="utf-8"))
                 validate_baseline(candidate, self.profile, now)
@@ -427,7 +476,7 @@ class RiskGuard:
                 validate_baseline(baseline, self.profile, now)
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
             baseline_error = "Midnight baseline reconciliation required"
-            baseline_status = ("estimated" if self.state.get("baseline_estimate") else
+            baseline_status = ("estimated" if self.state.get("baseline_estimate", {}).get("utc_day") == now.date().isoformat() else
                                "missing" if isinstance(exc, FileNotFoundError) else "unverified")
             baseline = None
         # Overall protection remains available even while the daily baseline is unknown.
@@ -458,6 +507,12 @@ class RiskGuard:
             if reason:
                 self.state.update(nuclear_triggered=True, wake_up_lock=True,
                                   liquidation_confirmed=False, halt_reason=reason)
+        if baseline_error:
+            baseline_error = self._daily_unavailable(now, read_exposure=not bool(reason))
+        else:
+            with self._state_lock:
+                self.state.update(daily_monitoring_available=True, overnight_policy_required=False)
+                self.state.pop("daily_unavailable_since", None)
         saved = self._save_state()
         if not saved:
             self._pause_on_fault(self.state_error)

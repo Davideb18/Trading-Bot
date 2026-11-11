@@ -29,6 +29,46 @@ def clear_recovery(trade, order_id):
         trade.set_custom_data(key=RECOVERY_KEY, value=sorted(pending))
 
 
+def verified_prop_cancel(bot, trade, local_order, trade_model, *, terminal_evidence=None):
+    """Cancel only with core authority; a fresh lookup, never an ACK, proves the outcome.
+
+    Keep the existing recovery marker until the caller applies terminal evidence
+    to the ORM. An open or unknown result remains retry-blocking, not canceled.
+    """
+    from freqtrade.emergency_authority import require_core_authority
+    from freqtrade.exceptions import ExchangeError
+
+    require_core_authority(bot)
+    mark_recovery(trade, local_order.order_id)
+    trade_model.commit()
+    try:
+        # Force-exit/fault recovery already performed a verified terminal lookup.
+        # Reuse that evidence rather than adding another network dependency to reduction.
+        order = (terminal_evidence if terminal_evidence is not None
+                 else bot.exchange.fetch_order(local_order.order_id, trade.pair))
+        if (not order_evidence_valid(order, local_order, trade.pair)
+                or order.get("symbol") != trade.pair
+                or not math.isclose(order["amount"], local_order.amount, rel_tol=1e-8, abs_tol=1e-12)):
+            return None
+        if terminal_evidence is not None and order["status"] == "open":
+            return None
+        if order["status"] == "open":
+            require_core_authority(bot)
+            try:
+                bot.exchange.cancel_order(local_order.order_id, trade.pair)
+            except ExchangeError:
+                pass  # A failed acknowledgement cannot decide whether cancellation happened.
+            order = bot.exchange.fetch_order(local_order.order_id, trade.pair)
+        if (not order_evidence_valid(order, local_order, trade.pair)
+                or order.get("symbol") != trade.pair
+                or not math.isclose(order["amount"], local_order.amount, rel_tol=1e-8, abs_tol=1e-12)
+                or order["status"] == "open"):
+            return None
+        return order
+    except (ExchangeError, ValueError, TypeError, KeyError):
+        return None
+
+
 def order_evidence_valid(order, local_order, pair):
     """Unknown/missing quantities and regressing fills cannot authorize reconciliation."""
     if not isinstance(order, dict):

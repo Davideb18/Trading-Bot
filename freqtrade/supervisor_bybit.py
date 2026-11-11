@@ -87,6 +87,7 @@ class SupervisorBybit:
         return self.profile
 
     def equity(self):
+        self.equity_observation = None
         if self.account_type is None:
             raise UnverifiedAccount("Account identity must be verified first")
         response = self._call(self.api.privateGetV5AccountWalletBalance, {"accountType": self.account_type})
@@ -102,6 +103,8 @@ class SupervisorBybit:
                 raise UnverifiedAccount("Non-USDT collateral/exposure cannot be certified")
         if len(equity) != 1:
             raise UnverifiedAccount("USDT equity unavailable")
+        self.equity_observation = {"equity": equity[0], "response_time_ms": number(response["time"]),
+                                   "source": "bybit_v5_wallet_response"}
         return equity[0]
 
     def _pages(self, endpoint, params):
