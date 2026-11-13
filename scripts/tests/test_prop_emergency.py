@@ -625,5 +625,137 @@ class AdapterTests(unittest.TestCase):
         self.api.publicGetV5MarketTime.assert_not_called()
 
 
+class MultiPositionEmergencyTests(unittest.TestCase):
+    def setUp(self):
+        patch.object(socket.socket, "connect", side_effect=AssertionError("Network forbidden")).start()
+        self.addCleanup(patch.stopall)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.profile = profile_from_config(configured_account())
+
+    def test_a1_multi_position_emergency_liquidates_all_pairs_and_signals_clean_exit(self):
+        eth_pair = "ETH/USDT:USDT"
+        state_file = self.root / "risk_manager_prop_state.json"
+        now = datetime.now(UTC)
+        b = baseline(self.profile, now=now)
+        st = reconciled_state(self.profile, b, now, halted=True)
+        st["halt_reason"] = "Multi-position DD breach"
+        state_file.write_text(json.dumps(st))
+
+        # Bind 2 positions owned by core journal, then release lock so EmergencySupervisor takes over.
+        identity = {
+            k: self.profile[k]
+            for k in ("account_id", "challenge_id", "phase_id", "profile_id", "exchange", "environment", "currency")
+        }
+        identity["key_fingerprint"] = hashlib.sha256(KEY.encode()).hexdigest()
+        core_j = OrderJournal(self.root, identity)
+        entry_ev_by_cid = {}
+        for p, sz in ((PAIR, 2.0), (eth_pair, 3.0)):
+            core_j.ready = True
+            cid = core_j.prepare({"pair": p, "side": "buy", "amount": sz, "price": 100.0, "ordertype": "limit", "reduceOnly": False})
+            ev = {
+                "id": f"ex-{cid}",
+                "clientOrderId": cid,
+                "symbol": p,
+                "side": "buy",
+                "amount": sz,
+                "filled": sz,
+                "remaining": 0.0,
+                "status": "closed",
+                "price": 100.0,
+                "average": 100.0,
+                "reduceOnly": False,
+            }
+            entry_ev_by_cid[cid] = ev
+            core_j.dispatch(cid, lambda ev=ev, **kw: ev)
+            with core_j.db:
+                core_j.db.execute(
+                    "UPDATE intents SET linked=1, settled=1, evidence=? WHERE client_id=?",
+                    (json.dumps(ev), cid),
+                )
+        core_j.close()
+
+        orders_by_cid = {}
+        positions = [
+            {"pair": PAIR, "side": "buy", "contracts": 2.0, "amount": 2.0, "mark_price": 98.0},
+            {"pair": eth_pair, "side": "buy", "contracts": 3.0, "amount": 3.0, "mark_price": 98.0},
+        ]
+
+        class MultiAdapter:
+            operation_budget = SupervisorBybit.operation_budget
+            def __init__(self, profile):
+                self.profile = profile
+                self.deadline = None
+            def snapshot(self):
+                return {"equity": 4700.0, "positions": list(positions), "orders": [], "checked_ms": int(time.time() * 1000)}
+            def lookup(self, pair, *, client_id=None, order_id=None):
+                if client_id in entry_ev_by_cid:
+                    return entry_ev_by_cid[client_id]
+                return orders_by_cid.get(client_id)
+            def close_request(self, pos):
+                return {"pair": pos["pair"], "side": "sell", "amount": pos["amount"], "ordertype": "market", "reduceOnly": True}
+            def expected_amount(self, req):
+                return req["amount"]
+            def create_order(self, *, pair, side, amount, ordertype, reduceOnly, client_order_id):
+                res = {"id": f"ex-{client_order_id}", "clientOrderId": client_order_id, "symbol": pair, "side": side,
+                       "amount": amount, "filled": amount, "remaining": 0.0, "status": "closed", "price": 98.0, "average": 98.0, "reduceOnly": True}
+                orders_by_cid[client_order_id] = res
+                positions[:] = [p for p in positions if p["pair"] != pair]
+                return res
+
+        sup = EmergencySupervisor(MultiAdapter(self.profile), self.root, state_file, self.profile, KEY, coordinated=True)
+        # Step 1: liquidates BOTH BTC and ETH in a single pass.
+        self.assertFalse(sup.step())
+        self.assertEqual(len(orders_by_cid), 2)
+        self.assertEqual({o["symbol"] for o in orders_by_cid.values()}, {PAIR, eth_pair})
+
+        # Same-pair unsettled emergency order STILL blocked if attempted directly:
+        with sup.journal.db:
+            sup.journal.db.execute("UPDATE intents SET settled=0 WHERE client_id=?", (next(iter(orders_by_cid)),))
+        with self.assertRaises(JournalBlocked):
+            sup.journal.prepare_emergency({"pair": PAIR, "side": "sell", "amount": 1.0, "ordertype": "market", "reduceOnly": True}, sup.owner)
+        with sup.journal.db:
+            sup.journal.db.execute("UPDATE intents SET settled=1")
+
+        # Step 2: confirms flat cleanly.
+        self.assertTrue(sup.step())
+        self.assertEqual(read_emergency(self.root)["phase"], "flat_confirmed")
+        sup.journal.close()
+
+        # Verify trade_commands returns 0 on KeyboardInterrupt during emergency handoff, raises otherwise.
+        from freqtrade.commands.trade_commands import start_trading
+        fake_worker_handoff = SimpleNamespace(freqtrade=SimpleNamespace(_emergency_handoff=True), run=Mock(side_effect=KeyboardInterrupt()), exit=Mock())
+        with patch("freqtrade.worker.Worker", return_value=fake_worker_handoff), patch("freqtrade.commands.trade_commands.signal.signal"):
+            self.assertEqual(start_trading({}), 0)
+        fake_worker_handoff.exit.assert_called_once()
+
+        fake_worker_ctrlc = SimpleNamespace(freqtrade=SimpleNamespace(_emergency_handoff=False), run=Mock(side_effect=KeyboardInterrupt()), exit=Mock())
+        with patch("freqtrade.worker.Worker", return_value=fake_worker_ctrlc), patch("freqtrade.commands.trade_commands.signal.signal"):
+            with self.assertRaises(KeyboardInterrupt):
+                start_trading({})
+        fake_worker_ctrlc.exit.assert_called_once()
+
+        # Watchdog detects handoff=True in orders.sqlite and sends SIGTERM cleanly.
+        from freqtrade.freqtradebot import FreqtradeBot
+        bot_dummy = SimpleNamespace(
+            config={"prop_guard_enabled": True},
+            order_journal=SimpleNamespace(directory=self.root),
+            _emergency_handoff=False,
+            _handoff_stop=None,
+        )
+        kill_evt = []
+        with patch("freqtrade.freqtradebot.read_emergency", return_value={"handoff": True}), \
+             patch("freqtrade.freqtradebot.os.kill", side_effect=lambda pid, sig: kill_evt.append((pid, sig))):
+            FreqtradeBot._start_emergency_handoff_watchdog(bot_dummy)
+            deadline = time.monotonic() + 2.0
+            while not kill_evt and time.monotonic() < deadline:
+                time.sleep(0.02)
+            bot_dummy._handoff_stop.set()
+            bot_dummy._handoff_thread.join(timeout=1.0)
+        self.assertTrue(bot_dummy._emergency_handoff)
+        self.assertEqual(len(kill_evt), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

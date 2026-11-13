@@ -180,6 +180,8 @@ class EmergencySupervisor:
             snapshot = self.adapter.snapshot()
             unresolved = self._reconcile()
             intents = {i["client_id"]: i for i in self.journal.intents(active=False)}
+            any_entry_cancel = False
+            cancel_all_confirmed = True
             for order in snapshot["orders"]:
                 if order["reduceOnly"]:
                     continue
@@ -188,7 +190,13 @@ class EmergencySupervisor:
                     raise UnverifiedAccount("External entry order; no cancellation authority")
                 self._evidence(intent, order)
                 confirmed = self._cancel(intent, order)
-                self.record(phase="reconciling", detail="Entry cancellation confirmed" if confirmed else "Entry cancellation uncertain")
+                any_entry_cancel = True
+                cancel_all_confirmed = cancel_all_confirmed and confirmed
+            if any_entry_cancel:
+                self.record(
+                    phase="reconciling",
+                    detail="Entry cancellation confirmed" if cancel_all_confirmed else "Entry cancellation uncertain",
+                )
                 return False  # Always re-read effective positions in the next step.
             if unresolved:
                 raise UnverifiedAccount("Unresolved journal intent; no blind retry or flat confirmation")
@@ -212,10 +220,11 @@ class EmergencySupervisor:
                                 "first_checked_ms": snapshot["checked_ms"], "second_checked_ms": second["checked_ms"]},
                             detail="Direct exchange proof; local DB reconciliation still mandatory")
                 return True
-            request = self.adapter.close_request(snapshot["positions"][0])
             self.record(phase="liquidating", owner=self.owner)
-            cid = self.journal.prepare_emergency(request, self.owner)
-            self.journal.dispatch(cid, self.adapter.create_order)
+            for pos in snapshot["positions"]:
+                request = self.adapter.close_request(pos)
+                cid = self.journal.prepare_emergency(request, self.owner)
+                self.journal.dispatch(cid, self.adapter.create_order)
             return False  # An acknowledgement is not an execution or flat proof.
         except Exception as exc:
             try:

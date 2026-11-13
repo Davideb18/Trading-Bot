@@ -1033,28 +1033,84 @@ class RiskManager(RiskGuard):
                 now_utc = datetime.now(timezone.utc)
                 today_str = now_utc.strftime("%Y-%m-%d")
 
-                # 1. 30-Day Inactivity Sentinel (Alert-Only; no automated force-entry per P0 safety policy)
-                valid_closes = [
-                    dt
-                    for tr in recent_trades
-                    if (dt := parse_dt(tr.get("close_timestamp") or tr.get("close_date"))) is not None
-                ]
-                latest_close_dt = max(valid_closes) if valid_closes else None
                 phase_start = parse_dt(self.profile.get("phase_start_utc"))
 
-                inactivity_days = 0
-                if len(open_trades) > 0:
-                    inactivity_days = 0
-                elif latest_close_dt:
-                    inactivity_days = (now_utc - latest_close_dt).days
-                elif phase_start:
-                    inactivity_days = (now_utc - phase_start).days
+                all_trades = []
+                seen_trade_ids = set()
+                for tr in list(open_trades) + list(recent_trades):
+                    if not isinstance(tr, dict):
+                        continue
+                    tid = tr.get("trade_id")
+                    if tid is not None:
+                        if tid in seen_trade_ids:
+                            continue
+                        seen_trade_ids.add(tid)
+                    all_trades.append(tr)
 
-                if inactivity_days >= 24 and len(open_trades) == 0 and not self.nuclear_triggered:
+                def extract_filled_orders(tr):
+                    raw_orders = tr.get("orders")
+                    if not isinstance(raw_orders, list):
+                        return []
+                    filled_list = []
+                    for idx, ord_obj in enumerate(raw_orders):
+                        if not isinstance(ord_obj, dict) or ord_obj.get("is_open") is True:
+                            continue
+                        filled_qty = float(ord_obj.get("filled", 0.0) or 0.0)
+                        if filled_qty <= 0:
+                            continue
+                        fill_dt = parse_dt(
+                            ord_obj.get("order_filled_timestamp")
+                            or ord_obj.get("order_filled_date")
+                            or ord_obj.get("order_timestamp")
+                            or ord_obj.get("order_date")
+                        )
+                        price = float(
+                            ord_obj.get("average")
+                            or ord_obj.get("safe_price")
+                            or ord_obj.get("price")
+                            or 0.0
+                        )
+                        cost_val = float(ord_obj.get("cost", 0.0) or 0.0)
+                        if cost_val <= 0 and price > 0:
+                            cost_val = filled_qty * price
+                        filled_list.append({
+                            "idx": idx,
+                            "dt": fill_dt,
+                            "is_entry": bool(ord_obj.get("ft_is_entry", True)),
+                            "filled": filled_qty,
+                            "price": price,
+                            "cost": cost_val,
+                        })
+                    return filled_list
+
+                # 1. 30-Day Inactivity Sentinel (based on real fill/trade timestamps, never masked indefinitely by open positions)
+                activity_dts = []
+                parsed_orders_by_idx = {}
+                for t_idx, tr in enumerate(all_trades):
+                    orders_for_trade = extract_filled_orders(tr)
+                    parsed_orders_by_idx[t_idx] = orders_for_trade
+                    for ord_item in orders_for_trade:
+                        if ord_item["dt"] is not None and (not phase_start or ord_item["dt"] >= phase_start):
+                            activity_dts.append(ord_item["dt"])
+                    if not orders_for_trade:
+                        for key_a, key_b in (("close_timestamp", "close_date"), ("open_timestamp", "open_date")):
+                            dt = parse_dt(tr.get(key_a) or tr.get(key_b))
+                            if dt is not None and (not phase_start or dt >= phase_start):
+                                activity_dts.append(dt)
+
+                latest_activity_dt = max(activity_dts) if activity_dts else None
+                inactivity_days = 0
+                if latest_activity_dt is not None:
+                    inactivity_days = max(0, (now_utc - latest_activity_dt).days)
+                elif phase_start is not None:
+                    inactivity_days = max(0, (now_utc - phase_start).days)
+
+                if inactivity_days >= 24 and not self.nuclear_triggered:
                     keepalive_enabled = bool(getattr(self, "inactivity_keepalive_enabled", False))
                     state = getattr(self, "state", {})
                     healthy_for_keepalive = (
                         keepalive_enabled
+                        and len(open_trades) == 0
                         and isinstance(state, dict)
                         and state.get("data_valid") is True
                         and not state.get("data_fault")
@@ -1103,25 +1159,110 @@ class RiskManager(RiskGuard):
                             min_interval_sec=43200.0,
                         )
 
-                # 2. Qualifying Trading Days & 40% Daily Profit Cap
+                # 2. Qualifying Trading Days & 40% Daily Profit Cap (per exit execution day; fees normalized per exit notional)
                 day_profits: dict[str, float] = {}
                 qualifying_days = set()
                 min_qualifying_stake = self.initial_balance * 0.05  # $250 on $5,000
+                epoch_min = datetime.min.replace(tzinfo=timezone.utc)
 
-                for tr in recent_trades:
+                for t_idx, tr in enumerate(all_trades):
+                    orders_for_trade = parsed_orders_by_idx.get(t_idx, [])
                     open_dt = parse_dt(tr.get("open_timestamp") or tr.get("open_date"))
+                    if open_dt is None and orders_for_trade:
+                        entry_dts = [o["dt"] for o in orders_for_trade if o["is_entry"] and o["dt"] is not None]
+                        if entry_dts:
+                            open_dt = min(entry_dts)
                     if phase_start and open_dt and open_dt < phase_start:
                         continue
 
+                    has_exit_orders = any((not o["is_entry"]) and o["dt"] is not None for o in orders_for_trade)
+                    if has_exit_orders:
+                        sorted_orders = sorted(orders_for_trade, key=lambda o: (o["dt"] or epoch_min, o["idx"]))
+                        direction = -1.0 if tr.get("is_short") else 1.0
+                        cur_qty = 0.0
+                        cur_entry_cost = 0.0
+                        cur_weighted_price_sum = 0.0
+                        exit_events = []
+                        fallback_open_rate = float(tr.get("open_rate", 0.0) or 0.0)
+                        for o in sorted_orders:
+                            if o["is_entry"]:
+                                cur_qty += o["filled"]
+                                cur_entry_cost += o["cost"]
+                                if o["price"] > 0:
+                                    cur_weighted_price_sum += o["filled"] * o["price"]
+                            else:
+                                if cur_qty <= 1e-12:
+                                    continue
+                                avg_entry = (cur_weighted_price_sum / cur_qty) if cur_weighted_price_sum > 0 else fallback_open_rate
+                                close_qty = min(o["filled"], cur_qty)
+                                frac = close_qty / cur_qty
+                                entry_notional = cur_entry_cost * frac
+                                if entry_notional <= 0 and avg_entry > 0:
+                                    entry_notional = close_qty * avg_entry
+                                exit_price = o["price"] if o["price"] > 0 else (o["cost"] / close_qty if close_qty > 0 else 0.0)
+                                exit_notional = o["cost"] if o["cost"] > 0 else close_qty * exit_price
+                                gross_pnl = (
+                                    direction * close_qty * (exit_price - avg_entry)
+                                    if avg_entry > 0 and exit_price > 0
+                                    else 0.0
+                                )
+                                gross_ratio = (gross_pnl / entry_notional) if entry_notional > 0 else 0.0
+                                cur_qty = max(0.0, cur_qty - close_qty)
+                                cur_entry_cost = max(0.0, cur_entry_cost - entry_notional)
+                                if avg_entry > 0:
+                                    cur_weighted_price_sum = max(0.0, cur_weighted_price_sum - close_qty * avg_entry)
+                                exit_dt = o["dt"]
+                                if exit_dt is not None and (not phase_start or exit_dt >= phase_start):
+                                    exit_events.append({
+                                        "day": exit_dt.strftime("%Y-%m-%d"),
+                                        "entry_notional": entry_notional,
+                                        "weight": max(entry_notional + exit_notional, 1e-9),
+                                        "gross_pnl": gross_pnl,
+                                        "gross_ratio": gross_ratio,
+                                    })
+
+                        if not exit_events:
+                            continue
+                        is_open_tr = (
+                            bool(tr.get("is_open"))
+                            if "is_open" in tr
+                            else (parse_dt(tr.get("close_timestamp") or tr.get("close_date")) is None)
+                        )
+                        sum_gross = sum(ev["gross_pnl"] for ev in exit_events)
+                        if is_open_tr:
+                            raw_realized = tr.get("realized_profit")
+                        else:
+                            raw_realized = tr.get("profit_abs")
+                            if raw_realized is None:
+                                raw_realized = tr.get("realized_profit")
+                        trade_realized = float(raw_realized) if raw_realized is not None else sum_gross
+                        residual = trade_realized - sum_gross
+                        total_weight = sum(ev["weight"] for ev in exit_events)
+                        for ev in exit_events:
+                            ev_net = ev["gross_pnl"] + (residual * (ev["weight"] / total_weight) if total_weight > 0 else 0.0)
+                            day_profits[ev["day"]] = day_profits.get(ev["day"], 0.0) + ev_net
+                            if ev["entry_notional"] >= min_qualifying_stake and abs(ev["gross_ratio"]) >= 0.01:
+                                qualifying_days.add(ev["day"])
+                        continue
+
+                    if tr.get("is_open"):
+                        continue
+
                     close_dt = parse_dt(tr.get("close_timestamp") or tr.get("close_date"))
-                    if close_dt is None:
+                    if close_dt is None or (phase_start and close_dt < phase_start):
                         continue
                     tr_day = close_dt.strftime("%Y-%m-%d")
 
                     pnl = float(tr.get("profit_abs", 0.0) or 0.0)
                     day_profits[tr_day] = day_profits.get(tr_day, 0.0) + pnl
 
-                    cost = float(tr.get("cost", 0.0) or tr.get("stake_amount", 0.0) or 0.0)
+                    cost = float(
+                        tr.get("cost")
+                        or tr.get("max_stake_amount")
+                        or tr.get("open_trade_value")
+                        or tr.get("stake_amount")
+                        or 0.0
+                    )
                     profit_ratio = float(tr.get("profit_ratio", 0.0) or 0.0)
                     if cost >= min_qualifying_stake and abs(profit_ratio) >= 0.01:
                         qualifying_days.add(tr_day)
@@ -1129,7 +1270,6 @@ class RiskManager(RiskGuard):
                 target_profit = self.initial_balance * self.profile["profit_target_percent"]
                 daily_cap = target_profit * self.profile["daily_profit_cap_percent"]
                 counted_profit = sum(min(d_pnl, daily_cap) if d_pnl > 0 else d_pnl for d_pnl in day_profits.values())
-                max_day_profit = max((p for p in day_profits.values() if p > 0), default=0.0)
 
                 today_profit = day_profits.get(today_str, 0.0)
                 daily_pause_threshold = min(daily_cap * 0.875, daily_cap - 25.0) if daily_cap > 30.0 else daily_cap * 0.85
@@ -1151,9 +1291,8 @@ class RiskManager(RiskGuard):
                             notifier("dd_overall_near", f"⚠️ Overall DD proximity: equity=${eq:.2f} floor=${oof:.2f}", min_interval_sec=1800.0)
 
                 if (
-                    counted_profit >= target_profit
+                    round(counted_profit, 6) >= round(target_profit, 6)
                     and len(qualifying_days) >= self.profile["min_trading_days"]
-                    and max_day_profit < daily_cap
                 ):
                     logger.info(
                         "🎯 HyroTrader evaluation criteria met in local ledger: Counted profit: $%.2f / $%.2f | Qualifying days: %d/%d. "

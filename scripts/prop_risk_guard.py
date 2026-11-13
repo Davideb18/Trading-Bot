@@ -582,6 +582,8 @@ class RiskGuard:
         baseline_status = "verified"
         try:
             if response_day_mismatch:
+                if self.autonomous_rollover and self.transient_grace_cycles > 0:
+                    baseline_transient = True
                 raise ValueError("Equity response and receipt belong to different UTC days")
             if baseline is None or utc_time(baseline["captured_at"]).date() != now.date():
                 try:
@@ -602,7 +604,7 @@ class RiskGuard:
                         baseline = candidate
                     except UnverifiedAccount as rec_exc:
                         msg = str(rec_exc)
-                        hard_msgs = ("External or unverified capital flow", "Post-midnight fills", "Reconstructed midnight equity")
+                        hard_msgs = ("External or unverified capital flow", "Reconstructed midnight equity")
                         if self.transient_grace_cycles > 0 and not any(m in msg for m in hard_msgs):
                             baseline_transient = True
                         raise
@@ -646,6 +648,7 @@ class RiskGuard:
             if not baseline:
                 self.state["official_daily_floor"] = None
                 self.state["operating_daily_floor"] = None
+                self.state["daily_monitoring_available"] = False
             if reason:
                 self.state.update(nuclear_triggered=True, wake_up_lock=True,
                                   liquidation_confirmed=False, halt_reason=reason)

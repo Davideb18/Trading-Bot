@@ -58,19 +58,25 @@ def write_control(journal, state, event):
             (uuid.uuid4().hex, int(time.time() * 1000), json.dumps({"event": event, "state": state})))
 
 
-def supervisor_state(config, now=None):
+def _read_supervisor_state_raw(config, now=None):
     now = now or datetime.now(UTC)
     state = json.loads((Path(config["user_data_dir"]) / "risk_manager_prop_state.json").read_text())
     profile = profile_from_config(config)
+    updated = utc_time(state["last_updated"])
     if (state.get("profile") != profile or state.get("risk_schema_version") != 2
             or state.get("control_schema_version") != 1
-            or not 0 <= (now - utc_time(state["last_updated"])).total_seconds() <= 15):
+            or not 0 <= (now - updated).total_seconds() <= 15):
         raise ValueError("Missing, stale or mismatched supervisor control state")
     for key in ("data_fault", "nuclear_triggered", "macro_paused", "data_valid"):
         if type(state.get(key)) is not bool:
             raise ValueError("Invalid supervisor control flags")
+    return state, profile, updated, now
+
+
+def supervisor_state(config, now=None):
+    state, profile, _updated, check_now = _read_supervisor_state_raw(config, now)
     if state["data_valid"]:
-        validate_baseline(state["baseline"], profile, now)
+        validate_baseline(state["baseline"], profile, check_now)
     return state
 
 
@@ -80,18 +86,33 @@ def sync_prop_controls(bot, *, allow_ack=False):
     journal = getattr(bot, "order_journal", None)
     if journal is None:
         return True
+    rollover_pending = False
     try:
-        source = supervisor_state(bot.config)
+        source, profile, updated, check_now = _read_supervisor_state_raw(bot.config)
+        if source["data_valid"]:
+            try:
+                validate_baseline(source["baseline"], profile, check_now)
+            except ValueError:
+                # Immediately after 00:00 UTC, core can read yesterday's still-fresh (<=15s) state
+                # before supervisor finishes autonomous rollover; pause entries without sticky data_fault.
+                if (updated.astimezone(UTC).date() < check_now.astimezone(UTC).date()
+                        and not source["data_fault"] and not source["nuclear_triggered"]):
+                    validate_baseline(source["baseline"], profile, updated)
+                    rollover_pending = True
+                else:
+                    raise
         transient_only = (
-            source.get("transient_paused") is True
+            (source.get("transient_paused") is True or rollover_pending)
             and not source["data_fault"]
             and not source["nuclear_triggered"]
         )
-        fault = source["data_fault"] or (not source["data_valid"] and not transient_only)
+        fault = source["data_fault"] or (
+            (not source["data_valid"] or rollover_pending) and not transient_only
+        )
         token = str(source.get("fault_revision", 0)) if fault else None
         error = None
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
-        source, fault, token, error = {}, True, "unavailable", type(exc).__name__
+        source, fault, token, error, rollover_pending = {}, True, "unavailable", type(exc).__name__, False
     with journal.mutex:
         state = read_control(journal)
         before = json.dumps(state, sort_keys=True)
@@ -108,11 +129,12 @@ def sync_prop_controls(bot, *, allow_ack=False):
                 source["macro_paused"]
                 or source.get("rules_paused")
                 or source.get("transient_paused")
+                or rollover_pending
             )
             ack = state.get("ack")
             # Two-phase acknowledgement: authenticated RPC requests; the supervisor
             # validates fresh data; the core validates its unchanged fault epoch.
-            if (allow_ack and not fault and source.get("data_valid") is True
+            if (allow_ack and not fault and not rollover_pending and source.get("data_valid") is True
                     and not state["risk_halt"] and ack
                     and source.get("acknowledged_control") == ack["id"]
                     and ack["epoch"] == state["epoch"]

@@ -24,6 +24,11 @@ def start_trading(args: dict[str, Any]) -> int:
         signal.signal(signal.SIGTERM, term_handler)
         worker = Worker(args)
         worker.run()
+    except KeyboardInterrupt:
+        if worker and getattr(getattr(worker, "freqtrade", None), "_emergency_handoff", False):
+            logger.critical("Emergency takeover signal received; halting core trader cleanly.")
+            return 0
+        raise
     except EmergencyTakeover as err:
         logger.critical("Emergency takeover active (%s); halting core trader cleanly.", err)
         return 0

@@ -3,6 +3,10 @@ Freqtrade is the main module of this bot. It contains the FreqtradeBot class.
 """
 
 import logging
+import os
+import signal
+import threading
+import time as pytime
 import traceback
 from copy import deepcopy
 from datetime import UTC, datetime, time, timedelta
@@ -21,7 +25,7 @@ from freqtrade.journal_execution import (
 from freqtrade.order_journal import JournalBlocked
 from freqtrade.fault_recovery import cancel_fault_entries
 from freqtrade.prop_controls import sync_prop_controls
-from freqtrade.emergency_authority import EmergencyTakeover, require_core_authority
+from freqtrade.emergency_authority import EmergencyTakeover, read_emergency, require_core_authority
 from freqtrade.order_recovery import (
     clear_recovery, mark_recovery, order_evidence_valid, pending_recovery,
     verified_prop_cancel,
@@ -258,6 +262,51 @@ class FreqtradeBot(LoggingMixin):
             logger.exception("Error during cleanup")
         if getattr(self, "order_journal", None) and not getattr(self, "_emergency_handoff", False):
             self.order_journal.close()
+        stop_evt = getattr(self, "_handoff_stop", None)
+        if stop_evt is not None:
+            stop_evt.set()
+
+    def _start_emergency_handoff_watchdog(self) -> None:
+        if not self.config.get("prop_guard_enabled"):
+            return
+        journal_dir = getattr(getattr(self, "order_journal", None), "directory", None)
+        if not journal_dir:
+            return
+        existing_stop = getattr(self, "_handoff_stop", None)
+        if existing_stop is not None:
+            existing_stop.set()
+        stop_evt = threading.Event()
+        self._handoff_stop = stop_evt
+
+        def _watch() -> None:
+            signalled_at = None
+            while not stop_evt.is_set():
+                try:
+                    state = read_emergency(journal_dir)
+                except Exception:
+                    state = None
+                if isinstance(state, dict) and state.get("handoff") is True:
+                    self._emergency_handoff = True
+                    now_m = pytime.monotonic()
+                    if signalled_at is None:
+                        signalled_at = now_m
+                        logger.critical(
+                            "Emergency handoff detected in orders.sqlite; signalling core process exit."
+                        )
+                        try:
+                            os.kill(os.getpid(), signal.SIGTERM)
+                        except OSError:
+                            pass
+                    elif now_m - signalled_at >= 10.0:
+                        logger.critical(
+                            "Core process did not unwind within 10s after emergency handoff; forcing exit."
+                        )
+                        os._exit(0)
+                stop_evt.wait(0.5)
+
+        t = threading.Thread(target=_watch, name="ft-emergency-handoff", daemon=True)
+        self._handoff_thread = t
+        t.start()
 
     def startup(self) -> None:
         """
@@ -280,6 +329,7 @@ class FreqtradeBot(LoggingMixin):
             sync_prop_controls(self)
             cancel_fault_entries(self, Trade)
             reconcile_journal(self, Trade)
+            self._start_emergency_handoff_watchdog()
         self.update_all_liquidation_prices()
         self.update_funding_fees()
 
@@ -319,6 +369,7 @@ class FreqtradeBot(LoggingMixin):
         )
 
         with self._measure_execution:
+            require_core_authority(self)
             self.strategy.analyze(self.active_pair_whitelist)
 
         with self._exit_lock:
@@ -329,6 +380,7 @@ class FreqtradeBot(LoggingMixin):
         # Without this, freqtrade may try to recreate stoploss_on_exchange orders
         # while exiting is in process, since telegram messages arrive in an different thread.
         with self._exit_lock:
+            require_core_authority(self)
             trades = Trade.get_open_trades()
             # First process current opened trades (positions)
             self.exit_positions(trades)
@@ -337,10 +389,12 @@ class FreqtradeBot(LoggingMixin):
         # Check if we need to adjust our current positions before attempting to enter new trades.
         if self.strategy.position_adjustment_enable:
             with self._exit_lock:
+                require_core_authority(self)
                 self.process_open_trade_positions()
 
         # Then looking for entry opportunities
         if self.state == State.RUNNING and ((free_trade_slots := self.get_free_open_trades()) > 0):
+            require_core_authority(self)
             self.enter_positions(free_trade_slots)
         self._schedule.run_pending()
         Trade.commit()

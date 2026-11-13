@@ -644,5 +644,283 @@ class BlindAuditRegressionTests(unittest.TestCase):
         rm.request_rules_pause.assert_called_once_with(False)
 
 
+class PropAuditRegressionTests(unittest.TestCase):
+    def setUp(self):
+        patch.object(socket.socket, "connect", side_effect=AssertionError("Network forbidden")).start()
+        self.addCleanup(patch.stopall)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.account_cfg = configured_account()
+        self.profile = profile_from_config(self.account_cfg)
+        self.state_file = self.root / "risk_manager_prop_state.json"
+
+    def test_a2_midnight_rollover_grace_prevents_sticky_data_fault(self):
+        day1 = datetime(2026, 11, 10, 23, 59, 57, tzinfo=UTC)
+        day2_grace = datetime(2026, 11, 11, 0, 0, 2, tzinfo=UTC)
+        day2_ready = datetime(2026, 11, 11, 0, 0, 5, tzinfo=UTC)
+        day2_stale = datetime(2026, 11, 11, 0, 0, 25, tzinfo=UTC)
+
+        b_day1 = baseline(self.profile, now=day1)
+        b_day1["last_updated"] = day1.isoformat()
+        state_day1 = reconciled_state(self.profile, b_day1, day1, halted=False)
+        state_day1["data_valid"] = True
+        state_day1["last_updated"] = day1.isoformat()
+        self.state_file.write_text(json.dumps(state_day1))
+
+        journal = OrderJournal(
+            self.root,
+            {
+                "account_id": self.profile["account_id"],
+                "challenge_id": self.profile["challenge_id"],
+                "phase_id": self.profile["phase_id"],
+                "profile_id": self.profile["profile_id"],
+                "exchange": self.profile["exchange"],
+                "environment": self.profile["environment"],
+                "currency": self.profile["currency"],
+                "key_fingerprint": hashlib.sha256(b"offline").hexdigest(),
+            },
+        )
+        self.addCleanup(journal.close)
+        bot = SimpleNamespace(
+            config={**self.account_cfg, "prop_guard_enabled": True, "user_data_dir": str(self.root)},
+            order_journal=journal,
+        )
+
+        # Within 15s grace right after 00:00 UTC: reversible rollover pause, NO sticky data_fault.
+        with patch("freqtrade.prop_controls.datetime") as dt_mock:
+            dt_mock.now.return_value = day2_grace
+            dt_mock.fromisoformat = datetime.fromisoformat
+            paused_grace = sync_prop_controls(bot)
+        ctrl_grace = read_control(journal)
+        self.assertTrue(paused_grace)
+        self.assertFalse(ctrl_grace["data_fault"])
+        self.assertTrue(ctrl_grace["macro_paused"])
+
+        # Once supervisor publishes day2 baseline: automatic recovery without manual ACK.
+        b_day2 = baseline(self.profile, now=day2_ready)
+        state_day2 = reconciled_state(self.profile, b_day2, day2_ready, halted=False)
+        state_day2["data_valid"] = True
+        self.state_file.write_text(json.dumps(state_day2))
+        with patch("freqtrade.prop_controls.datetime") as dt_mock:
+            dt_mock.now.return_value = day2_ready
+            dt_mock.fromisoformat = datetime.fromisoformat
+            paused_ready = sync_prop_controls(bot)
+        ctrl_ready = read_control(journal)
+        self.assertFalse(paused_ready)
+        self.assertFalse(ctrl_ready["data_fault"])
+        self.assertFalse(ctrl_ready["macro_paused"])
+
+        # Beyond 15s stale window without new baseline: still fails closed into data_fault.
+        self.state_file.write_text(json.dumps(state_day1))
+        with patch("freqtrade.prop_controls.datetime") as dt_mock:
+            dt_mock.now.return_value = day2_stale
+            dt_mock.fromisoformat = datetime.fromisoformat
+            sync_prop_controls(bot)
+        ctrl_stale = read_control(journal)
+        self.assertTrue(ctrl_stale["data_fault"])
+
+        # RiskGuard cross-midnight response_day_mismatch uses transient pause then self-recovers.
+        (self.root / "risk_manager_prop_baseline.json").write_text(json.dumps(b_day1))
+        self.state_file.write_text(json.dumps(state_day1))
+        api = Mock()
+        api.get_prop_profile.return_value = self.profile
+        api.get_equity.return_value = 5000.0
+        api.equity_observation = {
+            "equity": 5000.0,
+            "response_time_ms": int(day1.timestamp() * 1000),
+            "source": "bybit_v5_wallet_response",
+        }
+        api.reconcile_midnight_baseline.return_value = b_day2
+        api.get_prop_control.return_value = {"verified": True, "flat": True, "pending_entries": False, "ack": None}
+        api.stop_buying.return_value = True
+        api.start_trading.return_value = True
+        guard = RiskGuard(api, self.state_file, profile=self.profile, autonomous_rollover=True, transient_grace_cycles=3)
+
+        guard._check_drawdown(now=day2_grace)
+        s1 = json.loads(self.state_file.read_text())
+        self.assertFalse(s1["data_fault"])
+        self.assertTrue(s1["transient_paused"])
+        self.assertTrue(s1["wake_up_lock"])
+        self.assertFalse(s1["daily_monitoring_available"])
+
+        for i in range(3):
+            tick = day2_ready + timedelta(seconds=5 * i)
+            api.equity_observation = {
+                "equity": 5000.0,
+                "response_time_ms": int(tick.timestamp() * 1000),
+                "source": "bybit_v5_wallet_response",
+            }
+            guard._check_drawdown(now=tick)
+        s2 = json.loads(self.state_file.read_text())
+        self.assertFalse(s2["data_fault"])
+        self.assertFalse(s2.get("transient_paused", False))
+        self.assertFalse(s2["macro_paused"])
+        self.assertTrue(s2["daily_monitoring_available"])
+        api.start_trading.assert_called()
+
+    def test_a3_and_a4_midnight_reconcile_funding_parity_dca_partial_and_full_close(self):
+        now = datetime(2026, 4, 12, 3, 30, 0, tzinfo=UTC)
+        mid = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        mid_ms = int(mid.timestamp() * 1000)
+        now_ms = int(now.timestamp() * 1000)
+
+        # True midnight equity:
+        # wallet_midnight = 4900.0
+        # BTC midnight: Long 1.0 @ 100, mark@mid = 102 -> UPL = +2.0
+        #   post-mid: Funding @ 00:00:00 (must skip!), +1.0 @ 90 (01:00), -0.5 @ 99 (02:00) -> now 1.5 @ avg 95
+        # ETH midnight: Long 2.0 @ 50, mark@mid = 52 -> UPL = +4.0
+        #   post-mid: full close -2.0 @ 55 (02:30, realized +10.0) -> now flat!
+        # SOL midnight: flat (0)
+        #   post-mid: open +4.0 @ 20 (03:00) -> now 4.0 @ 20
+        # Tx changes after mid: -2.0 funding_fee +10.0 realized_pnl + 2.0 (ETH close vs mark) = +10.0 -> wallet_now = 4910.0
+        api = Mock()
+        api.id = "bybit"
+        api.urls = {"api": {"private": "https://api-demo.bybit.com"}}
+        api.implode_hostname = lambda url: url
+        api.markets = {
+            "BTC/USDT:USDT": {"symbol": "BTC/USDT:USDT", "id": "BTCUSDT", "swap": True, "linear": True, "settle": "USDT", "contractSize": 1},
+            "ETH/USDT:USDT": {"symbol": "ETH/USDT:USDT", "id": "ETHUSDT", "swap": True, "linear": True, "settle": "USDT", "contractSize": 1},
+            "SOL/USDT:USDT": {"symbol": "SOL/USDT:USDT", "id": "SOLUSDT", "swap": True, "linear": True, "settle": "USDT", "contractSize": 1},
+        }
+        api.privateGetV5UserQueryApi.return_value = {"retCode": 0, "time": now_ms, "result": {"userID": self.profile["account_id"], "readOnly": 0}}
+        api.privateGetV5AccountInfo.return_value = {"retCode": 0, "time": now_ms, "result": {"unifiedMarginStatus": 3, "marginMode": "ISOLATED_MARGIN"}}
+        # Attempt 1 sees wallet drift between pre-read (4909) and post-read (4910), Attempt 2 stays consistent at 4910.
+        wallet_seq = ["4909.0", "4910.0", "4910.0", "4910.0"]
+
+        def wallet_resp(_params):
+            wb = wallet_seq.pop(0)
+            eq = str(float(wb) + 7.5 + 4.0)
+            return {
+                "retCode": 0,
+                "time": now_ms,
+                "result": {"list": [{"accountType": "UNIFIED", "coin": [{"coin": "USDT", "equity": eq, "walletBalance": wb, "borrowAmount": "0", "unrealisedPnl": "11.5"}]}]},
+            }
+
+        api.privateGetV5AccountWalletBalance.side_effect = wallet_resp
+        api.privateGetV5OrderRealtime.side_effect = lambda p: {"retCode": 0, "time": now_ms, "result": {"category": p["category"], "list": [], "nextPageCursor": ""}}
+        api.privateGetV5PositionList.side_effect = lambda p: (
+            {"retCode": 0, "time": now_ms, "result": {"category": p.get("category", "linear"), "list": [
+                {"symbol": "BTCUSDT", "size": "1.5", "side": "Buy", "positionIdx": 0, "tradeMode": 1, "markPrice": "100.0", "avgPrice": "95.0", "unrealisedPnl": "7.5"},
+                {"symbol": "SOLUSDT", "size": "4.0", "side": "Buy", "positionIdx": 0, "tradeMode": 1, "markPrice": "21.0", "avgPrice": "20.0", "unrealisedPnl": "4.0"},
+            ], "nextPageCursor": ""}}
+            if p.get("settleCoin") == "USDT"
+            else {"retCode": 0, "time": now_ms, "result": {"category": p.get("category", "linear"), "list": [], "nextPageCursor": ""}}
+        )
+        api.privateGetV5AccountTransactionLog.return_value = {
+            "retCode": 0, "time": now_ms,
+            "result": {"list": [
+                {"type": "REALIZED_PNL", "transactionTime": str(mid_ms + 9_000_000), "change": "10.0"},
+            ], "nextPageCursor": ""},
+        }
+        api.privateGetV5ExecutionList.return_value = {
+            "retCode": 0, "time": now_ms,
+            "result": {"category": "linear", "list": [
+                {"symbol": "BTCUSDT", "execType": "Funding", "side": "Buy", "execQty": "1.0", "execPrice": "102.0", "execTime": str(mid_ms)},
+                {"symbol": "BTCUSDT", "execType": "Trade", "side": "Buy", "execQty": "1.0", "execPrice": "90.0", "closedSize": "0", "orderId": "btc-add", "execTime": str(mid_ms + 3_600_000)},
+                {"symbol": "BTCUSDT", "execType": "Trade", "side": "Sell", "execQty": "0.5", "execPrice": "99.0", "closedSize": "0.5", "orderId": "btc-part", "execTime": str(mid_ms + 7_200_000)},
+                {"symbol": "ETHUSDT", "execType": "Trade", "side": "Sell", "execQty": "2.0", "execPrice": "55.0", "closedSize": "2.0", "orderId": "eth-close-1", "execTime": str(mid_ms + 9_000_000)},
+                {"symbol": "SOLUSDT", "execType": "Trade", "side": "Buy", "execQty": "4.0", "execPrice": "20.0", "closedSize": "0", "orderId": "sol-open", "execTime": str(mid_ms + 10_800_000)},
+            ], "nextPageCursor": ""},
+        }
+        api.privateGetV5PositionClosedPnl.return_value = {
+            "retCode": 0, "time": now_ms,
+            "result": {"category": "linear", "list": [
+                {"symbol": "ETHUSDT", "orderId": "eth-close-1", "avgEntryPrice": "50.0", "closedSize": "2.0"},
+            ], "nextPageCursor": ""},
+        }
+        marks = {"BTCUSDT": "102.0", "ETHUSDT": "52.0"}
+        api.publicGetV5MarketMarkPriceKline.side_effect = lambda p: {
+            "retCode": 0, "time": now_ms,
+            "result": {"list": [[str(mid_ms), marks[p["symbol"]], "0", "0", marks[p["symbol"]]]]},
+        }
+
+        sup = SupervisorBybit(api, self.profile)
+        with patch("freqtrade.supervisor_bybit.datetime") as dt_mod, patch(
+            "freqtrade.supervisor_bybit.time.time", return_value=now.timestamp()
+        ), patch("freqtrade.snapshot_freshness.time.time", return_value=now.timestamp()):
+            dt_mod.now.return_value = now
+            reconciled = sup.reconcile_midnight_baseline(now)
+
+        # Expected: wallet_mid = 4900.0 + upl_btc (+2.0) + upl_eth (+4.0) = 4906.0
+        self.assertAlmostEqual(reconciled["equity"], 4906.0, places=5)
+        self.assertEqual(reconciled["evidence"]["exec_count"], 4)  # Funding row skipped
+        self.assertEqual([p["symbol"] for p in reconciled["evidence"]["positions_midnight"]], ["BTC/USDT:USDT", "ETH/USDT:USDT"])
+        self.assertEqual(len(wallet_seq), 0)  # Verified parity loop ran attempt 1 (failed) + attempt 2 (passed)
+
+    def test_a5_a8_a9_hyrotrader_rules_cap_multiday_derisk_and_inactivity(self):
+        now = datetime(2026, 4, 20, 12, 0, 0, tzinfo=UTC)
+        d1 = datetime(2026, 4, 15, 14, 0, 0, tzinfo=UTC)
+        d2 = datetime(2026, 4, 16, 14, 0, 0, tzinfo=UTC)
+        d3 = datetime(2026, 4, 17, 14, 0, 0, tzinfo=UTC)
+        d4 = datetime(2026, 4, 18, 14, 0, 0, tzinfo=UTC)
+        d5 = datetime(2026, 4, 19, 14, 0, 0, tzinfo=UTC)
+
+        # A5 + A8:
+        # Day1+Day2 in ONE still-open partial-exited trade (realized_profit=290.0:
+        #   Day1 partial exit 600 notional -> +200 gross, Day2 partial exit 400 notional -> +100 gross, -10 fees),
+        # plus Day3 (+75), Day4 (+75), Day5 (+160) closed trades ->
+        # Day1 capped to $200, Days 2..5 add >= $300 -> counted >= $500 and 5 qualifying days -> PASSES even with Day1 > $200!
+        open_derisk_trade = {
+            "trade_id": 101,
+            "is_open": True,
+            "is_short": False,
+            "realized_profit": 290.0,
+            "open_timestamp": int(d1.timestamp() * 1000) - 60_000,
+            "orders": [
+                {"ft_is_entry": True, "is_open": False, "filled": 10.0, "average": 100.0, "cost": 1000.0, "order_filled_timestamp": int(d1.timestamp() * 1000) - 60_000},
+                {"ft_is_entry": False, "is_open": False, "filled": 6.0, "average": 150.0, "cost": 900.0, "order_filled_timestamp": int(d1.timestamp() * 1000)},
+                {"ft_is_entry": False, "is_open": False, "filled": 4.0, "average": 125.0, "cost": 500.0, "order_filled_timestamp": int(d2.timestamp() * 1000)},
+            ],
+        }
+        closed_days = [
+            {"trade_id": 102, "is_open": False, "close_timestamp": int(d3.timestamp() * 1000), "profit_abs": 75.0, "stake_amount": 300.0, "profit_ratio": 0.25},
+            {"trade_id": 103, "is_open": False, "close_timestamp": int(d4.timestamp() * 1000), "profit_abs": 75.0, "stake_amount": 300.0, "profit_ratio": 0.25},
+            {"trade_id": 104, "is_open": False, "close_timestamp": int(d5.timestamp() * 1000), "profit_abs": 160.0, "stake_amount": 400.0, "profit_ratio": 0.40},
+        ]
+
+        rm = RiskManager.__new__(RiskManager)
+        rm.profile = {**self.profile, "phase_start_utc": "2026-04-01T00:00:00Z"}
+        rm.initial_balance = 5000.0
+        rm.state = {"nuclear_triggered": False}
+        rm._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
+        rm.request_rules_pause = Mock()
+        rm.rules_api = SimpleNamespace(get_open_trades=lambda: [open_derisk_trade], get_trades=lambda limit=500: closed_days)
+        rm._hyrotrader_rules_loop()
+        rm.request_rules_pause.assert_called_once_with(True, "HyroTrader One-Step profit target and qualifying days achieved")
+
+        # A9: Open trade sitting untouched for 26 days triggers critical inactivity alert without forceenter.
+        stale_now = datetime(2026, 5, 20, 12, 0, 0, tzinfo=UTC)
+        stale_entry = stale_now - timedelta(days=26)
+        stagnant_trade = {
+            "trade_id": 201,
+            "is_open": True,
+            "realized_profit": 0.0,
+            "open_timestamp": int(stale_entry.timestamp() * 1000),
+            "orders": [
+                {"ft_is_entry": True, "is_open": False, "filled": 1.0, "average": 100.0, "cost": 100.0, "order_filled_timestamp": int(stale_entry.timestamp() * 1000)},
+            ],
+        }
+        rm2 = RiskManager.__new__(RiskManager)
+        rm2.profile = {**self.profile, "phase_start_utc": "2026-04-01T00:00:00Z"}
+        rm2.initial_balance = 5000.0
+        rm2.state = {"nuclear_triggered": False}
+        rm2._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
+        rm2.request_rules_pause = Mock()
+        rm2.inactivity_keepalive_enabled = True
+        rm2.rules_api = SimpleNamespace(
+            get_open_trades=lambda: [stagnant_trade],
+            get_trades=lambda limit=500: [],
+            post=Mock(side_effect=AssertionError("Keepalive must not open second trade while one is open")),
+        )
+        with patch("llm_risk_manager_prop.logger") as log_mock, patch("llm_risk_manager_prop.datetime") as dt_mock:
+            dt_mock.now.return_value = stale_now
+            dt_mock.min = datetime.min
+            dt_mock.fromisoformat = datetime.fromisoformat
+            dt_mock.fromtimestamp = datetime.fromtimestamp
+            rm2._hyrotrader_rules_loop()
+        self.assertTrue(any("24-DAY INACTIVITY ALERT" in str(c) for c in log_mock.critical.call_args_list))
+
+
 if __name__ == "__main__":
     unittest.main()

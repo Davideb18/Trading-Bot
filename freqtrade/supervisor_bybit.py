@@ -217,6 +217,14 @@ class SupervisorBybit:
                 if any(number(p["size"]) != 0 for p in other):
                     raise UnverifiedAccount("Positions outside configured account scope")
         opened = self._pages(self.api.privateGetV5OrderRealtime, {"settleCoin": "USDT", "openOnly": 0})
+        positions, _ = self._fetch_usdt_positions()
+        orders = [self._order(o) for o in opened]
+        if len({o["id"] for o in orders}) != len(orders):
+            raise UnverifiedAccount("Duplicate open order evidence")
+        return {"equity": equity, "positions": positions, "orders": orders,
+                "checked_ms": int(time.time() * 1000)}
+
+    def _fetch_usdt_positions(self):
         positions = []
         pos_details = {}
         for raw in self._pages(self.api.privateGetV5PositionList, {"settleCoin": "USDT"}):
@@ -246,11 +254,7 @@ class SupervisorBybit:
         self._last_pos_details = pos_details
         if len({p["pair"] for p in positions}) != len(positions):
             raise UnverifiedAccount("Multiple positions for one-way pair")
-        orders = [self._order(o) for o in opened]
-        if len({o["id"] for o in orders}) != len(orders):
-            raise UnverifiedAccount("Duplicate open order evidence")
-        return {"equity": equity, "positions": positions, "orders": orders,
-                "checked_ms": int(time.time() * 1000)}
+        return positions, pos_details
 
     def certify_flat_midnight_baseline(self, now_utc=None):
         """A flat wallet does not prove historical equity or absence of transfers.
@@ -289,6 +293,79 @@ class SupervisorBybit:
             request["cursor"] = cursor
         raise UnverifiedAccount("Incomplete transaction log pagination")
 
+    def _reconstruct_pair_midnight(self, pair, pos_info, pair_fills, get_closed_pnl):
+        """Walk backward from current position across post-midnight fills to 00:00:00 UTC."""
+        eps = 1e-8
+        if pos_info:
+            q = float(pos_info["amount"]) if pos_info["side"] == "buy" else -float(pos_info["amount"])
+            avg = pos_info["avg_price"]
+        else:
+            q = 0.0
+            avg = None
+
+        steps = []
+        for fill in pair_fills:
+            qty = fill["qty"]
+            closed_sz = fill["closed_size"]
+            direction = 1.0 if fill["side"] == "Buy" else -1.0
+            price = fill["price"]
+            if 0.0 < closed_sz < qty - eps:
+                # Reverse of a flip fill: first undo newly opened tail, then prior close.
+                steps.append({
+                    "delta": direction * (qty - closed_sz),
+                    "price": price,
+                    "order_id": fill["order_id"],
+                })
+                steps.append({
+                    "delta": direction * closed_sz,
+                    "price": price,
+                    "order_id": fill["order_id"],
+                })
+            else:
+                steps.append({
+                    "delta": direction * qty,
+                    "price": price,
+                    "order_id": fill["order_id"],
+                })
+
+        for step in steps:
+            d = step["delta"]
+            p = step["price"]
+            if abs(q) <= eps:
+                closed_map = get_closed_pnl()
+                avg_entry = closed_map.get((pair, step["order_id"])) if step["order_id"] else None
+                if avg_entry is None or avg_entry <= 0:
+                    raise UnverifiedAccount(f"Missing closed-pnl avgEntryPrice for post-midnight close of {pair}")
+                q = -d
+                avg = avg_entry
+            elif (q > 0) == (d > 0):
+                if abs(q) < abs(d) - eps:
+                    raise UnverifiedAccount(f"Post-midnight fills for {pair} cross zero without closedSize")
+                q_prev = q - d
+                if abs(q_prev) <= eps:
+                    q = 0.0
+                    avg = None
+                else:
+                    if avg is None or avg <= 0:
+                        raise UnverifiedAccount(f"Missing avgPrice for post-midnight add on {pair}")
+                    avg_prev = (abs(q) * float(avg) - abs(d) * p) / abs(q_prev)
+                    if not math.isfinite(avg_prev) or avg_prev <= 0:
+                        raise UnverifiedAccount(f"Cannot bound historical avgPrice for {pair}")
+                    q = q_prev
+                    avg = avg_prev
+            else:
+                q = q - d
+                if avg is None and pos_info and pos_info.get("avg_price") is not None:
+                    avg = pos_info["avg_price"]
+
+        if abs(q) <= eps:
+            return None
+        return {
+            "side": "buy" if q > 0 else "sell",
+            "size": abs(q),
+            "avg_price": avg,
+        }
+
     def reconcile_midnight_baseline(self, now_utc=None):
         """Reconstruct verified 00:00:00 UTC equity from Bybit V5 ledgers and mark-price klines."""
         allowed_tx_types = {
@@ -296,6 +373,8 @@ class SupervisorBybit:
             "REALIZED_PNL", "DELIVERY", "INTEREST", "BORROW", "REPAY",
             "LIQUIDATION", "ADL",
         }
+        fill_exec_types = {"Trade", "AdlTrade", "BustTrade", "BlockTrade"}
+        non_fill_exec_types = {"Funding", "Settle", "SessionSettlePnL"}
         now_dt = (now_utc or datetime.now(UTC)).astimezone(UTC)
         midnight_dt = now_dt.replace(hour=0, minute=0, second=0, microsecond=0)
         midnight_ms = int(midnight_dt.timestamp() * 1000)
@@ -303,14 +382,34 @@ class SupervisorBybit:
         if now_ms < midnight_ms:
             raise UnverifiedAccount("Target timestamp precedes UTC midnight")
 
-        snap = self._snapshot()
-        wallet_detail = getattr(self, "_last_wallet_detail", None)
-        if not isinstance(wallet_detail, dict):
-            raise UnverifiedAccount("USDT wallet balance detail unavailable")
-        wallet_now = float(wallet_detail["wallet_balance"])
-        pos_details = getattr(self, "_last_pos_details", {})
+        snap = wallet_now = pos_details = tx_rows = exec_rows = query_end_ms = None
+        for _ in range(2):
+            snap = self._snapshot()
+            wallet_detail = getattr(self, "_last_wallet_detail", None)
+            if not isinstance(wallet_detail, dict):
+                raise UnverifiedAccount("USDT wallet balance detail unavailable")
+            wallet_now = float(wallet_detail["wallet_balance"])
+            pos_details = getattr(self, "_last_pos_details", {})
+            query_end_ms = max(now_ms, int(snap["checked_ms"])) + 5_000
 
-        tx_rows = self._tx_pages(midnight_ms - 60_000, now_ms + 5_000)
+            tx_rows = self._tx_pages(midnight_ms - 60_000, query_end_ms)
+            exec_rows = self._pages(
+                self.api.privateGetV5ExecutionList,
+                {"category": "linear", "startTime": midnight_ms - 5_000, "endTime": query_end_ms},
+            )
+            self.equity()
+            wallet_after_detail = getattr(self, "_last_wallet_detail", None)
+            if not isinstance(wallet_after_detail, dict):
+                raise UnverifiedAccount("USDT wallet balance detail unavailable")
+            wallet_after = float(wallet_after_detail["wallet_balance"])
+            _, pos_after = self._fetch_usdt_positions()
+            before_sig = {p: (d["side"], round(float(d["amount"]), 8)) for p, d in pos_details.items()}
+            after_sig = {p: (d["side"], round(float(d["amount"]), 8)) for p, d in pos_after.items()}
+            if math.isclose(wallet_now, wallet_after, rel_tol=0.0, abs_tol=1e-9) and before_sig == after_sig:
+                break
+        else:
+            raise UnverifiedAccount("Account mutated during midnight baseline reconciliation")
+
         post_midnight_delta = 0.0
         for row in tx_rows:
             tx_type = str(row.get("type", "")).upper()
@@ -324,40 +423,71 @@ class SupervisorBybit:
         if wallet_midnight <= 0:
             raise UnverifiedAccount("Reconstructed midnight wallet balance non-positive")
 
-        exec_rows = self._pages(
-            self.api.privateGetV5ExecutionList,
-            {"category": "linear", "startTime": midnight_ms - 5_000, "endTime": now_ms + 5_000},
-        )
         post_execs = [e for e in exec_rows if int(number(e["execTime"])) >= midnight_ms]
-        execs_by_pair = {}
+        fills_by_pair = {}
         for row in post_execs:
+            exec_type = row.get("execType")
+            if exec_type in non_fill_exec_types:
+                continue
+            if exec_type not in (None, "") and exec_type not in fill_exec_types:
+                raise UnverifiedAccount(f"Unsupported post-midnight execution type: {exec_type}")
             sym_info = self.market(row["symbol"])
             pair = sym_info["symbol"]
             c_size = number(sym_info["contractSize"])
             qty = number(row["execQty"]) * c_size
+            if qty <= 0:
+                continue
             side = row.get("side")
             if side not in ("Buy", "Sell"):
                 raise UnverifiedAccount("Unknown post-midnight execution side")
-            entry = execs_by_pair.setdefault(pair, {"buy": 0.0, "sell": 0.0})
-            if side == "Buy":
-                entry["buy"] += qty
-            else:
-                entry["sell"] += qty
+            exec_price = number(row["execPrice"])
+            if exec_price <= 0:
+                raise UnverifiedAccount(f"Missing execution price for {pair}")
+            closed_raw = row.get("closedSize")
+            closed_size = number(closed_raw) * c_size if closed_raw not in (None, "") else 0.0
+            fills_by_pair.setdefault(pair, []).append({
+                "exec_time": int(number(row["execTime"])),
+                "seq": int(number(row["seq"])) if row.get("seq") not in (None, "") else 0,
+                "side": side,
+                "qty": qty,
+                "price": exec_price,
+                "closed_size": closed_size,
+                "order_id": str(row.get("orderId") or ""),
+            })
 
-        # Reject complex post-midnight closes or size increases whose historical avgPrice cannot be bounded safely.
-        for pair, delta in execs_by_pair.items():
-            if pair not in pos_details or delta["buy"] > 0:
-                raise UnverifiedAccount(f"Post-midnight fills for {pair} prevent exact historical UPL reconstruction")
+        closed_pnl_cache = None
+
+        def get_closed_pnl():
+            nonlocal closed_pnl_cache
+            if closed_pnl_cache is not None:
+                return closed_pnl_cache
+            rows = self._pages(
+                self.api.privateGetV5PositionClosedPnl,
+                {"startTime": midnight_ms - 5_000, "endTime": query_end_ms},
+            )
+            mapping = {}
+            for c_row in rows:
+                c_pair = self.market(c_row["symbol"])["symbol"]
+                c_oid = str(c_row.get("orderId") or "")
+                c_avg = number(c_row.get("avgEntryPrice") or 0)
+                if c_oid and c_avg > 0:
+                    mapping.setdefault((c_pair, c_oid), c_avg)
+            closed_pnl_cache = mapping
+            return mapping
 
         positions_midnight = []
-        for pair, info in sorted(pos_details.items()):
-            delta = execs_by_pair.get(pair, {"buy": 0.0, "sell": 0.0})
-            size_mid = float(info["amount"]) + float(delta["sell"])
-            if size_mid <= 0:
+        for pair in sorted(set(pos_details.keys()) | set(fills_by_pair.keys())):
+            info = pos_details.get(pair)
+            pair_fills = fills_by_pair.get(pair, [])
+            pair_fills.sort(key=lambda item: (item["exec_time"], item["seq"]), reverse=True)
+            mid_state = self._reconstruct_pair_midnight(pair, info, pair_fills, get_closed_pnl)
+            if mid_state is None:
                 continue
+            size_mid = float(mid_state["size"])
+            market_id = info["market_id"] if info else self.market(pair)["id"]
             kline_res = self._call(
                 self.api.publicGetV5MarketMarkPriceKline,
-                {"category": "linear", "symbol": info["market_id"], "interval": "1",
+                {"category": "linear", "symbol": market_id, "interval": "1",
                  "start": midnight_ms, "limit": 1},
             )
             bars = (kline_res.get("result") or {}).get("list") or []
@@ -367,20 +497,16 @@ class SupervisorBybit:
             mark_mid = number(bar[1])
             if mark_mid <= 0:
                 raise UnverifiedAccount(f"Non-positive 00:00 UTC mark price for {pair}")
-            direction = 1.0 if info["side"] == "buy" else -1.0
-            if delta["sell"] > 0:
-                if info["avg_price"] is None:
-                    raise UnverifiedAccount(f"Missing avgPrice for partial-closed {pair}")
-                upl_mid = direction * size_mid * (mark_mid - float(info["avg_price"]))
-            elif info["unrealised_pnl"] is not None:
+            direction = 1.0 if mid_state["side"] == "buy" else -1.0
+            if not pair_fills and info and info["unrealised_pnl"] is not None:
                 upl_mid = float(info["unrealised_pnl"]) - direction * size_mid * (float(info["mark_price"]) - mark_mid)
-            elif info["avg_price"] is not None:
-                upl_mid = direction * size_mid * (mark_mid - float(info["avg_price"]))
+            elif mid_state["avg_price"] is not None and float(mid_state["avg_price"]) > 0:
+                upl_mid = direction * size_mid * (mark_mid - float(mid_state["avg_price"]))
             else:
                 raise UnverifiedAccount(f"Missing UPL basis for {pair}")
             positions_midnight.append({
                 "symbol": pair,
-                "side": info["side"],
+                "side": mid_state["side"],
                 "size": round(size_mid, 8),
                 "mark_price_midnight": round(mark_mid, 8),
                 "unrealized_pnl": round(upl_mid, 6),
@@ -411,7 +537,7 @@ class SupervisorBybit:
                 "post_midnight_tx_delta": round(post_midnight_delta, 6),
                 "positions_midnight": positions_midnight,
                 "tx_count": len(tx_rows),
-                "exec_count": len(post_execs),
+                "exec_count": sum(len(v) for v in fills_by_pair.values()),
                 "snapshot_checked_ms": snap["checked_ms"],
             },
         }

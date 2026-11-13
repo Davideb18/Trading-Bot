@@ -47,6 +47,7 @@ class OrderJournal:
     def __init__(self, directory, identity):
         directory = Path(directory).resolve()
         directory.mkdir(parents=True, exist_ok=True)
+        self.directory = directory
         self.mutex = threading.RLock()
         self.ready = False
         self.last_reconciliation = None
@@ -234,10 +235,13 @@ class OrderJournal:
                 or request.get("ordertype") != "market"
             ):
                 raise JournalBlocked("No exclusive emergency reduction authority")
-            if self.db.execute(
-                "SELECT 1 FROM intents i JOIN emergency_orders e USING(client_id) WHERE i.settled=0"
-            ).fetchone():
-                raise JournalBlocked("Previous emergency order must be reconciled first")
+            target_pair = request.get("pair")
+            active_emergency_rows = self.db.execute(
+                "SELECT i.request FROM intents i JOIN emergency_orders e USING(client_id) WHERE i.settled=0"
+            ).fetchall()
+            for (req_json,) in active_emergency_rows:
+                if target_pair is None or json.loads(req_json).get("pair") == target_pair:
+                    raise JournalBlocked("Previous emergency order must be reconciled first")
             cid = "ftj" + uuid.uuid4().hex
             with self.db:
                 self.db.execute(
