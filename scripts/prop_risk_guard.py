@@ -17,8 +17,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import TypeGuard
 
-from freqtrade.prop_profile import floors, utc_time, validate_baseline, validate_profile
 from freqtrade.prop_controls import publish_fault_event
+from freqtrade.prop_profile import floors, utc_time, validate_baseline, validate_profile
 from freqtrade.supervisor_bybit import AccountMismatch, UnverifiedAccount
 
 
@@ -49,7 +49,8 @@ def reconciled_state(profile, baseline, now, *, halted):
         raise ValueError("Explicit reconciled halt status required")
     return {
         "schema_version": 1, "risk_schema_version": 2, "profile": profile,
-        "initial_balance": profile["initial_balance"], "baseline": baseline, "baseline_status": "verified",
+        "initial_balance": profile["initial_balance"], "baseline": baseline,
+        "baseline_status": "verified",
         "current_trading_day": now.astimezone(UTC).date().isoformat(),
         "nuclear_triggered": halted, "wake_up_lock": True, "data_fault": False,
         "control_schema_version": 1, "macro_paused": False, "data_valid": False,
@@ -70,8 +71,12 @@ class RiskGuard:
         self.emergency = emergency
         self.autonomous_rollover = bool(autonomous_rollover)
         self.transient_grace_cycles = max(0, int(transient_grace_cycles))
-        self.max_transient_outage_cycles = max(self.transient_grace_cycles, int(max_transient_outage_cycles))
-        self.startup_grace_cycles = max(self.max_transient_outage_cycles, int(startup_grace_cycles))
+        self.max_transient_outage_cycles = max(
+            self.transient_grace_cycles, int(max_transient_outage_cycles)
+        )
+        self.startup_grace_cycles = max(
+            self.max_transient_outage_cycles, int(startup_grace_cycles)
+        )
         self._transient_failures = 0
         self._healthy_recovery_streak = 0
         self._control_ever_seen = False
@@ -137,7 +142,9 @@ class RiskGuard:
                 if state["current_trading_day"] != updated.date().isoformat():
                     raise ValueError("Inconsistent baseline day")
             elif not state["wake_up_lock"] or (
-                    not state["data_fault"] and not (state.get("transient_paused") is True and not state.get("data_valid"))):
+                not state["data_fault"]
+                and not (state.get("transient_paused") is True and not state.get("data_valid"))
+            ):
                 raise ValueError("Missing baseline in authorized state")
             state.setdefault("control_schema_version", 1)
             state.setdefault("macro_paused", False)
@@ -190,7 +197,8 @@ class RiskGuard:
             return False
 
     def _can_certify_midnight_rollover(self, now):
-        # Default guard refuses autonomous rollover; opt-in requires verified Bybit V5 ledger reconstruction.
+        # Default guard refuses autonomous rollover;
+        # opt-in requires verified Bybit V5 ledger reconstruction.
         return bool(self.autonomous_rollover and not self.state.get("nuclear_triggered"))
 
     def _persist_emergency_halt(self, now, equity, levels, reason):
@@ -224,8 +232,10 @@ class RiskGuard:
     def request_data_fault(self, reason):
         # No HTTP or sleep, and never hold the memory lock during persistence.
         with self._state_lock:
-            self.state.update(data_fault=True, data_valid=False, wake_up_lock=True,
-                              fault_reason=reason, acknowledged_control=None, macro_resume_pending=False)
+            self.state.update(
+                data_fault=True, data_valid=False, wake_up_lock=True,
+                fault_reason=reason, acknowledged_control=None, macro_resume_pending=False,
+            )
             self.state["fault_revision"] += 1
             self._pending_fault = True
         if not publish_fault_event(self.state_file.parent, self.profile, reason):
@@ -282,10 +292,31 @@ class RiskGuard:
         if changed:
             self._save_state()
 
+    def _accept_control_ack(self, status):
+        ack = status.get("ack")
+        if not (
+            isinstance(ack, dict)
+            and ack.get("epoch") == status.get("epoch")
+            and isinstance(ack.get("flags"), list)
+            and all(f in ("data_fault", "manual_lock") for f in ack["flags"])
+            and 0 <= time.time() * 1000 - ack.get("created_ms", 0) <= 60000
+            and status.get("verified") is True
+            and status.get("pending_entries") is False
+            and not status.get("risk_halt")
+            and self.state["data_valid"]
+            and not self.state["nuclear_triggered"]
+        ):
+            return False
+        if "data_fault" in ack["flags"]:
+            self.state["data_fault"] = False
+        self.state["acknowledged_control"] = ack["id"]
+        return True
+
     def _coordinate_controls(self):
         status = self.api_client.get_prop_control()
-        if (not isinstance(status, dict)
-                or any(type(status.get(k)) is not bool for k in ("verified", "flat", "pending_entries"))):
+        if not isinstance(status, dict) or any(
+            type(status.get(k)) is not bool for k in ("verified", "flat", "pending_entries")
+        ):
             self._pause_on_transient(
                 "Journal/control status unavailable",
                 now=datetime.now(UTC),
@@ -293,31 +324,25 @@ class RiskGuard:
             )
             return False
         self._control_ever_seen = True
-        ack = status.get("ack")
         with self._state_lock:
-            accepted_ack = False
-            if (isinstance(ack, dict) and ack.get("epoch") == status.get("epoch")
-                    and isinstance(ack.get("flags"), list)
-                    and all(f in ("data_fault", "manual_lock") for f in ack["flags"])
-                    and 0 <= time.time() * 1000 - ack.get("created_ms", 0) <= 60000
-                    and status.get("verified") is True and status.get("pending_entries") is False
-                    and not status.get("risk_halt") and self.state["data_valid"]
-                    and not self.state["nuclear_triggered"]):
-                if "data_fault" in ack["flags"]:
-                    self.state["data_fault"] = False
-                self.state["acknowledged_control"] = ack["id"]
-                accepted_ack = True
+            accepted_ack = self._accept_control_ack(status)
             if status.get("data_fault") and not accepted_ack:
                 self.state["data_fault"] = True
             if status.get("risk_halt"):
                 self.state["nuclear_triggered"] = True
-            if (self._last_cycle_verified
-                    and not self.state["data_fault"]
-                    and not self.state["nuclear_triggered"]
-                    and not status.get("data_fault")
-                    and not status.get("manual_lock")
-                    and not status.get("risk_halt")
-                    and (self.state.get("transient_paused") or self._transient_failures > 0)):
+            transient_active = (
+                self.state.get("transient_paused") or self._transient_failures > 0
+            )
+            status_clear = not any(
+                status.get(k) for k in ("data_fault", "manual_lock", "risk_halt")
+            )
+            if (
+                self._last_cycle_verified
+                and not self.state["data_fault"]
+                and not self.state["nuclear_triggered"]
+                and status_clear
+                and transient_active
+            ):
                 self._transient_failures = 0
                 if self.state.get("transient_paused"):
                     self._healthy_recovery_streak += 1
@@ -328,23 +353,32 @@ class RiskGuard:
                             self.state["macro_resume_pending"] = True
             self.state["wake_up_lock"] = self._recompute_wake_up_lock()
             paused = self.state["wake_up_lock"]
-            # Reversible pauses (macro, rules, transient) may automatically restart trading once clear.
-            resume = (not paused and self.state.get("macro_resume_pending") is True
-                      and status.get("verified") is True and not status.get("data_fault")
-                      and not status.get("manual_lock") and not status.get("risk_halt"))
-            if status.get("data_fault") or status.get("manual_lock") or status.get("risk_halt"):
+            # Reversible pauses (macro, rules, transient) may auto-resume once clear.
+            resume = (
+                not paused
+                and self.state.get("macro_resume_pending") is True
+                and status.get("verified") is True
+                and status_clear
+            )
+            if not status_clear:
                 self.state["macro_resume_pending"] = False
         self._save_state()
         if paused:
             self.api_client.stop_buying()
-        elif resume:
-            if self.api_client.start_trading():
-                with self._state_lock:
-                    self.state["macro_resume_pending"] = False
-                self._save_state()
+        elif resume and self.api_client.start_trading():
+            with self._state_lock:
+                self.state["macro_resume_pending"] = False
+            self._save_state()
         return True
 
-    def _pause_on_transient(self, reason, *, now=None, daily_unavailable_on_escalate=False, allow_startup_grace=False):
+    def _pause_on_transient(
+        self,
+        reason,
+        *,
+        now=None,
+        daily_unavailable_on_escalate=False,
+        allow_startup_grace=False,
+    ):
         if self.transient_grace_cycles <= 0:
             if daily_unavailable_on_escalate and now is not None:
                 self._daily_unavailable(now, read_exposure=False)
@@ -352,19 +386,57 @@ class RiskGuard:
             return
         self._transient_failures += 1
         self._healthy_recovery_streak = 0
-        limit = self.startup_grace_cycles if allow_startup_grace else self.max_transient_outage_cycles
+        limit = (
+            self.startup_grace_cycles
+            if allow_startup_grace
+            else self.max_transient_outage_cycles
+        )
         if self._transient_failures > limit:
             if daily_unavailable_on_escalate and now is not None:
                 self._daily_unavailable(now, read_exposure=False)
-            self._pause_on_fault(f"Sustained API outage ({self._transient_failures} cycles): {reason}")
+            self._pause_on_fault(
+                f"Sustained API outage ({self._transient_failures} cycles): {reason}"
+            )
             return
         with self._state_lock:
             self.state["transient_paused"] = True
             self.state["wake_up_lock"] = True
-            if now is not None and not self.state["data_fault"] and not self.state["nuclear_triggered"]:
-                self.state["last_updated"] = now.isoformat()
+            can_advance = (
+                now is not None
+                and not self.state["data_fault"]
+                and not self.state["nuclear_triggered"]
+            )
+            if can_advance:
+                pause_now = (
+                    now.astimezone(UTC) if now.tzinfo is not None else now.replace(tzinfo=UTC)
+                )
+                pause_day = pause_now.date()
+                pause_day_iso = pause_day.isoformat()
+                self.state["last_updated"] = pause_now.isoformat()
+                # Never advance last_updated across 00:00 UTC while leaving stale
+                # yesterday baseline/data_valid=True, which would bypass pre-rollover grace
+                # in sync_prop_controls() and fail RiskGuard._load_state().
+                baseline_obj = self.state.get("baseline")
+                baseline_stale = self.state.get("current_trading_day") != pause_day_iso
+                if baseline_obj is not None and not baseline_stale:
+                    try:
+                        baseline_stale = utc_time(baseline_obj["captured_at"]).date() != pause_day
+                    except (ValueError, TypeError, KeyError, AttributeError):
+                        baseline_stale = True
+                if baseline_stale:
+                    self.state.update(
+                        baseline=None,
+                        baseline_status="unverified",
+                        data_valid=False,
+                        official_daily_floor=None,
+                        operating_daily_floor=None,
+                        daily_monitoring_available=False,
+                        current_trading_day=pause_day_iso,
+                    )
             self.state["monitoring_status"] = "transient_paused"
-        self._save_state()
+        if not self._save_state():
+            self._pause_on_fault(self.state_error or "Failed to persist transient pause state")
+            return
         log.warning(
             "Transient risk pause (%d/%d): %s",
             self._transient_failures, limit, reason,
@@ -442,15 +514,29 @@ class RiskGuard:
                         or any(type(sample.get(k)) is not int or sample[k] < 0
                                for k in ("positions_count", "open_orders_count"))):
                     raise ValueError("Unverified exposure")
-                exposure = {**sample, "status": "present" if (
-                    sample["positions_count"] or sample["open_orders_count"]) else "flat_observed"}
-            except Exception:
-                pass  # Unknown is never flat; overall evaluation already has priority.
+                exposure = {
+                    **sample,
+                    "status": (
+                        "present"
+                        if (sample["positions_count"] or sample["open_orders_count"])
+                        else "flat_observed"
+                    ),
+                }
+            except Exception as exc:
+                # Unknown is never flat; overall evaluation already has priority.
+                log.debug("Independent account exposure unavailable: %s", exc)
         with self._state_lock:
-            self.state.update(daily_monitoring_available=False, overnight_exposure=exposure,
-                              overnight_policy_required=True)
+            self.state.update(
+                daily_monitoring_available=False,
+                overnight_exposure=exposure,
+                overnight_policy_required=True,
+            )
             self.state.setdefault("daily_unavailable_since", now.isoformat())
-        reason = "Daily floor unverifiable; exposure=" + exposure["status"] + "; overnight policy required"
+        reason = (
+            "Daily floor unverifiable; exposure="
+            + exposure["status"]
+            + "; overnight policy required"
+        )
         log.critical(reason)
         # The journal fault survives restart, including when the main risk file is corrupt.
         self.request_data_fault(reason)
@@ -470,8 +556,8 @@ class RiskGuard:
         if self.state_error:
             # Latch locally first; never spend the direct-read deadline on RPC.
             self.request_data_fault("Risk state requires reconciliation")
-            # Distinguish authorization, monitoring, and emergency liquidation authority (F04):
-            # entries remain locked, but supervisor continues sampling direct equity to protect overall floor.
+            # Distinguish authorization, monitoring, and liquidation authority (F04):
+            # entries stay locked while direct equity protects overall floor.
             if self.emergency is not None:
                 try:
                     remote = self.api_client.get_prop_profile()
@@ -486,8 +572,10 @@ class RiskGuard:
                     if Decimal(str(equity)) <= Decimal(str(levels["operating_overall_floor"])):
                         reason = "Internal static overall floor reached"
                         log.critical(
-                            "Operating overall floor breached during state fault: equity=%s floor=%s",
-                            equity, levels["operating_overall_floor"],
+                            "Operating overall floor breached during state fault: "
+                            "equity=%s floor=%s",
+                            equity,
+                            levels["operating_overall_floor"],
                         )
                         self._persist_emergency_halt(now, float(equity), levels, reason)
                         self._daily_unavailable(now, read_exposure=False)
@@ -520,7 +608,10 @@ class RiskGuard:
             return False
         except UnverifiedAccount as exc:
             self._pause_on_transient(str(exc), now=now, daily_unavailable_on_escalate=True)
-            if self.transient_grace_cycles <= 0 or self._transient_failures > self.max_transient_outage_cycles:
+            if (
+                self.transient_grace_cycles <= 0
+                or self._transient_failures > self.max_transient_outage_cycles
+            ):
                 self.state["monitoring_status"] = "unavailable"
             return False
         except (ValueError, TypeError, KeyError) as exc:
@@ -536,7 +627,10 @@ class RiskGuard:
                 now=now,
                 daily_unavailable_on_escalate=True,
             )
-            if self.transient_grace_cycles <= 0 or self._transient_failures > self.max_transient_outage_cycles:
+            if (
+                self.transient_grace_cycles <= 0
+                or self._transient_failures > self.max_transient_outage_cycles
+            ):
                 self.state["monitoring_status"] = "unavailable"
             return False
         # Preserve real observations separately from historical midnight evidence.
@@ -544,9 +638,15 @@ class RiskGuard:
         received_at = datetime.now(UTC) if now_supplied is None else now
         cycle_started_at = now
         now = received_at  # Baseline day and comparisons follow receipt, not cycle start.
-        observation = {"equity": float(equity), "received_at": received_at.isoformat(),
-                       "cycle_started_at": cycle_started_at.isoformat(),
-                       "source": "direct_account_equity" if self.emergency is not None else "account_equity_adapter"}
+        equity_source = (
+            "direct_account_equity" if self.emergency is not None else "account_equity_adapter"
+        )
+        observation = {
+            "equity": float(equity),
+            "received_at": received_at.isoformat(),
+            "cycle_started_at": cycle_started_at.isoformat(),
+            "source": equity_source,
+        }
         metadata = getattr(self.api_client, "__dict__", {}).get("equity_observation")
         response_day_mismatch = False
         if isinstance(metadata, dict) and metadata.get("equity") == equity:
@@ -604,16 +704,32 @@ class RiskGuard:
                         baseline = candidate
                     except UnverifiedAccount as rec_exc:
                         msg = str(rec_exc)
-                        hard_msgs = ("External or unverified capital flow", "Reconstructed midnight equity")
-                        if self.transient_grace_cycles > 0 and not any(m in msg for m in hard_msgs):
+                        hard_msgs = (
+                            "External or unverified capital flow",
+                            "Reconstructed midnight equity",
+                        )
+                        if (
+                            self.transient_grace_cycles > 0
+                            and not any(m in msg for m in hard_msgs)
+                        ):
                             baseline_transient = True
                         raise
             else:
                 validate_baseline(baseline, self.profile, now)
-        except (OSError, ValueError, TypeError, KeyError, AttributeError, UnverifiedAccount) as exc:
+        except (
+            OSError,
+            ValueError,
+            TypeError,
+            KeyError,
+            AttributeError,
+            UnverifiedAccount,
+        ) as exc:
             baseline_error = "Midnight baseline reconciliation required"
-            baseline_status = ("estimated" if self.state.get("baseline_estimate", {}).get("utc_day") == now.date().isoformat() else
-                               "missing" if isinstance(exc, FileNotFoundError) else "unverified")
+            estimate_day = self.state.get("baseline_estimate", {}).get("utc_day")
+            if estimate_day == now.date().isoformat():
+                baseline_status = "estimated"
+            else:
+                baseline_status = "missing" if isinstance(exc, FileNotFoundError) else "unverified"
             baseline = None
         # Overall protection remains available even while the daily baseline is unknown.
         levels = floors(self.profile, baseline["equity"] if baseline else self.initial_balance)
@@ -635,12 +751,17 @@ class RiskGuard:
                 and self.transient_grace_cycles > 0
                 and self._transient_failures < self.max_transient_outage_cycles
             )
-            self.state.update(last_equity=equity, last_updated=now.isoformat(),
-                              baseline=baseline, baseline_status=baseline_status,
-                              monitoring_status="overall_only" if baseline_error else "daily_and_overall",
-                              current_trading_day=now.date().isoformat(),
-                              remote_identity_verified=remote_verified,
-                              data_valid=not bool(baseline_error) and self.state["fault_revision"] == fault_revision)
+            self.state.update(
+                last_equity=equity,
+                last_updated=now.isoformat(),
+                baseline=baseline,
+                baseline_status=baseline_status,
+                monitoring_status="overall_only" if baseline_error else "daily_and_overall",
+                current_trading_day=now.date().isoformat(),
+                remote_identity_verified=remote_verified,
+                data_valid=not bool(baseline_error)
+                and self.state["fault_revision"] == fault_revision,
+            )
             if not transient_retry:
                 self.state["data_fault"] = self.state["data_fault"] or bool(baseline_error)
             self.state["wake_up_lock"] = self._recompute_wake_up_lock()
@@ -659,15 +780,21 @@ class RiskGuard:
             with self._state_lock:
                 self.state.update(daily_monitoring_available=True, overnight_policy_required=False)
                 self.state.pop("daily_unavailable_since", None)
-        saved = self._save_state()
+        # Skip intermediate disk save when transient_retry=True so an unlocked/unpaused
+        # baseline=None state cannot be observed by core or restart before _pause_on_transient().
+        saved = True if transient_retry else self._save_state()
         if not saved:
             self._pause_on_fault(self.state_error)
         if reason:
             self._enforce_halt()
             return True
+        if not saved:
+            return False
         if baseline_error:
             if transient_retry:
-                self._pause_on_transient(baseline_error, now=now, daily_unavailable_on_escalate=True)
+                self._pause_on_transient(
+                    baseline_error, now=now, daily_unavailable_on_escalate=True
+                )
             else:
                 self._pause_on_fault(baseline_error)
         elif saved:
@@ -692,8 +819,8 @@ class RiskGuard:
         self._save_state()
         try:
             self.api_client.stop_buying()
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Shutdown stop_buying skipped: %s", exc)
 
     def _handle_shutdown(self, signum, frame):
         self._shutdown.set()
@@ -701,15 +828,19 @@ class RiskGuard:
             self.request_data_fault("Supervisor shutdown")
 
     def _needs_midnight_rollover(self, now=None):
-        """Return True when today's verified baseline is absent/stale and needs rollover budget."""
+        """Return True when today's baseline is absent/stale or within 10s of UTC midnight."""
         if not self.autonomous_rollover:
             return False
-        today = (now or datetime.now(UTC)).astimezone(UTC).date()
+        ref = (now or datetime.now(UTC)).astimezone(UTC)
         baseline = self.state.get("baseline")
         if not isinstance(baseline, dict) or not baseline.get("captured_at"):
             return True
         try:
-            return utc_time(baseline["captured_at"]).date() != today
+            baseline_day = utc_time(baseline["captured_at"]).date()
+            return (
+                baseline_day != ref.date()
+                or (ref + timedelta(seconds=10)).date() != baseline_day
+            )
         except (ValueError, TypeError):
             return True
 
@@ -717,17 +848,33 @@ class RiskGuard:
         while not self._shutdown.is_set():
             budget = getattr(self.api_client, "operation_budget", None)
             cycle_budget = 12.0 if self._needs_midnight_rollover() else 4.0
+            transient_reason = None
+            deadline_hit = False
+            prev_failures = self._transient_failures
             with budget(cycle_budget) if budget else nullcontext():
                 try:
                     self._check_drawdown()
                     expired = getattr(self.api_client, "deadline_expired", lambda: False)
-                    if expired():
-                        self._pause_on_transient("Risk operation deadline exceeded", now=datetime.now(UTC))
+                    deadline_hit = bool(expired())
                 except Exception as exc:
                     log.exception("Guard cycle failed")
-                    try:
-                        self._pause_on_transient(type(exc).__name__, now=datetime.now(UTC))
-                    except Exception:
-                        log.exception("Unable to pause; entry heartbeat will expire")
+                    transient_reason = type(exc).__name__
+            if transient_reason:
+                try:
+                    self._pause_on_transient(transient_reason, now=datetime.now(UTC))
+                except Exception:
+                    log.exception("Unable to pause; entry heartbeat will expire")
+            elif deadline_hit:
+                try:
+                    if self._transient_failures == prev_failures:
+                        self._pause_on_transient(
+                            "Risk operation deadline exceeded", now=datetime.now(UTC)
+                        )
+                    elif self.state.get("transient_paused") or self.state.get("data_fault"):
+                        # _check_drawdown already latched/escalated under the expired budget;
+                        # deliver /prop/pause on a fresh request budget without double-counting.
+                        self.api_client.stop_buying()
+                except Exception:
+                    log.exception("Unable to pause; entry heartbeat will expire")
             self._shutdown.wait(self.interval)
         self._on_clean_shutdown()

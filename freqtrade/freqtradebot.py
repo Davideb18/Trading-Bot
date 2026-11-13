@@ -343,9 +343,10 @@ class FreqtradeBot(LoggingMixin):
         require_core_authority(self)
         if self.config.get("prop_guard_enabled"):
             sync_prop_controls(self)
-        with self._exit_lock:
-            self.manage_open_orders()
-        if self.config.get("prop_guard_enabled"):
+            with self._exit_lock:
+                # Sync filled/cancelled/timed-out ORM order state prior to journal reconciliation
+                # without running duplicate pre-analyze order replacements.
+                self.manage_open_orders(allow_replace=False)
             cancel_fault_entries(self, Trade)
             reconcile_journal(self, Trade)
         # Check whether markets have to be reloaded and reload them when it's needed
@@ -1786,11 +1787,12 @@ class FreqtradeBot(LoggingMixin):
                         f"Could not create trailing stoploss order for pair {trade.pair}."
                     )
 
-    def manage_open_orders(self) -> None:
+    def manage_open_orders(self, allow_replace: bool = True) -> None:
         """
         Management of open orders on exchange. Unfilled orders might be cancelled if timeout
         was met or replaced if there's a new candle and user has requested it.
         Timeout setting takes priority over limit order adjustment request.
+        :param allow_replace: Set False during pre-analyze prop sync so replacement runs once.
         :return: None
         """
         for trade in Trade.get_open_trades():
@@ -1824,7 +1826,7 @@ class FreqtradeBot(LoggingMixin):
                         self.handle_cancel_order(
                             order, open_order, trade, constants.CANCEL_REASON["TIMEOUT"]
                         )
-                    else:
+                    elif allow_replace:
                         self.replace_order(order, open_order, trade)
 
             # Retry deferred empty-trade cleanup after journal evidence becomes available.

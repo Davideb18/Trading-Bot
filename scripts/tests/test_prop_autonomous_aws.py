@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -114,6 +115,8 @@ class AutonomousRolloverAndTransientTests(unittest.TestCase):
     def setUp(self):
         patch.object(socket.socket, "connect", side_effect=AssertionError("Network forbidden")).start()
         self.addCleanup(patch.stopall)
+        log_factory = logging.getLogRecordFactory()
+        self.addCleanup(logging.setLogRecordFactory, log_factory)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
@@ -277,6 +280,8 @@ class HyroRulesAndCommissioningTests(unittest.TestCase):
     def setUp(self):
         patch.object(socket.socket, "connect", side_effect=AssertionError("Network forbidden")).start()
         self.addCleanup(patch.stopall)
+        log_factory = logging.getLogRecordFactory()
+        self.addCleanup(logging.setLogRecordFactory, log_factory)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
@@ -402,6 +407,8 @@ class BlindAuditRegressionTests(unittest.TestCase):
     def setUp(self):
         patch.object(socket.socket, "connect", side_effect=AssertionError("Network forbidden")).start()
         self.addCleanup(patch.stopall)
+        log_factory = logging.getLogRecordFactory()
+        self.addCleanup(logging.setLogRecordFactory, log_factory)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
@@ -648,6 +655,8 @@ class PropAuditRegressionTests(unittest.TestCase):
     def setUp(self):
         patch.object(socket.socket, "connect", side_effect=AssertionError("Network forbidden")).start()
         self.addCleanup(patch.stopall)
+        log_factory = logging.getLogRecordFactory()
+        self.addCleanup(logging.setLogRecordFactory, log_factory)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
@@ -920,6 +929,403 @@ class PropAuditRegressionTests(unittest.TestCase):
             dt_mock.fromtimestamp = datetime.fromtimestamp
             rm2._hyrotrader_rules_loop()
         self.assertTrue(any("24-DAY INACTIVITY ALERT" in str(c) for c in log_mock.critical.call_args_list))
+
+    def test_midnight_transient_rollover_atomicity_and_pre_baseline_outage_no_fault(self):
+        day1 = datetime(2026, 11, 10, 23, 59, 55, tzinfo=UTC)
+        day2_outage = datetime(2026, 11, 11, 0, 0, 2, tzinfo=UTC)
+        day2_recover = datetime(2026, 11, 11, 0, 0, 7, tzinfo=UTC)
+
+        b_day1 = baseline(self.profile, now=day1)
+        state_day1 = reconciled_state(self.profile, b_day1, day1, halted=False)
+        state_day1["data_valid"] = True
+        state_day1["last_updated"] = day1.isoformat()
+
+        journal = OrderJournal(
+            self.root,
+            {
+                "account_id": self.profile["account_id"],
+                "challenge_id": self.profile["challenge_id"],
+                "phase_id": self.profile["phase_id"],
+                "profile_id": self.profile["profile_id"],
+                "exchange": self.profile["exchange"],
+                "environment": self.profile["environment"],
+                "currency": self.profile["currency"],
+                "key_fingerprint": hashlib.sha256(b"offline").hexdigest(),
+            },
+        )
+        self.addCleanup(journal.close)
+        bot = SimpleNamespace(
+            config={**self.account_cfg, "prop_guard_enabled": True, "user_data_dir": str(self.root)},
+            order_journal=journal,
+        )
+
+        # BUG-1 regression: transient rollover error never writes an intermediate unlocked baseline=None state.
+        (self.root / "risk_manager_prop_baseline.json").write_text(json.dumps(b_day1))
+        self.state_file.write_text(json.dumps(state_day1))
+        api = Mock()
+        api.get_prop_profile.return_value = self.profile
+        api.get_equity.return_value = 5000.0
+        api.equity_observation = {
+            "equity": 5000.0,
+            "response_time_ms": int(day2_outage.timestamp() * 1000),
+            "source": "bybit_v5_wallet_response",
+        }
+        api.reconcile_midnight_baseline.side_effect = UnverifiedAccount("Temporary Bybit timeout")
+        api.get_prop_control.return_value = {"verified": True, "flat": True, "pending_entries": False, "ack": None}
+        api.stop_buying.return_value = True
+        api.start_trading.return_value = True
+
+        guard = RiskGuard(api, self.state_file, profile=self.profile, autonomous_rollover=True, transient_grace_cycles=3)
+        saved_snapshots = []
+        orig_save = guard._save_state
+
+        def _spy_save(*, force_emergency=False):
+            ok = orig_save(force_emergency=force_emergency)
+            saved_snapshots.append(json.loads(self.state_file.read_text()))
+            return ok
+
+        guard._save_state = _spy_save
+        guard._check_drawdown(now=day2_outage)
+        self.assertEqual(len(saved_snapshots), 1)
+        self.assertTrue(saved_snapshots[0]["transient_paused"])
+        self.assertTrue(saved_snapshots[0]["wake_up_lock"])
+        self.assertFalse(saved_snapshots[0]["data_fault"])
+        self.assertFalse(saved_snapshots[0]["data_valid"])
+        with patch("freqtrade.prop_controls.datetime") as dt_mock:
+            dt_mock.now.return_value = day2_outage
+            dt_mock.fromisoformat = datetime.fromisoformat
+            self.assertTrue(sync_prop_controls(bot))
+        self.assertFalse(read_control(journal)["data_fault"])
+        self.assertIsNone(RiskGuard(api, self.state_file, profile=self.profile, autonomous_rollover=True).state_error)
+
+        # BUG-2 regression: transient outage before baseline rollover clears stale yesterday baseline cleanly.
+        self.state_file.write_text(json.dumps(state_day1))
+        api2 = Mock()
+        api2.get_prop_profile.return_value = self.profile
+        api2.get_equity.return_value = None  # Triggers _pause_on_transient BEFORE _check_drawdown baseline rollover.
+        api2.stop_buying.return_value = True
+        api2.start_trading.return_value = True
+        api2.get_prop_control.return_value = {"verified": True, "flat": True, "pending_entries": False, "ack": None}
+        guard2 = RiskGuard(api2, self.state_file, profile=self.profile, autonomous_rollover=True, transient_grace_cycles=3)
+        guard2._check_drawdown(now=day2_outage)
+
+        s_outage = json.loads(self.state_file.read_text())
+        self.assertIsNone(s_outage["baseline"])
+        self.assertFalse(s_outage["data_valid"])
+        self.assertFalse(s_outage["data_fault"])
+        self.assertTrue(s_outage["transient_paused"])
+        self.assertTrue(s_outage["wake_up_lock"])
+        self.assertEqual(s_outage["current_trading_day"], "2026-11-11")
+
+        # Restarting supervisor + syncing core on that outage snapshot must NOT trigger state_error or sticky data_fault.
+        guard2_restarted = RiskGuard(
+            api2, self.state_file, profile=self.profile, autonomous_rollover=True, transient_grace_cycles=3
+        )
+        self.assertIsNone(guard2_restarted.state_error)
+        with patch("freqtrade.prop_controls.datetime") as dt_mock:
+            dt_mock.now.return_value = day2_outage
+            dt_mock.fromisoformat = datetime.fromisoformat
+            self.assertTrue(sync_prop_controls(bot))
+        self.assertFalse(read_control(journal)["data_fault"])
+
+        # Recovery: equity + reconciled Day 2 baseline arrive -> self-resumes after 3 healthy cycles.
+        b_day2 = baseline(self.profile, now=day2_recover)
+        api2.get_equity.return_value = 5000.0
+        api2.reconcile_midnight_baseline.return_value = b_day2
+        for i in range(3):
+            tick = day2_recover + timedelta(seconds=5 * i)
+            api2.equity_observation = {
+                "equity": 5000.0,
+                "response_time_ms": int(tick.timestamp() * 1000),
+                "source": "bybit_v5_wallet_response",
+            }
+            guard2_restarted._check_drawdown(now=tick)
+        s_recovered = json.loads(self.state_file.read_text())
+        self.assertTrue(s_recovered["data_valid"])
+        self.assertFalse(s_recovered["data_fault"])
+        self.assertFalse(s_recovered["transient_paused"])
+        self.assertFalse(s_recovered["wake_up_lock"])
+        api2.start_trading.assert_called()
+
+    def test_prop_mode_process_runs_pre_analyze_sync_without_duplicate_replace(self):
+        calls = []
+        fake_bot = SimpleNamespace(
+            config={"prop_guard_enabled": True},
+            _exit_lock=nullcontext(),
+            _measure_execution=nullcontext(),
+            manage_open_orders=lambda allow_replace=True: calls.append(allow_replace),
+            exchange=SimpleNamespace(reload_markets=lambda: None),
+            update_trades_without_assigned_fees=lambda: None,
+            _refresh_active_whitelist=lambda t: [],
+            pairlists=SimpleNamespace(create_pair_list=lambda w: []),
+            strategy=SimpleNamespace(
+                gather_informative_pairs=lambda: [],
+                bot_loop_start=lambda **kw: None,
+                analyze=lambda w: None,
+                position_adjustment_enable=False,
+            ),
+            dataprovider=SimpleNamespace(refresh=lambda *a: None, _msg_queue=[]),
+            exit_positions=lambda t: None,
+            state=None,
+            _schedule=SimpleNamespace(run_pending=lambda: None),
+            rpc=SimpleNamespace(process_msg_queue=lambda q: None),
+            last_process=None,
+        )
+        with patch("freqtrade.freqtradebot.require_core_authority"), patch(
+            "freqtrade.freqtradebot.sync_prop_controls"
+        ), patch("freqtrade.freqtradebot.cancel_fault_entries"), patch(
+            "freqtrade.freqtradebot.reconcile_journal"
+        ), patch("freqtrade.freqtradebot.Trade.get_open_trades", return_value=[]), patch(
+            "freqtrade.freqtradebot.Trade.commit"
+        ):
+            FreqtradeBot.process(fake_bot)
+        self.assertEqual(calls, [False, True])
+
+    def test_bybit_descending_mark_kline_and_ccxt_rejected_empty_quantities(self):
+        import ccxt
+
+        from freqtrade.order_recovery import order_evidence_valid, verified_prop_cancel
+
+        # BUG-NEW-1: Bybit V5 returns mark-price-kline newest-first;
+        # without "end", limit=1 misses midnight.
+        day2_mid = datetime(2026, 11, 12, 0, 0, 0, tzinfo=UTC)
+        mid_ms = int(day2_mid.timestamp() * 1000)
+        later_now = day2_mid + timedelta(minutes=5)
+        helper = AutonomousRolloverAndTransientTests()
+        helper.profile = self.profile
+        direct = helper._bybit_adapter(
+            day2_mid, equity=5060.0, wallet=5000.0, mark_mid=102.0, clock=[later_now]
+        )
+        later_ms = int(later_now.timestamp() * 1000)
+        all_bars = [
+            [str(mid_ms + 120_000), "115.0", "115.0", "115.0", "115.0"],
+            [str(mid_ms + 60_000), "108.0", "108.0", "108.0", "108.0"],
+            [str(mid_ms), "102.0", "102.0", "102.0", "102.0"],
+        ]
+
+        def descending_kline(params):
+            start = int(params["start"])
+            end = int(params.get("end", later_ms))
+            limit = int(params.get("limit", 200))
+            sliced = [b for b in all_bars if start <= int(b[0]) <= end][:limit]
+            return {
+                "retCode": 0,
+                "time": later_ms,
+                "result": {"category": "linear", "symbol": "SOLUSDT", "list": sliced},
+            }
+
+        direct.api.publicGetV5MarketMarkPriceKline.side_effect = descending_kline
+        with patch("freqtrade.supervisor_bybit.time.time", return_value=later_now.timestamp()):
+            reconciled = direct.reconcile_midnight_baseline(later_now)
+        self.assertAlmostEqual(reconciled["equity"], 5006.0, places=6)
+
+        # BUG-NEW-2: real ccxt.bybit().parse_order() yields filled=None, remaining=None on Rejected.
+        ex = ccxt.bybit({"options": {"defaultType": "swap"}})
+        market = {
+            "id": "SOLUSDT", "symbol": "SOL/USDT:USDT", "type": "swap", "swap": True,
+            "spot": False, "linear": True, "inverse": False, "contract": True,
+            "option": False, "future": False, "settle": "USDT", "base": "SOL",
+            "quote": "USDT", "contractSize": 1.0,
+            "precision": {"amount": 0.1, "price": 0.01},
+            "limits": {"amount": {"min": 0.1, "max": 1000}}, "info": {},
+        }
+        ex.set_markets([market])
+        direct.api.markets["SOLUSDT"].update(market)
+        cid = "c" * 32
+        raw_rej = {
+            "orderId": "ord-rej-1", "orderLinkId": cid, "symbol": "SOLUSDT", "side": "Buy",
+            "orderType": "Limit", "price": "100", "qty": "3", "cumExecQty": "",
+            "leavesQty": "", "avgPrice": "", "orderStatus": "Rejected",
+            "reduceOnly": False, "positionIdx": 0,
+        }
+        direct.api.parse_order.side_effect = ex.parse_order
+        direct.api.privateGetV5OrderRealtime.side_effect = lambda *_a, **_kw: {
+            "retCode": 0,
+            "time": later_ms,
+            "result": {"category": "linear", "list": [], "nextPageCursor": ""},
+        }
+        direct.api.privateGetV5OrderHistory.side_effect = lambda *_a, **_kw: {
+            "retCode": 0,
+            "time": later_ms,
+            "result": {"category": "linear", "list": [raw_rej], "nextPageCursor": ""},
+        }
+        direct.api.privateGetV5ExecutionList.side_effect = lambda *_a, **_kw: {
+            "retCode": 0,
+            "time": later_ms,
+            "result": {"category": "linear", "list": [], "nextPageCursor": ""},
+        }
+        with patch("freqtrade.supervisor_bybit.time.time", return_value=later_now.timestamp()):
+            looked_up = direct.lookup("SOL/USDT:USDT", client_id=cid)
+        self.assertEqual(looked_up["status"], "rejected")
+        self.assertEqual(looked_up["filled"], 0.0)
+        self.assertEqual(looked_up["remaining"], 0.0)
+
+        parsed_rej = ex.parse_order(raw_rej, market)
+        self.assertIsNone(parsed_rej["filled"])
+        local_order = SimpleNamespace(order_id="ord-rej-1", side="buy", amount=3.0, filled=0.0)
+        self.assertTrue(order_evidence_valid(parsed_rej, local_order, "SOL/USDT:USDT"))
+        self.assertFalse(
+            order_evidence_valid({**parsed_rej, "status": "open"}, local_order, "SOL/USDT:USDT")
+        )
+        self.assertFalse(
+            order_evidence_valid(
+                {**parsed_rej, "status": "canceled", "filled": 1.0, "remaining": None},
+                local_order,
+                "SOL/USDT:USDT",
+            )
+        )
+        fake_trade = SimpleNamespace(
+            pair="SOL/USDT:USDT",
+            get_custom_data=lambda **_kw: [],
+            set_custom_data=lambda **_kw: None,
+        )
+        fake_bot = SimpleNamespace(
+            config={"prop_guard_enabled": True},
+            order_journal=None,
+            exchange=SimpleNamespace(fetch_order=lambda *_a: dict(parsed_rej)),
+        )
+        with patch("freqtrade.emergency_authority.require_core_authority"):
+            canceled = verified_prop_cancel(
+                fake_bot, fake_trade, local_order, SimpleNamespace(commit=lambda: None)
+            )
+        self.assertIsNotNone(canceled)
+        self.assertEqual(canceled["filled"], 0.0)
+        self.assertEqual(canceled["remaining"], 0.0)
+
+        journal = OrderJournal(
+            self.root / "j_rej",
+            {
+                "account_id": self.profile["account_id"],
+                "challenge_id": self.profile["challenge_id"],
+                "phase_id": self.profile["phase_id"],
+                "profile_id": self.profile["profile_id"],
+                "exchange": self.profile["exchange"],
+                "environment": self.profile["environment"],
+                "currency": self.profile["currency"],
+                "key_fingerprint": hashlib.sha256(b"rej").hexdigest(),
+            },
+        )
+        self.addCleanup(journal.close)
+        from snapshot_fixtures import timed_snapshot
+
+        init_snap = timed_snapshot(
+            {"complete": True, "open_orders": [], "positions": [], "orders": {}, "fills": {}}
+        )
+        self.assertEqual(journal.reconcile(init_snap, {}, {}), [])
+        j_cid = journal.prepare(
+            {"pair": "SOL/USDT:USDT", "side": "buy", "amount": 3.0, "reduceOnly": False}
+        )
+        journal.dispatch(
+            j_cid,
+            lambda **_kw: {"id": "ord-rej-1", "clientOrderId": j_cid},
+        )
+        snap = timed_snapshot(
+            {
+                "complete": True,
+                "open_orders": [],
+                "positions": [],
+                "orders": {j_cid: {**parsed_rej, "clientOrderId": j_cid}},
+                "fills": {j_cid: 0.0},
+            }
+        )
+        self.assertEqual(journal.reconcile(snap, {}, {}), [])
+        self.assertEqual(journal.intents(False)[0]["state"], "rejected")
+        self.assertEqual(journal.intents(False)[0]["settled"], 1)
+
+    def test_save_state_failure_single_fault_and_midnight_window_post_budget_pause(self):
+        # BUG-NEW-3: _save_state() failure with baseline_error calls _pause_on_fault once.
+        day1 = datetime(2026, 11, 10, 23, 59, 45, tzinfo=UTC)
+        day2 = datetime(2026, 11, 11, 0, 0, 2, tzinfo=UTC)
+        b_day1 = baseline(self.profile, now=day1)
+        state_day1 = reconciled_state(self.profile, b_day1, day1, halted=False)
+        state_day1["data_valid"] = True
+        self.state_file.write_text(json.dumps(state_day1))
+
+        api = Mock()
+        api.get_prop_profile.return_value = self.profile
+        api.get_equity.return_value = 5000.0
+        api.stop_buying.return_value = True
+        api.reconcile_midnight_baseline.side_effect = ValueError("No non-transient fallback")
+        guard = RiskGuard(
+            api,
+            self.state_file,
+            profile=self.profile,
+            autonomous_rollover=True,
+            transient_grace_cycles=3,
+        )
+
+        def fail_save(*, force_emergency=False):
+            guard.state_error = "State write failed: disk full"
+            return False
+
+        guard._save_state = fail_save
+        fault_calls = []
+        guard._pause_on_fault = lambda r: fault_calls.append(r)
+        guard._check_drawdown(now=day2)
+        self.assertEqual(fault_calls, ["State write failed: disk full"])
+
+        # BUG-NEW-4: 23:59:57 UTC receives 12s rollover budget; deadline pause runs outside budget.
+        self.state_file.write_text(json.dumps(state_day1))
+        in_budget = [False]
+
+        class BudgetTracker:
+            def __init__(self):
+                self.budgets = []
+                self.stop_calls_inside_budget = []
+
+            from contextlib import contextmanager as _cm
+
+            @_cm
+            def operation_budget(self, seconds=4.0):
+                self.budgets.append(seconds)
+                in_budget[0] = True
+                try:
+                    yield
+                finally:
+                    in_budget[0] = False
+
+            def deadline_expired(self):
+                return True
+
+            def get_prop_profile(self):
+                return self_profile
+
+            def get_equity(self):
+                return 5000.0
+
+            def get_prop_control(self):
+                return {"verified": True, "flat": True, "pending_entries": False, "ack": None}
+
+            def stop_buying(self):
+                self.stop_calls_inside_budget.append(in_budget[0])
+                guard_run._shutdown.set()
+                return True
+
+        self_profile = self.profile
+        tracker = BudgetTracker()
+        guard_run = RiskGuard(
+            tracker,
+            self.state_file,
+            profile=self.profile,
+            autonomous_rollover=True,
+            transient_grace_cycles=3,
+        )
+        self.assertFalse(
+            guard_run._needs_midnight_rollover(now=datetime(2026, 11, 10, 23, 59, 45, tzinfo=UTC))
+        )
+        self.assertTrue(
+            guard_run._needs_midnight_rollover(now=datetime(2026, 11, 10, 23, 59, 57, tzinfo=UTC))
+        )
+
+        def fail_drawdown():
+            raise TimeoutError("Bybit slow at midnight")
+
+        guard_run._check_drawdown = fail_drawdown
+        guard_run._on_clean_shutdown = lambda: None
+        guard_run.run()
+        self.assertEqual(tracker.stop_calls_inside_budget, [False])
+        self.assertEqual(tracker.budgets, [12.0])
+        self.assertTrue(guard_run.state["transient_paused"])
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import math
 import time
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from freqtrade.order_recovery import normalized_order_quantities
 from freqtrade.snapshot_freshness import milliseconds, read_record, validate_reads
 
 
@@ -175,8 +176,11 @@ class SupervisorBybit:
         if type(raw.get("reduceOnly")) is not bool or int(raw["positionIdx"]) != 0:
             raise UnverifiedAccount("Unknown order mode")
         order = self.api.parse_order(raw, market)
-        for key in ("amount", "filled", "remaining"):
-            order[key] = number(order[key]) * number(market["contractSize"])
+        amount, filled, remaining = normalized_order_quantities(order, raw=raw)
+        contract_size = number(market["contractSize"])
+        order["amount"] = number(amount) * contract_size
+        order["filled"] = number(filled) * contract_size
+        order["remaining"] = number(remaining) * contract_size
         order["reduceOnly"] = raw["reduceOnly"]
         if (not order.get("id") or order.get("side") not in ("buy", "sell")
                 or order["amount"] <= 0 or not 0 <= order["filled"] <= order["amount"]
@@ -487,8 +491,14 @@ class SupervisorBybit:
             market_id = info["market_id"] if info else self.market(pair)["id"]
             kline_res = self._call(
                 self.api.publicGetV5MarketMarkPriceKline,
-                {"category": "linear", "symbol": market_id, "interval": "1",
-                 "start": midnight_ms, "limit": 1},
+                {
+                    "category": "linear",
+                    "symbol": market_id,
+                    "interval": "1",
+                    "start": midnight_ms,
+                    "end": midnight_ms + 60_000,
+                    "limit": 5,
+                },
             )
             bars = (kline_res.get("result") or {}).get("list") or []
             bar = next((b for b in bars if int(number(b[0])) == midnight_ms), None)

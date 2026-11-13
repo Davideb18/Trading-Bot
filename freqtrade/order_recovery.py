@@ -29,6 +29,33 @@ def clear_recovery(trade, order_id):
         trade.set_custom_data(key=RECOVERY_KEY, value=sorted(pending))
 
 
+def normalized_order_quantities(order, raw=None, *, local_filled=None):
+    """Normalize CCXT empty-string terminal quantities without fabricating partial fills."""
+    status = order.get("status")
+    amount = order.get("amount")
+    filled = order.get("filled")
+    remaining = order.get("remaining")
+    empty_raw_fill = isinstance(raw, dict) and raw.get("cumExecQty") in ("", None)
+    local_zero = local_filled is None or local_filled == 0
+    if (
+        filled is None
+        and status in CANCELED_EXCHANGE_STATES
+        and (status == "rejected" or empty_raw_fill)
+        and local_zero
+    ):
+        filled = 0.0
+    if (
+        remaining is None
+        and status in CANCELED_EXCHANGE_STATES
+        and isinstance(filled, (int, float))
+        and type(filled) in (int, float)
+        and math.isfinite(filled)
+        and filled == 0
+    ):
+        remaining = 0.0
+    return amount, filled, remaining
+
+
 def verified_prop_cancel(bot, trade, local_order, trade_model, *, terminal_evidence=None):
     """Cancel only with core authority; a fresh lookup, never an ACK, proves the outcome.
 
@@ -64,6 +91,13 @@ def verified_prop_cancel(bot, trade, local_order, trade_model, *, terminal_evide
                 or not math.isclose(order["amount"], local_order.amount, rel_tol=1e-8, abs_tol=1e-12)
                 or order["status"] == "open"):
             return None
+        _, norm_filled, norm_remaining = normalized_order_quantities(
+            order,
+            raw=order.get("info") if isinstance(order.get("info"), dict) else None,
+            local_filled=getattr(local_order, "filled", None),
+        )
+        if order.get("filled") is None and norm_filled is not None:
+            return {**order, "filled": norm_filled, "remaining": norm_remaining}
         return order
     except (ExchangeError, ValueError, TypeError, KeyError):
         return None
@@ -78,29 +112,25 @@ def order_evidence_valid(order, local_order, pair):
             or order.get("side") != local_order.side
             or order.get("status") not in ("open", *NON_OPEN_EXCHANGE_STATES)):
         return False
-    for key in ("amount", "filled", "remaining"):
-        value = order.get(key)
-        if (
-            key == "remaining"
-            and value is None
-            and order.get("status") in CANCELED_EXCHANGE_STATES
-            and order.get("filled") == 0
-        ):
-            value = 0.0
+    raw = order.get("info") if isinstance(order.get("info"), dict) else None
+    amount, filled, remaining = normalized_order_quantities(
+        order, raw=raw, local_filled=getattr(local_order, "filled", None)
+    )
+    for value in (amount, filled, remaining):
         if (not isinstance(value, (int, float)) or type(value) not in (int, float)
                 or not math.isfinite(value) or value < 0):
             return False
-    if order["amount"] <= 0 or order["filled"] > order["amount"]:
+    if amount <= 0 or filled > amount:
         return False
-    if order["filled"] < (local_order.filled or 0):
+    if filled < (local_order.filled or 0):
         return False
-    if order["status"] == "closed" and (order["filled"] == 0 or order["remaining"] != 0):
+    if order["status"] == "closed" and (filled == 0 or remaining != 0):
         return False
     if order["status"] == "open" and not math.isclose(
-        order["filled"] + order["remaining"], order["amount"], rel_tol=1e-8, abs_tol=1e-12
+        filled + remaining, amount, rel_tol=1e-8, abs_tol=1e-12
     ):
         return False
-    if order["filled"] > 0:
+    if filled > 0:
         price = order.get("average") or order.get("price")
         if (not isinstance(price, (int, float)) or type(price) not in (int, float)
                 or not math.isfinite(price) or price <= 0):

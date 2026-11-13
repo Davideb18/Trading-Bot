@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 
 from freqtrade.exceptions import ExchangeError
+from freqtrade.order_recovery import normalized_order_quantities
 
 
 class JournalBlocked(ExchangeError):
@@ -347,7 +348,7 @@ class OrderJournal:
                         ):
                             raise ValueError("Order origin/identity mismatch")
                         amount, filled, remaining = (
-                            quantity(order[k]) for k in ("amount", "filled", "remaining")
+                            quantity(value) for value in normalized_order_quantities(order)
                         )
                         status = order["status"]
                         if (
