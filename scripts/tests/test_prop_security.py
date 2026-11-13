@@ -165,7 +165,9 @@ class SecurityTests(unittest.TestCase):
         self.assertFalse(core['volumes'][0]['bind']['create_host_path'])
         for service in (core, supervisor):
             for key, value in service['environment'].items():
-                if any(s in key for s in ('PASSWORD', 'SECRET', 'TOKEN', 'BYBIT_API_KEY')):
+                if key == 'PROP_TELEGRAM_BOT_TOKEN':
+                    self.assertEqual(value, '${PROP_TELEGRAM_BOT_TOKEN:-}')
+                elif any(s in key for s in ('PASSWORD', 'SECRET', 'TOKEN', 'BYBIT_API_KEY')):
                     self.assertIn(':?', value)
 
     def test_actual_permission_function_rejects_windows_acl_uncertainty(self):

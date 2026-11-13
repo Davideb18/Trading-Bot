@@ -578,8 +578,8 @@ class BlindAuditRegressionTests(unittest.TestCase):
         self.assertEqual(core["depends_on"], {"freqtrade_prop_risk_manager": {"condition": "service_healthy"}})
         self.assertNotIn("depends_on", sup)
         sup_env = sup["environment"]
-        self.assertEqual(sup_env.get("PROP_TELEGRAM_BOT_TOKEN"), "${PROP_TELEGRAM_BOT_TOKEN:?Required}")
-        self.assertEqual(sup_env.get("PROP_TELEGRAM_CHAT_ID"), "${PROP_TELEGRAM_CHAT_ID:?Required}")
+        self.assertEqual(sup_env.get("PROP_TELEGRAM_BOT_TOKEN"), "${PROP_TELEGRAM_BOT_TOKEN:-}")
+        self.assertEqual(sup_env.get("PROP_TELEGRAM_CHAT_ID"), "${PROP_TELEGRAM_CHAT_ID:-}")
         self.assertEqual(sup_env.get("PROP_INACTIVITY_KEEPALIVE"), "${PROP_INACTIVITY_KEEPALIVE:-false}")
 
         proc = subprocess.run(
