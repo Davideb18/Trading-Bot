@@ -60,6 +60,26 @@ class SecurityTests(unittest.TestCase):
         self.assertEqual(self.validate(), self.profile)
         self.path_check.assert_any_call(self.root / 'order_journal' / 'orders.sqlite')
 
+    def test_real_18_char_bybit_api_key_accepted_while_short_secrets_rejected(self):
+        key_18 = 'AbCdEfGhIj12345678'
+        identity = json.loads(self.journal.db.execute('SELECT value FROM binding').fetchone()[0])
+        identity['key_fingerprint'] = hashlib.sha256(key_18.encode()).hexdigest()
+        with self.journal.db:
+            self.journal.db.execute('UPDATE binding SET value=? WHERE id=1', (json.dumps(identity),))
+        self.env['PROP_BYBIT_API_KEY'] = key_18
+        self.config['exchange']['key'] = key_18
+        self.assertEqual(self.validate(), self.profile)
+        short_env = dict(self.env, PROP_BYBIT_API_KEY='AbCdEfGh1234567')
+        short_cfg = copy.deepcopy(self.config)
+        short_cfg['exchange']['key'] = short_env['PROP_BYBIT_API_KEY']
+        with self.assertRaises(security.DeploymentRejected):
+            security.validate_deployment(short_cfg, short_cfg['exchange'], short_env)
+        short_secret_env = dict(self.env, PROP_BYBIT_API_SECRET='AbCdEfGhIj12345678')
+        short_secret_cfg = copy.deepcopy(self.config)
+        short_secret_cfg['exchange']['secret'] = short_secret_env['PROP_BYBIT_API_SECRET']
+        with self.assertRaises(security.DeploymentRejected):
+            security.validate_deployment(short_secret_cfg, short_secret_cfg['exchange'], short_secret_env)
+
     def test_missing_empty_placeholder_secrets(self):
         for value in (None, '', '   ', 'supersecretjwttoken', 'ZeroBurnPassword2026!', 'a' * 40,
                       'replace-this-password-before-production'):

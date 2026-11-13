@@ -17,10 +17,10 @@ class DeploymentRejected(ValueError):
 DEFAULT_PROP_DB_URL = 'sqlite:////freqtrade/user_data/trades_prop.sqlite'
 
 
-def secret(value, label):
+def secret(value, label, min_len=24):
     bad = ('password', 'changeme', 'change-me', 'placeholder', 'supersecret',
            'zeroburn', 'example', 'your_', 'your-', 'replace', 'dummy', 'test', 'secret')
-    if (not isinstance(value, str) or value != value.strip() or len(value) < 24
+    if (not isinstance(value, str) or value != value.strip() or len(value) < min_len
             or len(set(value)) < 8 or any(s in value.lower() for s in bad)):
         raise DeploymentRejected('Missing or unsafe ' + label)
     return value
@@ -82,7 +82,7 @@ def _validate_common(config, exchange, env):
     except Exception:
         raise DeploymentRejected('Unverifiable deployment profile') from None
     for value, label in zip(values[:5], ('exchange key', 'exchange secret', 'API password', 'JWT key', 'WS token')):
-        secret(value, label)
+        secret(value, label, min_len=16 if label == 'exchange key' else 24)
     if len(set(values[:5])) != 5:
         raise DeploymentRejected('Deployment secrets must be distinct')
     if not isinstance(api.get('username'), str) or not api['username'].strip():
