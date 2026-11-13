@@ -602,6 +602,28 @@ class AdapterTests(unittest.TestCase):
             self.adapter.certify_flat_midnight_baseline()
         self.adapter.snapshot.assert_not_called()
 
+    def test_live_account_info_without_top_level_time_uses_market_time_while_other_endpoints_require_time(self):
+        self.api.privateGetV5AccountInfo = Mock(return_value={
+            "retCode": 0, "retMsg": "OK",
+            "result": {"unifiedMarginStatus": 3, "marginMode": "ISOLATED_MARGIN"},
+        })
+        self.api.publicGetV5MarketTime = Mock(side_effect=lambda *_a, **_kw: self.response({"timeSecond": "1"}))
+        snap = self.adapter.snapshot()
+        self.assertEqual(snap["equity"], 4820)
+        self.api.publicGetV5MarketTime.assert_called_once_with({})
+
+        # Stale/missing market time fallback still fails closed.
+        self.api.publicGetV5MarketTime = Mock(side_effect=Exception("clock down"))
+        with self.assertRaises(UnverifiedAccount):
+            self.adapter.verify_identity()
+
+        # Other endpoints without top-level 'time' must NOT use market-time fallback.
+        self.api.publicGetV5MarketTime = Mock(side_effect=lambda *_a, **_kw: self.response({"timeSecond": "1"}))
+        self.api.privateGetV5UserQueryApi = Mock(return_value={"retCode": 0, "result": {"userID": "123", "readOnly": 0}})
+        with self.assertRaises(UnverifiedAccount):
+            self.adapter.verify_identity()
+        self.api.publicGetV5MarketTime.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

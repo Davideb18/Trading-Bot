@@ -41,10 +41,10 @@ class SupervisorBybit:
         finally:
             self.deadline = previous
 
-    def _call(self, method, *args, raw=True):
-        start, monotonic_start = milliseconds(), time.monotonic()
-        attempts = 3 if raw else 1
+    def _request(self, method, *args, raw=True):
+        """Invoke a CCXT/Bybit callable within the active operation budget."""
         result = None
+        attempts = 3 if raw else 1
         for attempt in range(attempts):
             remaining = (self.deadline - time.monotonic()) if self.deadline else 4.0
             if remaining <= 0:
@@ -61,15 +61,29 @@ class SupervisorBybit:
                 raise UnverifiedAccount("Bybit request failed") from None
         if self.deadline and time.monotonic() >= self.deadline:
             raise UnverifiedAccount("Late Bybit response")
+        return result
+
+    def _call(self, method, *args, raw=True, allow_market_time=False):
+        start, monotonic_start = milliseconds(), time.monotonic()
+        result = self._request(method, *args, raw=raw)
         if raw:
             if not isinstance(result, dict) or result.get("retCode") != 0:
                 raise UnverifiedAccount("Unsuccessful Bybit response")
-            if not -2000 <= time.time() * 1000 - number(result["time"]) <= 15000:
+            record_response = result
+            if result.get("time") is None:
+                if not allow_market_time:
+                    raise UnverifiedAccount("Missing Bybit timestamp")
+                # /v5/account/info omits top-level 'time' on live Bybit V5; corroborate clock within budget.
+                time_res = self._request(self.api.publicGetV5MarketTime, {}, raw=True)
+                if not isinstance(time_res, dict) or time_res.get("retCode") != 0 or time_res.get("time") is None:
+                    raise UnverifiedAccount("Missing Bybit market time")
+                record_response = {**result, "time": time_res["time"]}
+            if not -2000 <= time.time() * 1000 - number(record_response["time"]) <= 15000:
                 raise UnverifiedAccount("Stale Bybit response")
             try:
                 endpoint = getattr(method, "__name__", None)
                 self.last_read = read_record(endpoint if isinstance(endpoint, str) else "response",
-                                             start, monotonic_start, result)
+                                             start, monotonic_start, record_response)
                 if getattr(self, "_snapshot_reads", None) is not None:
                     self._snapshot_reads.append(self.last_read.copy())
             except ValueError:
@@ -89,7 +103,7 @@ class SupervisorBybit:
             raise AccountMismatch("Remote Bybit UID missing or mismatched")
         if type(identity.get("readOnly")) is not int or identity["readOnly"] != 0:
             raise AccountMismatch("Trading authority is unavailable")
-        account = self._call(self.api.privateGetV5AccountInfo, {})["result"]
+        account = self._call(self.api.privateGetV5AccountInfo, {}, allow_market_time=True)["result"]
         self.identity_reads.append({**self.last_read, "component": "account_mode"})
         status = account.get("unifiedMarginStatus")
         if type(status) is not int or status not in (1, 3, 4, 5, 6):
