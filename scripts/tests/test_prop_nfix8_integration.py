@@ -43,12 +43,12 @@ class PropNfix8IntegrationTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_capital_allocation_guarantees_dca_headroom(self):
-        """4 concurrent slots at 50% initial stake use 500 USDT, reserving 500 USDT for DCA."""
+        """3 concurrent slots at 1.0x native stake yield ~$333.33 (> $250 qualifying floor) within $1,000 cap."""
         total_account = 5000.0
         tradable_ratio = 0.20
-        max_trades = 4
+        max_trades = 3
         total_tradable = total_account * tradable_ratio  # 1000.0 USDT
-        slot_budget = total_tradable / max_trades       # 250.0 USDT
+        slot_budget = total_tradable / max_trades       # 333.333... USDT
 
         # Test initial stake for regular / top_coins / scalp mode
         initial_stake = self.strategy.custom_stake_amount(
@@ -57,34 +57,31 @@ class PropNfix8IntegrationTests(unittest.TestCase):
             current_rate=50000.0,
             proposed_stake=slot_budget,
             min_stake=5.0,
-            max_stake=slot_budget * 2,
+            max_stake=666.0,
             leverage=1.0,
             entry_tag="1",  # normal mode tag
             side="long",
         )
-        self.assertEqual(initial_stake, 125.0, "Regular entry must be exactly 50% (125 USDT)")
+        self.assertAlmostEqual(initial_stake, slot_budget, places=6, msg="Regular entry must use native 1.0x slot budget (~333.33 USDT)")
+        self.assertGreaterEqual(initial_stake, 250.0, "Regular entry must satisfy HyroTrader $250 qualifying trade notional floor")
 
-        # 4 trades opened at 125.0 USDT each = 500.0 USDT
+        # 3 concurrent regular trades cap strictly at $1,000 aggregate notional (20% rule)
         total_used_initial = initial_stake * max_trades
-        self.assertEqual(total_used_initial, 500.0)
+        self.assertAlmostEqual(total_used_initial, 1000.0, places=6)
 
-        # Remaining capital available for DCA / Grind across all 4 positions
-        reserved_dca = total_tradable - total_used_initial
-        self.assertEqual(reserved_dca, 500.0, "500 USDT must be permanently reserved for DCA")
-
-        # Test rebuy mode entry
+        # With 1-2 open trades, remaining headroom accommodates rebuy (25%) and grind (20%) DCA entries
         rebuy_stake = self.strategy.custom_stake_amount(
             pair="ETH/USDT:USDT",
             current_time=datetime.now(UTC),
             current_rate=3000.0,
             proposed_stake=slot_budget,
             min_stake=5.0,
-            max_stake=slot_budget * 2,
+            max_stake=666.0,
             leverage=1.0,
             entry_tag="61",  # rebuy mode tag
             side="long",
         )
-        self.assertEqual(rebuy_stake, 62.5, "Rebuy entry must use 25% (62.5 USDT)")
+        self.assertAlmostEqual(rebuy_stake, slot_budget * 0.25, places=6)
 
         # Test grind mode entry
         grind_stake = self.strategy.custom_stake_amount(
@@ -93,12 +90,12 @@ class PropNfix8IntegrationTests(unittest.TestCase):
             current_rate=150.0,
             proposed_stake=slot_budget,
             min_stake=5.0,
-            max_stake=slot_budget * 2,
+            max_stake=666.0,
             leverage=1.0,
             entry_tag="120",  # grind mode tag
             side="long",
         )
-        self.assertEqual(grind_stake, 50.0, "Grind entry must use 20% (50.0 USDT)")
+        self.assertAlmostEqual(grind_stake, slot_budget * 0.20, places=6)
 
     def test_confirm_trade_entry_interlocks(self):
         """Strategy gate accepts fresh valid supervisor state and rejects all fault modes."""

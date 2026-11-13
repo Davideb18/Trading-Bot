@@ -378,7 +378,7 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
 
   # Non rebuy modes
   regular_mode_stake_multiplier_spot = [1.0]
-  regular_mode_stake_multiplier_futures = [0.50]
+  regular_mode_stake_multiplier_futures = [1.0]
   regular_mode_use_grind_stops = False
 
   regular_mode_rebuy_stakes_spot = [0.10, 0.10, 0.10]
@@ -617,7 +617,7 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
   system_v3_derisk_level_3_stake_spot = 0.10
   system_v3_derisk_level_3_stake_futures = 0.10
 
-  system_v3_2_stake_multiplier = 0.50
+  system_v3_2_stake_multiplier = 1.0
   system_v3_2_derisk_level_1_enable = True
   system_v3_2_derisk_level_1_spot = [-0.06, -0.12]
   system_v3_2_derisk_level_1_futures = [-0.18, -0.35]
@@ -712,7 +712,7 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
   system_name_use = system_v4_name
 
   system_v4_max_stake = 1.0  # ratio of first entry
-  system_v4_stake_multiplier = 0.50
+  system_v4_stake_multiplier = 1.0
 
   # Bad-trade exits. Enable for new v4 trades without changing older open trades.
   system_v4_bad_trade_exit_enable = True

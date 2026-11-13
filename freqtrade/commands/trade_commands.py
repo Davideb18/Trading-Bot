@@ -11,6 +11,7 @@ def start_trading(args: dict[str, Any]) -> int:
     Main entry point for trading mode
     """
     # Import here to avoid loading worker module when it's not used
+    from freqtrade.emergency_authority import EmergencyTakeover
     from freqtrade.worker import Worker
 
     def term_handler(signum, frame):
@@ -23,6 +24,9 @@ def start_trading(args: dict[str, Any]) -> int:
         signal.signal(signal.SIGTERM, term_handler)
         worker = Worker(args)
         worker.run()
+    except EmergencyTakeover as err:
+        logger.critical("Emergency takeover active (%s); halting core trader cleanly.", err)
+        return 0
     finally:
         if worker:
             logger.info("worker found ... calling exit")

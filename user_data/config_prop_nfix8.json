@@ -1,7 +1,7 @@
 {
     "strategy": "NostalgiaForInfinityX8_Prop",
     "db_url": "sqlite:////freqtrade/user_data/trades_prop.sqlite",
-    "max_open_trades": 4,
+    "max_open_trades": 3,
     "stake_currency": "USDT",
     "stake_amount": "unlimited",
     "tradable_balance_ratio": 0.2,
@@ -39,6 +39,10 @@
         "stoploss_on_exchange": false,
         "stoploss_on_exchange_interval": 60,
         "stoploss_on_exchange_limit_ratio": 0.99
+    },
+    "order_time_in_force": {
+        "entry": "GTC",
+        "exit": "GTC"
     },
     "entry_pricing": {
         "price_side": "other",
@@ -79,53 +83,7 @@
                 "fetchCurrencies": false
             }
         },
-        "pair_whitelist": [
-            "BTC/USDT:USDT",
-            "ETH/USDT:USDT",
-            "SOL/USDT:USDT",
-            "XRP/USDT:USDT",
-            "DOGE/USDT:USDT",
-            "ADA/USDT:USDT",
-            "AVAX/USDT:USDT",
-            "LINK/USDT:USDT",
-            "DOT/USDT:USDT",
-            "LTC/USDT:USDT",
-            "BCH/USDT:USDT",
-            "TRX/USDT:USDT",
-            "ATOM/USDT:USDT",
-            "NEAR/USDT:USDT",
-            "UNI/USDT:USDT",
-            "AAVE/USDT:USDT",
-            "ETC/USDT:USDT",
-            "FIL/USDT:USDT",
-            "ARB/USDT:USDT",
-            "OP/USDT:USDT",
-            "SUI/USDT:USDT",
-            "APT/USDT:USDT",
-            "INJ/USDT:USDT",
-            "ICP/USDT:USDT",
-            "ALGO/USDT:USDT",
-            "RUNE/USDT:USDT",
-            "CRV/USDT:USDT",
-            "GALA/USDT:USDT",
-            "SAND/USDT:USDT",
-            "IMX/USDT:USDT",
-            "SEI/USDT:USDT",
-            "TIA/USDT:USDT",
-            "FET/USDT:USDT",
-            "RENDER/USDT:USDT",
-            "PENDLE/USDT:USDT",
-            "WLD/USDT:USDT",
-            "LDO/USDT:USDT",
-            "GRT/USDT:USDT",
-            "HBAR/USDT:USDT",
-            "KAS/USDT:USDT",
-            "JTO/USDT:USDT",
-            "ORDI/USDT:USDT",
-            "PYTH/USDT:USDT",
-            "QNT/USDT:USDT",
-            "SNX/USDT:USDT"
-        ],
+        "pair_whitelist": [],
         "pair_blacklist": [
             "(GLMR|ICX|MOVR|SOPH)/.*",
             "(LSK|STX)/.*",
@@ -133,7 +91,7 @@
             "(ACX|PIVX|VIC)/.*",
             "(FIGHT|IDOL)/.*",
             "(RIF|BNB)/.*",
-            "(1000.*).*/.*",
+            "(1000.*|PEPE|BONK|WIF|FLOKI|FARTCOIN|POPCAT|BOME|MOG|SPX|GIGA|PNUT).*/.*",
             ".*(_PREMIUM|BEAR|BULL|HALF|HEDGE|[1235][SL])/.*",
             ".{3,}(UP|DOWN)/.*",
             "(ARS|AUD|BIDR|BRZ|BRL|CAD|CHF|EUR|GBP|HKD|IDRT|JPY|NGN|PLN|RON|RUB|SGD|TRY|UAH|USD|ZAR)/.*",
@@ -154,13 +112,10 @@
     },
     "pairlists": [
         {
-            "method": "StaticPairList"
-        },
-        {
             "method": "VolumePairList",
-            "number_assets": 35,
+            "number_assets": 40,
             "sort_key": "quoteVolume",
-            "min_value": 10000000,
+            "min_value": 20000000,
             "refresh_period": 1800
         },
         {
@@ -219,8 +174,8 @@
     },
     "prop_risk_budget": {
         "model": "hyrotrader_one_step_validated_v2",
-        "max_slot_notional_usdt": 750.0,
-        "max_aggregate_notional_usdt": 1200.0,
+        "max_slot_notional_usdt": 666.0,
+        "max_aggregate_notional_usdt": 1000.0,
         "roundtrip_fee_bps": 12.0,
         "funding_bound_bps": 10.0,
         "execution_slippage_bps": 28.0,

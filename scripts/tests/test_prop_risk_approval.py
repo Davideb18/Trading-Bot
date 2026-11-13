@@ -74,7 +74,8 @@ class ApprovalTests(unittest.TestCase):
 
     def test_operating_modes_and_leverage_change_invalidates(self):
         original = copy.deepcopy(self.config)
-        for key, value in (('max_open_trades', 3), ('margin_mode', 'cross'),
+        alt_trades = 4 if original.get('max_open_trades') == 3 else 3
+        for key, value in (('max_open_trades', alt_trades), ('margin_mode', 'cross'),
                            ('order_types', {'entry': 'market'}), ('dry_run', True),
                            ('nfi_parameters', {'futures_mode_leverage_grind_mode': 2.})):
             with self.subTest(key=key):

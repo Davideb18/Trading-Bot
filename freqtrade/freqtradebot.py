@@ -276,10 +276,9 @@ class FreqtradeBot(LoggingMixin):
         # Only update open orders on startup
         # This will update the database after the initial migration
         self.startup_update_open_orders()
-        sync_prop_controls(self)
-        reconcile_journal(self, Trade)
-        cancel_fault_entries(self, Trade)
         if self.config.get("prop_guard_enabled"):
+            sync_prop_controls(self)
+            cancel_fault_entries(self, Trade)
             reconcile_journal(self, Trade)
         self.update_all_liquidation_prices()
         self.update_funding_fees()
@@ -292,11 +291,13 @@ class FreqtradeBot(LoggingMixin):
         """
 
         require_core_authority(self)
-        sync_prop_controls(self)
+        if self.config.get("prop_guard_enabled"):
+            sync_prop_controls(self)
         with self._exit_lock:
             self.manage_open_orders()
-        cancel_fault_entries(self, Trade)
-        reconcile_journal(self, Trade)
+        if self.config.get("prop_guard_enabled"):
+            cancel_fault_entries(self, Trade)
+            reconcile_journal(self, Trade)
         # Check whether markets have to be reloaded and reload them when it's needed
         self.exchange.reload_markets()
 
@@ -461,8 +462,23 @@ class FreqtradeBot(LoggingMixin):
                 fo = self.exchange.fetch_order_or_stoploss_order(
                     order.order_id, order.ft_pair, order.ft_order_side == "stoploss"
                 )
-                if not order_evidence_valid(fo, order, order.ft_pair):
-                    logger.warning("Unresolved order %s: incomplete exchange response", order.order_id)
+                if self.config.get("prop_guard_enabled"):
+                    if not order_evidence_valid(fo, order, order.ft_pair):
+                        logger.warning(
+                            "Unresolved order %s: incomplete exchange response", order.order_id
+                        )
+                        continue
+                elif fo is None or (
+                    isinstance(fo, dict)
+                    and (
+                        str(fo.get("id")) != str(order.order_id)
+                        or fo.get("filled") is None
+                        or fo.get("status") not in ("open", *constants.NON_OPEN_EXCHANGE_STATES)
+                    )
+                ):
+                    logger.warning(
+                        "Unresolved order %s: incomplete exchange response", order.order_id
+                    )
                     continue
                 empty_cancel = self.update_trade_state(
                     order.trade, order.order_id, fo,
@@ -470,7 +486,17 @@ class FreqtradeBot(LoggingMixin):
                 )
                 clear_recovery(order.trade, order.order_id)
                 Trade.commit()
-                if empty_cancel and order.ft_order_side == order.trade.entry_side:
+                if (
+                    empty_cancel
+                    and order.ft_order_side == order.trade.entry_side
+                    and (
+                        self.config.get("prop_guard_enabled")
+                        or (
+                            isinstance(fo, dict)
+                            and fo.get("status") in constants.CANCELED_EXCHANGE_STATES
+                        )
+                    )
+                ):
                     self.handle_cancel_enter(
                         order.trade, fo, order, constants.CANCEL_REASON["CANCELLED_ON_EXCHANGE"]
                     )
@@ -802,6 +828,51 @@ class FreqtradeBot(LoggingMixin):
                         f"Unable to adjust position of trade for {trade.pair}: {exception}"
                     )
 
+    def _prop_remaining_headroom(self, pair: str) -> float | None:
+        """
+        Return remaining Bybit notional headroom (USDT) allowed under prop_risk_budget.
+        Used only to size down initial/DCA requests cleanly before hitting JournalBlocked.
+        Never bypasses require_risk_budget or order_journal.
+        """
+        if not self.config.get("prop_guard_enabled"):
+            return None
+        policy = self.config.get("prop_risk_budget")
+        journal = getattr(self, "order_journal", None)
+        if not isinstance(policy, dict) or journal is None or journal.risk_snapshot is None:
+            return None
+        try:
+            max_agg = float(policy["max_aggregate_notional_usdt"])
+            max_slot = float(policy["max_slot_notional_usdt"])
+            snap = journal.risk_snapshot
+            existing = 0.0
+            pair_existing = 0.0
+            for pos in snap.get("positions", []):
+                amt = float(pos.get("amount") or 0.0)
+                mp = float(pos.get("mark_price") or 0.0)
+                if amt > 0 and mp > 0:
+                    val = amt * mp
+                    existing += val
+                    if pos.get("symbol") == pair:
+                        pair_existing += val
+            pending = 0.0
+            pair_pending = 0.0
+            for order in snap.get("open_orders", []):
+                if order.get("reduceOnly") is True:
+                    continue
+                rem = max(0.0, float(order.get("amount") or 0.0) - float(order.get("filled") or 0.0))
+                op = float(order.get("price") or 0.0)
+                if rem > 0 and op > 0:
+                    val = rem * op
+                    pending += val
+                    if order.get("symbol") == pair:
+                        pair_pending += val
+            rem_agg = max(0.0, max_agg - existing - pending)
+            rem_slot = max(0.0, max_slot - pair_existing - pair_pending)
+            # Leave 0.5% cushion for contract step-size / limit-price rounding.
+            return max(0.0, min(rem_agg, rem_slot) * 0.995)
+        except (KeyError, TypeError, ValueError):
+            return None
+
     def check_and_call_adjust_trade_position(self, trade: Trade):
         """
         Check the implemented trading strategy for adjustment command.
@@ -822,6 +893,9 @@ class FreqtradeBot(LoggingMixin):
             trade.pair, current_entry_rate, trade.leverage
         )
         stake_available = self.wallets.get_available_stake_amount()
+        prop_headroom = self._prop_remaining_headroom(trade.pair)
+        if prop_headroom is not None:
+            stake_available = min(stake_available, prop_headroom)
         logger.debug(f"Calling adjust_trade_position for pair {trade.pair}")
         stake_amount, order_tag = self.strategy._adjust_trade_position_internal(
             trade=trade,
@@ -837,6 +911,14 @@ class FreqtradeBot(LoggingMixin):
         )
 
         if stake_amount is not None and stake_amount > 0.0:
+            if prop_headroom is not None and stake_amount > prop_headroom:
+                stake_amount = prop_headroom
+                if min_entry_stake is not None and stake_amount < min_entry_stake:
+                    logger.info(
+                        "Skipping DCA adjustment for %s: remaining prop headroom %.2f < min stake %.2f",
+                        trade.pair, stake_amount, min_entry_stake,
+                    )
+                    return
             if self.state == State.PAUSED:
                 logger.debug("Position adjustment aborted because the bot is in PAUSED state")
                 return
@@ -1235,8 +1317,11 @@ class FreqtradeBot(LoggingMixin):
             pair, enter_limit_requested, leverage
         )
 
+        prop_headroom = self._prop_remaining_headroom(pair)
         if trade is None:
             stake_available = self.wallets.get_available_stake_amount()
+            if prop_headroom is not None:
+                stake_available = min(stake_available, prop_headroom)
             stake_amount = strategy_safe_wrapper(
                 self.strategy.custom_stake_amount, default_retval=stake_amount
             )(
@@ -1250,6 +1335,9 @@ class FreqtradeBot(LoggingMixin):
                 entry_tag=entry_tag,
                 side=trade_side,
             )
+
+        if stake_amount and prop_headroom is not None and stake_amount > prop_headroom:
+            stake_amount = prop_headroom
 
         stake_amount = self.wallets.validate_stake_amount(
             pair=pair,
@@ -1665,7 +1753,7 @@ class FreqtradeBot(LoggingMixin):
                     )
                     continue
 
-                if not order_evidence_valid(order, open_order, trade.pair):
+                if self.config.get("prop_guard_enabled") and not order_evidence_valid(order, open_order, trade.pair):
                     mark_recovery(trade, open_order.order_id)
                     Trade.commit()
                     continue

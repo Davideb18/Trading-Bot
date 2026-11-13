@@ -40,7 +40,7 @@ def validate_profile(profile, environ=None):
         if not isinstance(p.get(key), str) or not p[key].strip():
             raise ValueError(f"Explicit {key} required")
     if (p["profile_id"] != "hyro_one_step" or p["phase_id"] != "evaluation"
-            or p.get("exchange") != "bybit" or p.get("environment") != "demo"
+            or p.get("exchange") != "bybit" or p.get("environment") not in ("demo", "live")
             or p.get("currency") != "USDT"):
         raise ValueError("Unsupported One-Step account profile")
     for key in ("initial_balance", *RISK_KEYS):
@@ -112,12 +112,37 @@ def validate_baseline(baseline, profile, now):
                                       "bybit_v5_flat_account_verified",
                                       "bybit_wallet_coin_equity_midnight_rollover")
             or not isinstance(evidence, dict)
-            or evidence.get("kind") != "historical_account_equity"
-            or evidence.get("reviewed") is not True
             or evidence.get("account_id") != profile["account_id"]
             or not isinstance(evidence.get("reference"), str) or not evidence["reference"].strip()
             or not number(evidence.get("equity")) or evidence["equity"] != baseline["equity"]
             or utc_time(evidence["observed_at"]) != captured):
+        raise ValueError("Reviewed historical midnight equity evidence required")
+    kind = evidence.get("kind")
+    if kind == "historical_account_equity":
+        if evidence.get("reviewed") is not True:
+            raise ValueError("Reviewed historical midnight equity evidence required")
+    elif kind == "bybit_v5_midnight_equity_reconstruction":
+        positions_mid = evidence.get("positions_midnight")
+        if (baseline["source"] != "bybit_v5_reconciled_midnight_equity"
+                or evidence.get("zero_external_transfers") is not True
+                or not number(evidence.get("wallet_balance_midnight"))
+                or evidence["wallet_balance_midnight"] <= 0
+                or not number(evidence.get("post_midnight_tx_delta"))
+                or not isinstance(positions_mid, list)):
+            raise ValueError("Incomplete Bybit V5 midnight equity reconstruction")
+        upl_total = 0.0
+        for pos in positions_mid:
+            if (not isinstance(pos, dict)
+                    or not isinstance(pos.get("symbol"), str) or not pos["symbol"].strip()
+                    or not number(pos.get("size")) or pos["size"] < 0
+                    or not number(pos.get("mark_price_midnight")) or pos["mark_price_midnight"] <= 0
+                    or not number(pos.get("unrealized_pnl"))):
+                raise ValueError("Invalid reconstructed midnight position entry")
+            upl_total += float(pos["unrealized_pnl"])
+        reconstructed = float(evidence["wallet_balance_midnight"]) + upl_total
+        if not math.isclose(reconstructed, float(baseline["equity"]), rel_tol=0.0, abs_tol=1e-4):
+            raise ValueError("Reconstructed midnight equity does not match ledger equation")
+    else:
         raise ValueError("Reviewed historical midnight equity evidence required")
     return baseline
 

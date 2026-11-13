@@ -467,99 +467,162 @@ class CryptoNewsAggregator:
 
 class BinanceMacroMonitor:
     """
-    Queries Binance public REST endpoints to monitor:
-      - BTC live price and 1h / 24h price momentum
-      - ETH 24h price momentum
-      - Acute flash-crash detection (BTC dropping >5% in 1h)
-      - Heavy bearish correction detection (BTC dropping >6% in 24h)
-    Includes secondary endpoint fallback (data-api.binance.vision).
+    Multi-venue public REST macro monitor (kept class name for compatibility):
+      - Priority 1: Bybit V5 Linear (BTCUSDT / ETHUSDT) — matches execution venue
+      - Priority 2: Binance data-api.binance.vision mirror
+      - Priority 3: Binance api.binance.com
+      - Priority 4: OKX public swap ticker + candles fallback
+    Never serves stale cached values when all endpoints fail.
     """
 
-    CACHE_TTL_SECONDS = 60  # 1 minute cache
-    ENDPOINTS = [
-        "https://api.binance.com",
+    CACHE_TTL_SECONDS = 60
+    BINANCE_ENDPOINTS = [
         "https://data-api.binance.vision",
+        "https://api.binance.com",
     ]
 
     def __init__(self):
         self._cached_metrics: dict = {}
         self._last_fetch_time: float = 0.0
 
+    @staticmethod
+    def _fresh_kline_pct(bars: list[tuple[int, float]]) -> float:
+        ordered = sorted(bars, key=lambda x: x[0])
+        if len(ordered) != 61:
+            raise ValueError("Expected 61 1m candles")
+        first_ts, open_p = ordered[0]
+        last_ts, close_p = ordered[-1]
+        if last_ts - first_ts != 3600000 or abs(time.time() * 1000 - last_ts) > 120000:
+            raise ValueError("Stale or noncontiguous BTC 1m candles")
+        if open_p <= 0 or not math.isfinite(close_p):
+            raise ValueError("Invalid BTC candle prices")
+        return (close_p - open_p) / open_p * 100.0
+
+    def _fetch_bybit(self, metrics: dict) -> None:
+        r_btc = requests.get(
+            "https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT",
+            timeout=(2.0, 3.0),
+        )
+        r_btc.raise_for_status()
+        payload = r_btc.json()
+        if payload.get("retCode") != 0:
+            raise ValueError("Bybit BTC ticker retCode != 0")
+        if abs(time.time() * 1000 - float(payload["time"])) > 120000:
+            raise ValueError("Stale Bybit BTC ticker")
+        item = payload["result"]["list"][0]
+        metrics["btc_price"] = float(item["lastPrice"])
+        metrics["btc_24h_pct"] = float(item["price24hPcnt"]) * 100.0
+
+        try:
+            r_eth = requests.get(
+                "https://api.bybit.com/v5/market/tickers?category=linear&symbol=ETHUSDT",
+                timeout=(2.0, 3.0),
+            )
+            if r_eth.status_code == 200 and r_eth.json().get("retCode") == 0:
+                eth_item = r_eth.json()["result"]["list"][0]
+                metrics["eth_24h_pct"] = round(float(eth_item["price24hPcnt"]) * 100.0, 2)
+        except Exception:
+            pass
+
+        r_kl = requests.get(
+            "https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=1&limit=61",
+            timeout=(2.0, 3.0),
+        )
+        r_kl.raise_for_status()
+        kl_payload = r_kl.json()
+        if kl_payload.get("retCode") != 0:
+            raise ValueError("Bybit BTC kline retCode != 0")
+        raw_bars = [(int(b[0]), float(b[4])) for b in kl_payload["result"]["list"]]
+        metrics["btc_1h_pct"] = self._fresh_kline_pct(raw_bars)
+
+    def _fetch_binance(self, base_url: str, metrics: dict) -> None:
+        r_btc = requests.get(f"{base_url}/api/v3/ticker/24hr?symbol=BTCUSDT", timeout=(2.0, 3.0))
+        r_btc.raise_for_status()
+        d = r_btc.json()
+        metrics["btc_price"] = float(d.get("lastPrice", 0.0))
+        metrics["btc_24h_pct"] = float(d["priceChangePercent"])
+        if abs(time.time() * 1000 - float(d["closeTime"])) > 120000:
+            raise ValueError("Stale Binance BTC ticker")
+
+        try:
+            r_eth = requests.get(f"{base_url}/api/v3/ticker/24hr?symbol=ETHUSDT", timeout=(2.0, 3.0))
+            if r_eth.status_code == 200:
+                metrics["eth_24h_pct"] = round(float(r_eth.json().get("priceChangePercent", 0.0)), 2)
+        except Exception:
+            pass
+
+        r_kl = requests.get(f"{base_url}/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=61", timeout=(2.0, 3.0))
+        r_kl.raise_for_status()
+        k = r_kl.json()
+        raw_bars = [(int(b[0]), float(b[4])) for b in k]
+        metrics["btc_1h_pct"] = self._fresh_kline_pct(raw_bars)
+
+    def _fetch_okx(self, metrics: dict) -> None:
+        r_btc = requests.get(
+            "https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT-SWAP",
+            timeout=(2.0, 3.0),
+        )
+        r_btc.raise_for_status()
+        payload = r_btc.json()
+        if payload.get("code") != "0":
+            raise ValueError("OKX ticker code != 0")
+        d = payload["data"][0]
+        if abs(time.time() * 1000 - float(d["ts"])) > 120000:
+            raise ValueError("Stale OKX BTC ticker")
+        last_p = float(d["last"])
+        open24 = float(d["open24h"])
+        if open24 <= 0:
+            raise ValueError("Invalid OKX open24h")
+        metrics["btc_price"] = last_p
+        metrics["btc_24h_pct"] = (last_p - open24) / open24 * 100.0
+
+        r_kl = requests.get(
+            "https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar=1m&limit=61",
+            timeout=(2.0, 3.0),
+        )
+        r_kl.raise_for_status()
+        kl_payload = r_kl.json()
+        if kl_payload.get("code") != "0":
+            raise ValueError("OKX candles code != 0")
+        raw_bars = [(int(b[0]), float(b[4])) for b in kl_payload["data"]]
+        metrics["btc_1h_pct"] = self._fresh_kline_pct(raw_bars)
+
     def get_metrics(self) -> dict:
         now = time.time()
         if self._cached_metrics and (now - self._last_fetch_time < self.CACHE_TTL_SECONDS):
             return self._cached_metrics
 
-        metrics = {
-            "btc_price": 0.0,
-            "btc_1h_pct": None,
-            "btc_24h_pct": None,
-            "eth_24h_pct": 0.0,
-            "is_flash_crash": False,
-            "is_heavy_bear": False,
-        }
+        sources = [("bybit", lambda m: self._fetch_bybit(m))]
+        sources.extend((url, lambda m, u=url: self._fetch_binance(u, m)) for url in self.BINANCE_ENDPOINTS)
+        sources.append(("okx", lambda m: self._fetch_okx(m)))
 
-        for base_url in self.ENDPOINTS:
+        for name, fetcher in sources:
+            metrics = {
+                "btc_price": 0.0,
+                "btc_1h_pct": None,
+                "btc_24h_pct": None,
+                "eth_24h_pct": 0.0,
+                "is_flash_crash": False,
+                "is_heavy_bear": False,
+            }
             try:
-                # 1. BTC 24h Ticker
-                r_btc = requests.get(
-                    f"{base_url}/api/v3/ticker/24hr?symbol=BTCUSDT",
-                    timeout=(2.0, 3.0),
-                )
-                r_btc.raise_for_status()
-                if r_btc.status_code == 200:
-                    d = r_btc.json()
-                    metrics["btc_price"] = float(d.get("lastPrice", 0.0))
-                    metrics["btc_24h_pct"] = float(d["priceChangePercent"])
-                    if abs(time.time() * 1000 - float(d["closeTime"])) > 120000:
-                        raise ValueError("Stale BTC ticker")
-
-                # 2. ETH 24h Ticker
-                r_eth = requests.get(
-                    f"{base_url}/api/v3/ticker/24hr?symbol=ETHUSDT",
-                    timeout=(2.0, 3.0),
-                )
-                if r_eth.status_code == 200:
-                    d = r_eth.json()
-                    metrics["eth_24h_pct"] = round(float(d.get("priceChangePercent", 0.0)), 2)
-
-                # 3. BTC 1h Momentum
-                r_kline = requests.get(
-                    f"{base_url}/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=61",
-                    timeout=(2.0, 3.0),
-                )
-                r_kline.raise_for_status()
-                if r_kline.status_code == 200:
-                    k = r_kline.json()
-                    if len(k) == 61 and len(k[-1]) >= 5:
-                        open_p = float(k[0][4])
-                        close_p = float(k[-1][4])
-                        if (int(k[-1][0]) - int(k[0][0]) != 3600000
-                                or abs(time.time() * 1000 - int(k[-1][0])) > 120000):
-                            raise ValueError("Stale/noncontiguous BTC candles")
-                        if open_p > 0:
-                            metrics["btc_1h_pct"] = (close_p - open_p) / open_p * 100
-
+                fetcher(metrics)
                 if not all(finite_number(metrics.get(key)) for key in ("btc_1h_pct", "btc_24h_pct")):
                     raise ValueError("Incomplete BTC metrics")
-
-                if metrics["btc_1h_pct"] <= -5.0:
+                if metrics["btc_1h_pct"] <= -4.0:
                     metrics["is_flash_crash"] = True
-
-                if metrics["btc_24h_pct"] <= -6.0 or metrics["btc_1h_pct"] <= -3.0:
+                if metrics["btc_24h_pct"] <= -8.0 or metrics["btc_1h_pct"] <= -3.0:
                     metrics["is_heavy_bear"] = True
-
                 self._cached_metrics = metrics
                 self._last_fetch_time = now
                 logger.debug(
-                    f"📊 Binance Macro ({base_url}): BTC ${metrics['btc_price']:,.2f} | "
-                    f"1h: {metrics['btc_1h_pct']:+}% | 24h: {metrics['btc_24h_pct']:+}% | "
-                    f"ETH 24h: {metrics['eth_24h_pct']:+}%"
+                    f"📊 Macro ({name}): BTC ${metrics['btc_price']:,.2f} | "
+                    f"1h: {metrics['btc_1h_pct']:+.2f}% | 24h: {metrics['btc_24h_pct']:+.2f}% | "
+                    f"ETH 24h: {metrics['eth_24h_pct']:+.2f}%"
                 )
                 return metrics
-
             except Exception as e:
-                logger.debug(f"Binance macro fetch error from {base_url}: {e}")
+                logger.debug(f"Macro fetch error from {name}: {e}")
                 continue
 
         # Expired cached data must never look like a fresh, calm market.
@@ -864,28 +927,72 @@ class RiskManager(RiskGuard):
         configure_logging()
         api = FreqtradeAPIClient(FREQTRADE_API_URL, FREQTRADE_USERNAME, FREQTRADE_PASSWORD)
         api, emergency = independent_supervisor(profile, STATE_FILE, api)
-        super().__init__(api, STATE_FILE, profile=profile, interval=CHECK_INTERVAL_SECONDS, emergency=emergency)
+        super().__init__(
+            api,
+            STATE_FILE,
+            profile=profile,
+            interval=CHECK_INTERVAL_SECONDS,
+            emergency=emergency,
+            autonomous_rollover=True,
+            transient_grace_cycles=3,
+        )
         self.rules_api = FreqtradeAPIClient(FREQTRADE_API_URL, FREQTRADE_USERNAME, FREQTRADE_PASSWORD)
         self.inactivity_keepalive_enabled = (
             os.environ.get("PROP_INACTIVITY_KEEPALIVE", "false").lower() == "true"
         )
+        self._alert_timestamps: dict[str, float] = {}
         self.sentiment = SentimentAnalyzer(GEMINI_API_KEY)
         self.macro_monitor = BinanceMacroMonitor()
         signal.signal(signal.SIGTERM, self._handle_shutdown)
         signal.signal(signal.SIGINT, self._handle_shutdown)
 
+    def _notify_telegram(self, key: str, message: str, *, min_interval_sec: float = 3600.0) -> None:
+        token = os.environ.get("PROP_TELEGRAM_BOT_TOKEN", "").strip()
+        chat_id = os.environ.get("PROP_TELEGRAM_CHAT_ID", "").strip()
+        if not token or not chat_id:
+            return
+        now_ts = time.monotonic()
+        last = getattr(self, "_alert_timestamps", {}).get(key)
+        if last is not None and (now_ts - last) < min_interval_sec:
+            return
+        self._alert_timestamps[key] = now_ts
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": chat_id, "text": message},
+                timeout=(2.0, 3.0),
+            )
+        except Exception as exc:
+            logger.debug("Telegram alert delivery failed (%s): %s", key, type(exc).__name__)
+
     def _macro_loop(self):
+        clean_streak = 0
         while not self._shutdown.is_set():
             try:
                 metrics = self.macro_monitor.get_metrics()
+                notifier = getattr(self, "_notify_telegram", None)
                 if market_crash(metrics):
+                    clean_streak = 0
                     self.request_macro_pause(True)
+                    if notifier:
+                        notifier(
+                            "macro_crash",
+                            f"⚠️ HyroTrader BTC Macro Pause triggered: 1h={metrics.get('btc_1h_pct'):+.2f}%, "
+                            f"24h={metrics.get('btc_24h_pct'):+.2f}%",
+                            min_interval_sec=1800.0,
+                        )
                 elif not all(finite_number(metrics.get(k)) for k in ("btc_1h_pct", "btc_24h_pct")):
-                    logger.warning("Macro prices unavailable from Binance; pausing entries until metrics recover")
+                    clean_streak = 0
+                    logger.warning("Macro prices unavailable across all venues; pausing entries until metrics recover")
                     self.request_macro_pause(True)
                 elif metrics["btc_1h_pct"] > -2.5 and metrics["btc_24h_pct"] > -6.0:
-                    self.request_macro_pause(False)
+                    clean_streak += 1
+                    if clean_streak >= 2:
+                        self.request_macro_pause(False)
+                else:
+                    clean_streak = 0
             except Exception:
+                clean_streak = 0
                 logger.exception("Deterministic macro monitor warning; pausing entries")
                 self.request_macro_pause(True)
             self._shutdown.wait(30)
@@ -902,36 +1009,38 @@ class RiskManager(RiskGuard):
 
     def _hyrotrader_rules_loop(self):
         """Monitors HyroTrader One-Step compliance: 30d inactivity, 5 qualifying days, 40% daily profit cap."""
+        def parse_dt(value) -> datetime | None:
+            if value is None or isinstance(value, bool):
+                return None
+            try:
+                if isinstance(value, (int, float)):
+                    return datetime.fromtimestamp(value / 1000.0, tz=timezone.utc)
+                dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+            except Exception:
+                return None
+
+        transient_failures = 0
         while not self._shutdown.is_set():
+            req_pause = getattr(self, "request_rules_pause", None)
+            notifier = getattr(self, "_notify_telegram", None)
             try:
                 open_trades = self.rules_api.get_open_trades()
                 recent_trades = self.rules_api.get_trades(limit=500)
                 if not isinstance(open_trades, list) or not isinstance(recent_trades, list):
                     raise ValueError("Accounting data unavailable")
+                transient_failures = 0
                 now_utc = datetime.now(timezone.utc)
                 today_str = now_utc.strftime("%Y-%m-%d")
 
                 # 1. 30-Day Inactivity Sentinel (Alert-Only; no automated force-entry per P0 safety policy)
-                latest_close_dt = None
-                if recent_trades:
-                    valid_closes = [
-                        tr.get("close_timestamp") or tr.get("close_date")
-                        for tr in recent_trades if tr.get("close_timestamp") or tr.get("close_date")
-                    ]
-                    if valid_closes:
-                        latest_close_val = max(valid_closes)
-                        if isinstance(latest_close_val, (int, float)):
-                            latest_close_dt = datetime.fromtimestamp(latest_close_val / 1000.0, tz=timezone.utc)
-                        else:
-                            latest_close_dt = datetime.fromisoformat(str(latest_close_val).replace("Z", "+00:00"))
-
-                phase_start_raw = self.profile.get("phase_start_utc")
-                phase_start = None
-                if phase_start_raw:
-                    try:
-                        phase_start = datetime.fromisoformat(str(phase_start_raw).replace("Z", "+00:00"))
-                    except Exception:
-                        phase_start = None
+                valid_closes = [
+                    dt
+                    for tr in recent_trades
+                    if (dt := parse_dt(tr.get("close_timestamp") or tr.get("close_date"))) is not None
+                ]
+                latest_close_dt = max(valid_closes) if valid_closes else None
+                phase_start = parse_dt(self.profile.get("phase_start_utc"))
 
                 inactivity_days = 0
                 if len(open_trades) > 0:
@@ -979,42 +1088,35 @@ class RiskManager(RiskGuard):
                             "Automated force-entry is disabled by safety policy; manual operator review required before 30d limit.",
                             inactivity_days
                         )
+                        if notifier:
+                            notifier(
+                                "inactivity_critical",
+                                f"🚨 HyroTrader Inactivity Critical: {inactivity_days}d without trades (30d limit)!",
+                                min_interval_sec=43200.0,
+                            )
                 elif inactivity_days >= 20:
                     logger.warning("⚠️ HyroTrader Inactivity Warning: %d days without trades (forfeiture at 30d).", inactivity_days)
+                    if notifier and inactivity_days >= 22:
+                        notifier(
+                            "inactivity_warn",
+                            f"⚠️ HyroTrader Inactivity Warning: {inactivity_days}d/30d without trades.",
+                            min_interval_sec=43200.0,
+                        )
 
                 # 2. Qualifying Trading Days & 40% Daily Profit Cap
                 day_profits: dict[str, float] = {}
                 qualifying_days = set()
                 min_qualifying_stake = self.initial_balance * 0.05  # $250 on $5,000
 
-                phase_start_raw = self.profile.get("phase_start_utc")
-                phase_start = None
-                if phase_start_raw:
-                    try:
-                        phase_start = datetime.fromisoformat(str(phase_start_raw).replace("Z", "+00:00"))
-                    except Exception:
-                        phase_start = None
-
                 for tr in recent_trades:
-                    open_dt_raw = tr.get("open_date") or tr.get("open_timestamp")
-                    if phase_start and open_dt_raw:
-                        try:
-                            if isinstance(open_dt_raw, (int, float)):
-                                open_dt = datetime.fromtimestamp(open_dt_raw / 1000.0, tz=timezone.utc)
-                            else:
-                                open_dt = datetime.fromisoformat(str(open_dt_raw).replace("Z", "+00:00"))
-                            if open_dt < phase_start:
-                                continue
-                        except Exception:
-                            pass
-
-                    close_dt_raw = tr.get("close_date") or tr.get("close_timestamp")
-                    if not close_dt_raw:
+                    open_dt = parse_dt(tr.get("open_timestamp") or tr.get("open_date"))
+                    if phase_start and open_dt and open_dt < phase_start:
                         continue
-                    if isinstance(close_dt_raw, (int, float)):
-                        tr_day = datetime.fromtimestamp(close_dt_raw / 1000.0, tz=timezone.utc).strftime("%Y-%m-%d")
-                    else:
-                        tr_day = str(close_dt_raw)[:10]
+
+                    close_dt = parse_dt(tr.get("close_timestamp") or tr.get("close_date"))
+                    if close_dt is None:
+                        continue
+                    tr_day = close_dt.strftime("%Y-%m-%d")
 
                     pnl = float(tr.get("profit_abs", 0.0) or 0.0)
                     day_profits[tr_day] = day_profits.get(tr_day, 0.0) + pnl
@@ -1024,26 +1126,71 @@ class RiskManager(RiskGuard):
                     if cost >= min_qualifying_stake and abs(profit_ratio) >= 0.01:
                         qualifying_days.add(tr_day)
 
-                # Counted profit toward 10% target with 40% daily cap
                 target_profit = self.initial_balance * self.profile["profit_target_percent"]
                 daily_cap = target_profit * self.profile["daily_profit_cap_percent"]
                 counted_profit = sum(min(d_pnl, daily_cap) if d_pnl > 0 else d_pnl for d_pnl in day_profits.values())
+                max_day_profit = max((p for p in day_profits.values() if p > 0), default=0.0)
 
                 today_profit = day_profits.get(today_str, 0.0)
-                if today_profit >= (daily_cap * 0.9):
-                    logger.warning(
-                        "⚠️ 40%% Daily Cap Notice: Today's profit is $%.2f (cap is $%.2f). "
-                        "Excess profit today will not count toward evaluation target.",
-                        today_profit, daily_cap
-                    )
+                daily_pause_threshold = min(daily_cap * 0.875, daily_cap - 25.0) if daily_cap > 30.0 else daily_cap * 0.85
 
-                if counted_profit >= target_profit and len(qualifying_days) >= self.profile["min_trading_days"]:
+                # Check DD proximity & nuclear/fault notifications safely from live state
+                state = getattr(self, "state", {})
+                if isinstance(state, dict) and notifier:
+                    eq = state.get("last_equity")
+                    odf = state.get("operating_daily_floor")
+                    oof = state.get("operating_overall_floor")
+                    if state.get("nuclear_triggered"):
+                        notifier("nuclear_halt", f"🛑 EMERGENCY HALT ACTIVE: {state.get('halt_reason')}", min_interval_sec=3600.0)
+                    elif state.get("data_fault"):
+                        notifier("data_fault", "⚠️ HyroTrader Supervisor data_fault locked entries!", min_interval_sec=3600.0)
+                    elif isinstance(eq, (int, float)):
+                        if isinstance(odf, (int, float)) and eq - odf <= self.initial_balance * 0.01:
+                            notifier("dd_daily_near", f"⚠️ Daily DD proximity: equity=${eq:.2f} floor=${odf:.2f}", min_interval_sec=1800.0)
+                        elif isinstance(oof, (int, float)) and eq - oof <= self.initial_balance * 0.01:
+                            notifier("dd_overall_near", f"⚠️ Overall DD proximity: equity=${eq:.2f} floor=${oof:.2f}", min_interval_sec=1800.0)
+
+                if (
+                    counted_profit >= target_profit
+                    and len(qualifying_days) >= self.profile["min_trading_days"]
+                    and max_day_profit < daily_cap
+                ):
                     logger.info(
                         "🎯 HyroTrader evaluation criteria met in local ledger: Counted profit: $%.2f / $%.2f | Qualifying days: %d/%d. "
-                        "Official challenge completion requires portal broker audit.",
+                        "Locking new entries until operator review.",
                         counted_profit, target_profit, len(qualifying_days), self.profile["min_trading_days"]
                     )
+                    if req_pause is not None:
+                        req_pause(True, "HyroTrader One-Step profit target and qualifying days achieved")
+                    if notifier:
+                        notifier(
+                            "challenge_passed",
+                            f"🎯 Challenge Target Met! Counted=${counted_profit:.2f}/${target_profit:.2f}, "
+                            f"Days={len(qualifying_days)}/{self.profile['min_trading_days']}. Entries locked.",
+                            min_interval_sec=43200.0,
+                        )
+                elif today_profit >= daily_pause_threshold:
+                    logger.warning(
+                        "⚠️ 40%% Daily Consistency Protection: Today's profit is $%.2f (cap $%.2f). "
+                        "Pausing new entries until next UTC day.",
+                        today_profit, daily_cap,
+                    )
+                    if req_pause is not None:
+                        req_pause(True, f"Daily consistency profit cap reached (${today_profit:.2f}/${daily_cap:.2f})")
+                    if notifier:
+                        notifier(
+                            "daily_profit_cap",
+                            f"🛡️ Daily Profit Consistency Pause: +${today_profit:.2f} (cap ${daily_cap:.2f}). Auto-resumes 00:00 UTC.",
+                            min_interval_sec=14400.0,
+                        )
                 else:
+                    if req_pause is not None:
+                        req_pause(False)
+                    if today_profit >= (daily_cap * 0.75):
+                        logger.warning(
+                            "⚠️ 40%% Daily Cap Notice: Today's profit is $%.2f (cap is $%.2f).",
+                            today_profit, daily_cap,
+                        )
                     logger.info(
                         "📊 HyroTrader One-Step Status: Counted Profit: $%.2f/$%.2f (%.1f%%) | "
                         "Qualifying Days: %d/%d | Inactivity: %dd/30d",
@@ -1051,8 +1198,12 @@ class RiskManager(RiskGuard):
                         len(qualifying_days), self.profile["min_trading_days"], inactivity_days
                     )
             except Exception:
-                self.request_data_fault("Accounting worker failure")
-                logger.exception("Error in HyroTrader rules evaluation loop")
+                transient_failures += 1
+                logger.exception("Error in HyroTrader rules evaluation loop (streak=%d)", transient_failures)
+                if transient_failures >= 3 and req_pause is not None:
+                    req_pause(True, "Accounting worker transient error")
+                    if notifier:
+                        notifier("rules_error", "⚠️ Accounting worker repeated failure; reversible rules pause active.", min_interval_sec=3600.0)
             self._shutdown.wait(60)
 
     def run(self):

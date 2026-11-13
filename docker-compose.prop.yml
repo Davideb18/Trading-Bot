@@ -4,7 +4,21 @@ services:
       context: .
       dockerfile: docker/Dockerfile.prop
     image: trading-bot-prop:production
-    restart: "no"
+    restart: "on-failure"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8088/api/v1/ping', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      freqtrade_prop_risk_manager:
+        condition: service_healthy
     user: "${PROP_UID:?Explicit non-root UID required}:${PROP_GID:?Explicit GID required}"
     security_opt: ["no-new-privileges:true"]
     cap_drop: ["ALL"]
@@ -43,12 +57,22 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.riskmanager-prop
-    restart: "no"
+    restart: "on-failure"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import json; from datetime import datetime,UTC; from pathlib import Path; s=json.loads(Path('/app/user_data/risk_manager_prop_state.json').read_text()); assert (datetime.now(UTC)-datetime.fromisoformat(s['last_updated'])).total_seconds()<=10"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
     user: "${PROP_UID:?Explicit non-root UID required}:${PROP_GID:?Explicit GID required}"
     security_opt: ["no-new-privileges:true"]
     cap_drop: ["ALL"]
     networks: [prop_control]
-    depends_on: [freqtrade_prop]
     environment:
       FREQTRADE_API_URL: http://freqtrade_prop:8088/api/v1
       FREQTRADE_USERNAME: ${FREQTRADE_USERNAME:?Required}
@@ -56,6 +80,9 @@ services:
       FREQTRADE_JWT_TOKEN: ${FREQTRADE_JWT_TOKEN:?Required}
       FREQTRADE_WS_TOKEN: ${FREQTRADE_WS_TOKEN:?Required}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      PROP_TELEGRAM_BOT_TOKEN: ${PROP_TELEGRAM_BOT_TOKEN:?Required}
+      PROP_TELEGRAM_CHAT_ID: ${PROP_TELEGRAM_CHAT_ID:?Required}
+      PROP_INACTIVITY_KEEPALIVE: ${PROP_INACTIVITY_KEEPALIVE:-false}
       CHECK_INTERVAL_SECONDS: 5
       PYTHONPATH: /app
       PROP_BYBIT_API_KEY: ${PROP_BYBIT_API_KEY:?Required}

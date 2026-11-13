@@ -3,6 +3,7 @@
 import math
 import time
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from freqtrade.snapshot_freshness import milliseconds, read_record, validate_reads
 
 
@@ -112,6 +113,13 @@ class SupervisorBybit:
             values = [number(coin[k]) for k in ("equity", "walletBalance", "borrowAmount")]
             if coin["coin"] == "USDT":
                 equity.append(values[0])
+                upl_raw = coin.get("unrealisedPnl", 0)
+                upl = number(upl_raw) if upl_raw not in (None, "") else 0.0
+                self._last_wallet_detail = {
+                    "equity": values[0],
+                    "wallet_balance": values[1],
+                    "unrealised_pnl": upl,
+                }
             elif any(values):
                 raise UnverifiedAccount("Non-USDT collateral/exposure cannot be certified")
         if len(equity) != 1:
@@ -196,6 +204,7 @@ class SupervisorBybit:
                     raise UnverifiedAccount("Positions outside configured account scope")
         opened = self._pages(self.api.privateGetV5OrderRealtime, {"settleCoin": "USDT", "openOnly": 0})
         positions = []
+        pos_details = {}
         for raw in self._pages(self.api.privateGetV5PositionList, {"settleCoin": "USDT"}):
             market = self.market(raw["symbol"])
             size = number(raw["size"])
@@ -206,9 +215,21 @@ class SupervisorBybit:
             if size:
                 if raw["side"] not in ("Buy", "Sell"):
                     raise UnverifiedAccount("Unknown position direction")
+                pos_upl = number(raw["unrealisedPnl"]) if raw.get("unrealisedPnl") not in (None, "") else None
+                avg_price = number(raw["avgPrice"]) if raw.get("avgPrice") not in (None, "") else None
+                pos_details[market["symbol"]] = {
+                    "market_id": market["id"],
+                    "side": raw["side"].lower(),
+                    "contracts": size,
+                    "amount": size * number(market["contractSize"]),
+                    "mark_price": number(raw["markPrice"]),
+                    "unrealised_pnl": pos_upl,
+                    "avg_price": avg_price,
+                }
                 positions.append({"pair": market["symbol"], "side": raw["side"].lower(),
                     "contracts": size, "amount": size * number(market["contractSize"]),
                     "mark_price": number(raw["markPrice"])})
+        self._last_pos_details = pos_details
         if len({p["pair"] for p in positions}) != len(positions):
             raise UnverifiedAccount("Multiple positions for one-way pair")
         orders = [self._order(o) for o in opened]
@@ -224,6 +245,162 @@ class SupervisorBybit:
         reconstruction contract. Existing caller must supply reviewed evidence.
         """
         raise UnverifiedAccount("Historical midnight equity cannot be inferred from a flat account")
+
+    def _tx_pages(self, start_ms, end_ms):
+        endpoint = (
+            self.api.privateGetV5AccountTransactionLog
+            if self.account_type == "UNIFIED"
+            else self.api.privateGetV5AccountContractTransactionLog
+        )
+        rows, seen = [], set()
+        request = {
+            "currency": self.profile["currency"],
+            "startTime": int(start_ms),
+            "endTime": int(end_ms),
+            "limit": 50,
+        }
+        if self.account_type == "UNIFIED":
+            request["accountType"] = "UNIFIED"
+        for _ in range(1000):
+            result = self._call(endpoint, request.copy()).get("result")
+            if not isinstance(result, dict) or not isinstance(result.get("list"), list):
+                raise UnverifiedAccount("Incomplete Bybit transaction log page")
+            rows.extend(result["list"])
+            cursor = result.get("nextPageCursor", "")
+            if not cursor:
+                return rows
+            if not isinstance(cursor, str) or cursor in seen:
+                raise UnverifiedAccount("Invalid transaction log pagination")
+            seen.add(cursor)
+            request["cursor"] = cursor
+        raise UnverifiedAccount("Incomplete transaction log pagination")
+
+    def reconcile_midnight_baseline(self, now_utc=None):
+        """Reconstruct verified 00:00:00 UTC equity from Bybit V5 ledgers and mark-price klines."""
+        allowed_tx_types = {
+            "TRADE", "SETTLEMENT", "FUNDING_FEE", "FEE", "FEE_REFUND",
+            "REALIZED_PNL", "DELIVERY", "INTEREST", "BORROW", "REPAY",
+            "LIQUIDATION", "ADL",
+        }
+        now_dt = (now_utc or datetime.now(UTC)).astimezone(UTC)
+        midnight_dt = now_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        midnight_ms = int(midnight_dt.timestamp() * 1000)
+        now_ms = int(now_dt.timestamp() * 1000)
+        if now_ms < midnight_ms:
+            raise UnverifiedAccount("Target timestamp precedes UTC midnight")
+
+        snap = self._snapshot()
+        wallet_detail = getattr(self, "_last_wallet_detail", None)
+        if not isinstance(wallet_detail, dict):
+            raise UnverifiedAccount("USDT wallet balance detail unavailable")
+        wallet_now = float(wallet_detail["wallet_balance"])
+        pos_details = getattr(self, "_last_pos_details", {})
+
+        tx_rows = self._tx_pages(midnight_ms - 60_000, now_ms + 5_000)
+        post_midnight_delta = 0.0
+        for row in tx_rows:
+            tx_type = str(row.get("type", "")).upper()
+            if tx_type not in allowed_tx_types:
+                raise UnverifiedAccount(f"External or unverified capital flow detected: {tx_type or 'UNKNOWN'}")
+            tx_time = int(number(row["transactionTime"]))
+            change = number(row["change"])
+            if tx_time >= midnight_ms:
+                post_midnight_delta += change
+        wallet_midnight = round(wallet_now - post_midnight_delta, 6)
+        if wallet_midnight <= 0:
+            raise UnverifiedAccount("Reconstructed midnight wallet balance non-positive")
+
+        exec_rows = self._pages(
+            self.api.privateGetV5ExecutionList,
+            {"category": "linear", "startTime": midnight_ms - 5_000, "endTime": now_ms + 5_000},
+        )
+        post_execs = [e for e in exec_rows if int(number(e["execTime"])) >= midnight_ms]
+        execs_by_pair = {}
+        for row in post_execs:
+            sym_info = self.market(row["symbol"])
+            pair = sym_info["symbol"]
+            c_size = number(sym_info["contractSize"])
+            qty = number(row["execQty"]) * c_size
+            side = row.get("side")
+            if side not in ("Buy", "Sell"):
+                raise UnverifiedAccount("Unknown post-midnight execution side")
+            entry = execs_by_pair.setdefault(pair, {"buy": 0.0, "sell": 0.0})
+            if side == "Buy":
+                entry["buy"] += qty
+            else:
+                entry["sell"] += qty
+
+        # Reject complex post-midnight closes or size increases whose historical avgPrice cannot be bounded safely.
+        for pair, delta in execs_by_pair.items():
+            if pair not in pos_details or delta["buy"] > 0:
+                raise UnverifiedAccount(f"Post-midnight fills for {pair} prevent exact historical UPL reconstruction")
+
+        positions_midnight = []
+        for pair, info in sorted(pos_details.items()):
+            delta = execs_by_pair.get(pair, {"buy": 0.0, "sell": 0.0})
+            size_mid = float(info["amount"]) + float(delta["sell"])
+            if size_mid <= 0:
+                continue
+            kline_res = self._call(
+                self.api.publicGetV5MarketMarkPriceKline,
+                {"category": "linear", "symbol": info["market_id"], "interval": "1",
+                 "start": midnight_ms, "limit": 1},
+            )
+            bars = (kline_res.get("result") or {}).get("list") or []
+            bar = next((b for b in bars if int(number(b[0])) == midnight_ms), None)
+            if bar is None or len(bar) < 2:
+                raise UnverifiedAccount(f"Missing 00:00 UTC mark-price candle for {pair}")
+            mark_mid = number(bar[1])
+            if mark_mid <= 0:
+                raise UnverifiedAccount(f"Non-positive 00:00 UTC mark price for {pair}")
+            direction = 1.0 if info["side"] == "buy" else -1.0
+            if delta["sell"] > 0:
+                if info["avg_price"] is None:
+                    raise UnverifiedAccount(f"Missing avgPrice for partial-closed {pair}")
+                upl_mid = direction * size_mid * (mark_mid - float(info["avg_price"]))
+            elif info["unrealised_pnl"] is not None:
+                upl_mid = float(info["unrealised_pnl"]) - direction * size_mid * (float(info["mark_price"]) - mark_mid)
+            elif info["avg_price"] is not None:
+                upl_mid = direction * size_mid * (mark_mid - float(info["avg_price"]))
+            else:
+                raise UnverifiedAccount(f"Missing UPL basis for {pair}")
+            positions_midnight.append({
+                "symbol": pair,
+                "side": info["side"],
+                "size": round(size_mid, 8),
+                "mark_price_midnight": round(mark_mid, 8),
+                "unrealized_pnl": round(upl_mid, 6),
+            })
+
+        upl_total = sum(p["unrealized_pnl"] for p in positions_midnight)
+        midnight_equity = round(wallet_midnight + upl_total, 6)
+        if not math.isfinite(midnight_equity) or midnight_equity <= 0:
+            raise UnverifiedAccount("Reconstructed midnight equity invalid")
+        ref = f"bybit-v5-txlog-{self.profile['account_id']}-{midnight_dt.date().isoformat()}"
+        return {
+            "profile": self.profile,
+            "confirmed": True,
+            "status": "verified",
+            "source": "bybit_v5_reconciled_midnight_equity",
+            "captured_at": midnight_dt.isoformat(),
+            "verified_at": now_dt.isoformat(),
+            "equity": midnight_equity,
+            "evidence": {
+                "kind": "bybit_v5_midnight_equity_reconstruction",
+                "reviewed": False,
+                "account_id": self.profile["account_id"],
+                "reference": ref,
+                "equity": midnight_equity,
+                "observed_at": midnight_dt.isoformat(),
+                "zero_external_transfers": True,
+                "wallet_balance_midnight": wallet_midnight,
+                "post_midnight_tx_delta": round(post_midnight_delta, 6),
+                "positions_midnight": positions_midnight,
+                "tx_count": len(tx_rows),
+                "exec_count": len(post_execs),
+                "snapshot_checked_ms": snap["checked_ms"],
+            },
+        }
 
     def lookup(self, pair, *, client_id=None, order_id=None):
         market = self.market(pair)

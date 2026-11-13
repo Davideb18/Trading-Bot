@@ -6,6 +6,12 @@ import runpy
 import sys
 from pathlib import Path
 
+_HERE = Path(__file__).resolve().parent
+_ROOT = _HERE.parent if _HERE.name == "scripts" else _HERE
+for _p in (str(_ROOT), str(_ROOT / "scripts")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 from freqtrade.prop_profile import profile_from_config
 from freqtrade.prop_security import (
     DeploymentRejected,
@@ -26,7 +32,7 @@ def main():
     default_root = '/freqtrade/user_data' if role == 'core' else '/app/user_data'
     root = Path(os.environ.get('PROP_DATA_DIR') or default_root)
     if role == 'commission' and not root.exists():
-        for fallback in (Path('/freqtrade/user_data'), Path(__file__).resolve().parents[1] / 'user_data'):
+        for fallback in (Path('/freqtrade/user_data'), _ROOT / 'user_data'):
             if fallback.exists():
                 root = fallback
                 break

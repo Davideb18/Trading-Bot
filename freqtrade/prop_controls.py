@@ -82,7 +82,12 @@ def sync_prop_controls(bot, *, allow_ack=False):
         return True
     try:
         source = supervisor_state(bot.config)
-        fault = source["data_fault"] or not source["data_valid"]
+        transient_only = (
+            source.get("transient_paused") is True
+            and not source["data_fault"]
+            and not source["nuclear_triggered"]
+        )
+        fault = source["data_fault"] or (not source["data_valid"] and not transient_only)
         token = str(source.get("fault_revision", 0)) if fault else None
         error = None
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
@@ -99,11 +104,16 @@ def sync_prop_controls(bot, *, allow_ack=False):
         if source.get("nuclear_triggered"):
             state["risk_halt"] = True
         if source:
-            state["macro_paused"] = source["macro_paused"]
+            state["macro_paused"] = bool(
+                source["macro_paused"]
+                or source.get("rules_paused")
+                or source.get("transient_paused")
+            )
             ack = state.get("ack")
             # Two-phase acknowledgement: authenticated RPC requests; the supervisor
             # validates fresh data; the core validates its unchanged fault epoch.
-            if (allow_ack and not fault and not state["risk_halt"] and ack
+            if (allow_ack and not fault and source.get("data_valid") is True
+                    and not state["risk_halt"] and ack
                     and source.get("acknowledged_control") == ack["id"]
                     and ack["epoch"] == state["epoch"]
                     and 0 <= time.time() * 1000 - ack["created_ms"] <= 60000):

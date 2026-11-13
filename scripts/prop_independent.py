@@ -50,6 +50,10 @@ class IndependentRiskAPI:
                 "open_orders_count": len(snapshot["orders"]),
                 "received_at": datetime.now(UTC).isoformat(), "source": "direct_account_snapshot"}
 
+    def reconcile_midnight_baseline(self, now=None):
+        """Reconstruct 00:00:00 UTC equity via Bybit V5 transaction log and mark-price klines."""
+        return self.direct.reconcile_midnight_baseline(now)
+
     def __getattr__(self, name):
         # These calls only coordinate ordinary operation. Emergency execution
         # never uses this delegate, /status, /forceexit, /balance, or the ORM.

@@ -289,7 +289,15 @@ class Wallets:
             tot_profit = Trade.get_total_closed_profit()
             open_stakes = Trade.total_open_trades_stakes()
             available_balance = self.get_free(self._stake_currency)
-            return (available_balance - tot_profit + open_stakes) * self._config[
+            starting_balance = available_balance - tot_profit + open_stakes
+            if self._config.get("prop_non_compounding"):
+                base_cap = float(
+                    self._config.get(
+                        "prop_initial_balance", self._config.get("dry_run_wallet", 5000.0)
+                    )
+                )
+                starting_balance = min(starting_balance, base_cap)
+            return starting_balance * self._config[
                 "tradable_balance_ratio"
             ]
 

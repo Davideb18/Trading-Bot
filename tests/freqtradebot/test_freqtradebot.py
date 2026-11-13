@@ -4651,7 +4651,10 @@ def test_startup_update_open_orders(mocker, default_conf_usdt, fee, caplog, is_s
     mocker.patch(f"{EXMS}.fetch_order", side_effect=InvalidOrderException)
     hto_mock = mocker.patch("freqtrade.freqtradebot.FreqtradeBot.handle_cancel_order")
     # Missing orders remain unresolved regardless of age; never synthesize cancellation.
-    pending_ids = {o.order_id for o in Order.get_open_orders()}
+    open_orders = Order.get_open_orders()
+    open_orders[0].order_date = dt_now() - timedelta(days=6)
+    Trade.commit()
+    pending_ids = {o.order_id for o in open_orders}
     freqtrade.startup_update_open_orders()
     assert log_has_re(r"Order is older than \d days.*", caplog)
     hto_mock.assert_not_called()
