@@ -468,6 +468,54 @@ class FaultTests(unittest.TestCase):
         t3.join(timeout=3.0)
         self.assertFalse(errors)
 
+    def test_risk_manager_uses_separate_http_clients_for_guard_and_rules_threads(self):
+        import llm_risk_manager_prop as lrmp
+        from prop_independent import IndependentRiskAPI
+
+        cfg_path = Path(self.tmp.name) / "config_prop_nfix8.json"
+        cfg_path.write_text(json.dumps({**self.config, "exchange": {"name": "bybit", "key": "k" * 16, "secret": "s" * 24}}))
+        state_path = Path(self.tmp.name) / "risk_manager_prop_state.json"
+
+        direct_mock = Mock()
+        direct_mock.operation_budget.side_effect = lambda sec=4.0: __import__("contextlib").nullcontext()
+        emergency_mock = Mock()
+
+        with patch.object(lrmp, "PROFILE_CONFIG", cfg_path), \
+             patch.object(lrmp, "STATE_FILE", state_path), \
+             patch.object(lrmp, "configure_logging", return_value=True), \
+             patch.object(lrmp, "independent_supervisor", side_effect=lambda p, sf, ctrl: (IndependentRiskAPI(direct_mock, ctrl), emergency_mock)), \
+             patch("freqtrade.prop_security.supervisor_config", side_effect=lambda c: c), \
+             patch("freqtrade.prop_security.validate_deployment", return_value=self.profile), \
+             patch("llm_risk_manager_prop.signal.signal"):
+            rm = lrmp.RiskManager()
+        self.addCleanup(rm.api_client.control.session.close)
+        self.addCleanup(rm.rules_api.session.close)
+
+        self.assertIsNot(rm.api_client.control, rm.rules_api)
+
+        resp_ok = HttpTests.response([])
+        rm.api_client.control.access_token = "tok1"
+        rm.api_client.control.session = Mock(headers={}, request=Mock(return_value=resp_ok))
+        rm.rules_api.access_token = "tok2"
+        rm.rules_api.session = Mock(headers={}, request=Mock(return_value=resp_ok))
+
+        # Using rules_api in a worker thread while RiskGuard runs operation_budget on main thread must not collide.
+        thread_errors = []
+
+        def worker():
+            try:
+                self.assertEqual(rm.rules_api.get_open_trades(), [])
+            except BaseException as exc:  # pragma: no cover - surfaced below
+                thread_errors.append(exc)
+
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join(timeout=2.0)
+        self.assertFalse(thread_errors)
+
+        with rm.api_client.operation_budget(4.0):
+            self.assertEqual(rm.api_client.control.get("/prop/control"), [])
+
 
 class HttpTests(unittest.TestCase):
     def setUp(self):

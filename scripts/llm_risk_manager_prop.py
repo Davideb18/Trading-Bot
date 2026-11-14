@@ -939,7 +939,7 @@ class RiskManager(RiskGuard):
             autonomous_rollover=True,
             transient_grace_cycles=3,
         )
-        self.rules_api = control_api
+        self.rules_api = FreqtradeAPIClient(FREQTRADE_API_URL, FREQTRADE_USERNAME, FREQTRADE_PASSWORD)
         self.inactivity_keepalive_enabled = (
             os.environ.get("PROP_INACTIVITY_KEEPALIVE", "true").lower() == "true"
         )
