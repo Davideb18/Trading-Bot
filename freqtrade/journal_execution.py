@@ -27,21 +27,22 @@ def delete_verified_empty_trade(bot, trade, trade_model):
             or any(o.filled is None or o.filled != 0 or o.status not in CANCELED_EXCHANGE_STATES
                    for o in trade.orders)):
         return False
-    with journal.mutex:
+    with getattr(journal, "exec_mutex", journal.mutex):
         reconcile_journal(bot, trade_model)
-        if not journal.ready or pending_recovery(trade):
-            return False
-        if any(i["trade_id"] == trade.id or json.loads(i["request"])["pair"] == trade.pair
-               for i in journal.intents()):
-            return False
-        snapshot = journal.risk_snapshot
-        if (snapshot is None or any(p["symbol"] == trade.pair and p["amount"] != 0
-                                    for p in snapshot["positions"])
-                or any(o["symbol"] == trade.pair for o in snapshot["open_orders"])):
-            return False
-        require_core_authority(bot)
-        trade.delete()
-        return True
+        with journal.mutex:
+            if not journal.ready or pending_recovery(trade):
+                return False
+            if any(i["trade_id"] == trade.id or json.loads(i["request"])["pair"] == trade.pair
+                   for i in journal.intents()):
+                return False
+            snapshot = journal.risk_snapshot
+            if (snapshot is None or any(p["symbol"] == trade.pair and p["amount"] != 0
+                                        for p in snapshot["positions"])
+                    or any(o["symbol"] == trade.pair for o in snapshot["open_orders"])):
+                return False
+            require_core_authority(bot)
+            trade.delete()
+            return True
 
 
 def open_journal(config, exchange_config):
@@ -75,47 +76,52 @@ def reconcile_journal(bot, trade_model):
     journal = getattr(bot, "order_journal", None)
     if journal is None:
         return
-    with journal.mutex:
-        journal.ready = False
-        trades = trade_model.get_trades_proxy()
-        orders, positions = {}, {}
-        for trade in trades:
-            for order in trade.orders:
-                orders[order.order_id] = {
-                    "symbol": trade.pair, "side": order.side, "amount": order.amount,
-                    "filled": order.filled or 0, "status": order.status, "trade_id": trade.id,
-                }
-            if trade.is_open:
-                entry_side = getattr(trade, "entry_side", "sell" if trade.is_short else "buy")
-                open_delta = 0.0
+    with getattr(journal, "exec_mutex", journal.mutex):
+        with journal.mutex:
+            journal.ready = False
+            trades = trade_model.get_trades_proxy()
+            orders, positions = {}, {}
+            for trade in trades:
                 for order in trade.orders:
-                    # Trade.recalc_trade_from_orders skips ft_is_open orders, while exchange
-                    # position size reflects their partial fills immediately.
-                    if not getattr(order, "ft_is_open", order.status == "open"):
-                        continue
-                    filled = (order.filled or 0.0) - (getattr(order, "ft_fee_base", None) or 0.0)
-                    if filled <= 0:
-                        continue
-                    order_side = getattr(order, "ft_order_side", None) or order.side
-                    open_delta += -filled if order_side != entry_side else filled
-                key = (trade.pair, "short" if trade.is_short else "long")
-                positions[key] = positions.get(key, 0) + max(0.0, trade.amount + open_delta)
+                    orders[order.order_id] = {
+                        "symbol": trade.pair, "side": order.side, "amount": order.amount,
+                        "filled": order.filled or 0, "status": order.status, "trade_id": trade.id,
+                    }
+                if trade.is_open:
+                    entry_side = getattr(trade, "entry_side", "sell" if trade.is_short else "buy")
+                    open_delta = 0.0
+                    for order in trade.orders:
+                        # Trade.recalc_trade_from_orders skips ft_is_open orders, while exchange
+                        # position size reflects their partial fills immediately.
+                        if not getattr(order, "ft_is_open", order.status == "open"):
+                            continue
+                        filled = (order.filled or 0.0) - (getattr(order, "ft_fee_base", None) or 0.0)
+                        if filled <= 0:
+                            continue
+                        order_side = getattr(order, "ft_order_side", None) or order.side
+                        open_delta += -filled if order_side != entry_side else filled
+                    key = (trade.pair, "short" if trade.is_short else "long")
+                    positions[key] = positions.get(key, 0) + max(0.0, trade.amount + open_delta)
+            intents = journal.intents()
+        # Run exchange HTTP I/O outside journal.mutex so read-only control status
+        # does not block behind REST latency while exec_mutex serializes execution.
         try:
-            snapshot = bot.exchange.fetch_journal_snapshot(journal.intents())
+            snapshot = bot.exchange.fetch_journal_snapshot(intents)
         except Exception as e:
             # Do not log raw exception text: CCXT exceptions can contain request data.
             logger.warning("Journal snapshot unavailable (%s)", type(e).__name__)
             snapshot = {"complete": False}
-        errors = journal.reconcile(snapshot, orders, positions)
-        if errors:
-            logger.warning("Journal blocks entries: %s", errors)
-        # Clear only our markers, never P0.2's unknown-force-exit or other order IDs.
-        by_id = {t.id: t for t in trades}
-        for intent in journal.intents(active=False):
-            trade = by_id.get(intent["trade_id"])
-            if trade and (intent["settled"] or (intent["linked"] and not errors)):
-                clear_recovery(trade, "journal:" + intent["client_id"])
-        trade_model.commit()
+        with journal.mutex:
+            errors = journal.reconcile(snapshot, orders, positions)
+            if errors:
+                logger.warning("Journal blocks entries: %s", errors)
+            # Clear only our markers, never P0.2's unknown-force-exit or other order IDs.
+            by_id = {t.id: t for t in trades}
+            for intent in journal.intents(active=False):
+                trade = by_id.get(intent["trade_id"])
+                if trade and (intent["settled"] or (intent["linked"] and not errors)):
+                    clear_recovery(trade, "journal:" + intent["client_id"])
+            trade_model.commit()
 
 
 def journal_create_order(bot, trade, trade_model, **request):
@@ -125,18 +131,19 @@ def journal_create_order(bot, trade, trade_model, **request):
         if bot.config.get("prop_guard_enabled"):
             raise JournalBlocked("Missing required order journal")
         return bot.exchange.create_order(**request)
-    with journal.mutex:
+    with getattr(journal, "exec_mutex", journal.mutex):
         reconcile_journal(bot, trade_model)
-        if not request["reduceOnly"] and sync_prop_controls(bot):
-            raise JournalBlocked("Persistent operational entry lock")
-        require_core_authority(bot)
-        if ((not request["reduceOnly"] and bot.has_unresolved_orders())
-                or (trade and pending_recovery(trade))):
-            raise JournalBlocked("P0.2 recovery lock still active")
-        decision = None
-        if bot.config.get("prop_guard_enabled"):
-            decision = require_risk_budget(bot, request, trade.id if trade else None)
-        cid = journal.prepare(request, trade.id if trade else None, reservation=decision)
+        with journal.mutex:
+            if not request["reduceOnly"] and sync_prop_controls(bot):
+                raise JournalBlocked("Persistent operational entry lock")
+            require_core_authority(bot)
+            if ((not request["reduceOnly"] and bot.has_unresolved_orders())
+                    or (trade and pending_recovery(trade))):
+                raise JournalBlocked("P0.2 recovery lock still active")
+            decision = None
+            if bot.config.get("prop_guard_enabled"):
+                decision = require_risk_budget(bot, request, trade.id if trade else None)
+            cid = journal.prepare(request, trade.id if trade else None, reservation=decision)
         try:
             return journal.dispatch(cid, bot.exchange.create_order)
         except Exception:

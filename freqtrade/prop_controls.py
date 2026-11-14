@@ -18,14 +18,14 @@ FLAGS = ("macro_paused", "data_fault", "risk_halt", "manual_lock")
 def publish_fault_event(directory, profile, reason):
     """Secondary workers may only append fault signals, never mutate order intents.
 
-    Separate SQLite connection, 50 ms busy timeout, no shared in-process lock.
+    Separate SQLite connection, 500 ms busy timeout, no shared in-process lock.
     If storage is unavailable the caller still latches memory and the heartbeat
     gate remains fail-closed. No software can promise durability on failed storage.
     """
     path = Path(directory) / "order_journal" / "orders.sqlite"
     connection = None
     try:
-        connection = sqlite3.connect(path.resolve().as_uri() + "?mode=rw", uri=True, timeout=0.05)
+        connection = sqlite3.connect(path.resolve().as_uri() + "?mode=rw", uri=True, timeout=0.5)
         connection.execute("PRAGMA synchronous=FULL")
         binding = json.loads(connection.execute("SELECT value FROM binding WHERE id=1").fetchone()[0])
         if any(binding.get(k) != profile[k] for k in ("account_id", "challenge_id", "phase_id", "profile_id")):

@@ -385,6 +385,89 @@ class FaultTests(unittest.TestCase):
             thread.join(3)
         self.assertFalse(thread.is_alive())
 
+    def test_control_status_nonblocking_during_slow_snapshot_and_dispatch(self):
+        from freqtrade.journal_execution import reconcile_journal
+        from snapshot_fixtures import timed_snapshot
+
+        snap_entered = threading.Event()
+        snap_release = threading.Event()
+        active_snapshots = {"count": 0, "max": 0}
+        snap_lock = threading.Lock()
+        errors = []
+
+        def slow_snapshot(intents):
+            with snap_lock:
+                active_snapshots["count"] += 1
+                active_snapshots["max"] = max(active_snapshots["max"], active_snapshots["count"])
+            snap_entered.set()
+            self.assertTrue(snap_release.wait(timeout=3.0))
+            with snap_lock:
+                active_snapshots["count"] -= 1
+            return timed_snapshot(dict(complete=True, open_orders=[], orders={}, fills={}, positions=[]))
+
+        self.bot.exchange.fetch_journal_snapshot = Mock(side_effect=slow_snapshot)
+        trade_model = SimpleNamespace(get_trades_proxy=lambda: [], commit=lambda: None)
+
+        def run_reconcile():
+            try:
+                reconcile_journal(self.bot, trade_model)
+            except BaseException as exc:  # pragma: no cover - surfaced below
+                errors.append(exc)
+
+        t1 = threading.Thread(target=run_reconcile)
+        t1.start()
+        self.assertTrue(snap_entered.wait(timeout=2.0))
+
+        # A second concurrent reconcile must queue behind exec_mutex, while control_status returns fast.
+        t2 = threading.Thread(target=run_reconcile)
+        t2.start()
+
+        start = time.monotonic()
+        status = control_status(self.bot, Trade, Order)
+        elapsed = time.monotonic() - start
+        self.assertLess(elapsed, 0.2)
+        self.assertFalse(status["verified"])
+        self.assertTrue(status["reconciliation_required"])
+
+        snap_release.set()
+        t1.join(timeout=3.0)
+        t2.join(timeout=3.0)
+        self.assertFalse(errors)
+        self.assertEqual(active_snapshots["max"], 1)
+        self.assertTrue(control_status(self.bot, Trade, Order)["verified"])
+
+        # Same non-blocking behavior when OrderJournal.dispatch awaits exchange create_order I/O.
+        req = dict(pair="BTC/USDT:USDT", side="buy", ordertype="limit", amount=0.01,
+                   rate=50000.0, leverage=1.0, reduceOnly=False)
+        cid = self.journal.prepare(req, None)
+        disp_entered = threading.Event()
+        disp_release = threading.Event()
+
+        def slow_create_order(**kwargs):
+            disp_entered.set()
+            self.assertTrue(disp_release.wait(timeout=3.0))
+            return {"id": "ex-nonblock-1", "clientOrderId": kwargs["client_order_id"]}
+
+        def run_dispatch():
+            try:
+                self.journal.dispatch(cid, slow_create_order)
+            except BaseException as exc:  # pragma: no cover - surfaced below
+                errors.append(exc)
+
+        t3 = threading.Thread(target=run_dispatch)
+        t3.start()
+        self.assertTrue(disp_entered.wait(timeout=2.0))
+
+        start = time.monotonic()
+        status2 = control_status(self.bot, Trade, Order)
+        elapsed2 = time.monotonic() - start
+        self.assertLess(elapsed2, 0.2)
+        self.assertFalse(status2["verified"])
+
+        disp_release.set()
+        t3.join(timeout=3.0)
+        self.assertFalse(errors)
+
 
 class HttpTests(unittest.TestCase):
     def setUp(self):

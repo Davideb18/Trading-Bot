@@ -50,6 +50,7 @@ class OrderJournal:
         directory.mkdir(parents=True, exist_ok=True)
         self.directory = directory
         self.mutex = threading.RLock()
+        self.exec_mutex = threading.RLock()
         self.ready = False
         self.last_reconciliation = None
         self.risk_snapshot = None
@@ -178,19 +179,21 @@ class OrderJournal:
 
     def dispatch(self, client_id, create_order):
         """Only prepared -> sending can send. A retry of this ID never sends again."""
-        with self.mutex:
-            with self.db:
-                changed = self.db.execute(
-                    "UPDATE intents SET state='sending' WHERE client_id=? AND state='prepared'",
-                    (client_id,),
-                ).rowcount
-            if changed != 1:
-                raise JournalBlocked("Intent already dispatched; reconcile, do not retry")
-            row = self.db.execute(
-                "SELECT * FROM intents WHERE client_id=?", (client_id,)
-            ).fetchone()
+        with self.exec_mutex:
+            with self.mutex:
+                with self.db:
+                    changed = self.db.execute(
+                        "UPDATE intents SET state='sending' WHERE client_id=? AND state='prepared'",
+                        (client_id,),
+                    ).rowcount
+                if changed != 1:
+                    raise JournalBlocked("Intent already dispatched; reconcile, do not retry")
+                row = self.db.execute(
+                    "SELECT * FROM intents WHERE client_id=?", (client_id,)
+                ).fetchone()
+                request = json.loads(row["request"])
             try:
-                order = create_order(**json.loads(row["request"]), client_order_id=client_id)
+                order = create_order(**request, client_order_id=client_id)
                 if (
                     not isinstance(order, dict)
                     or not isinstance(order.get("id"), str)
@@ -199,14 +202,14 @@ class OrderJournal:
                 ):
                     raise JournalBlocked("Unverifiable create_order acknowledgement")
                 # Acknowledgement alone is not final execution evidence, even if rejected.
-                with self.db:
+                with self.mutex, self.db:
                     self.db.execute(
                         "UPDATE intents SET state='accepted',exchange_id=?,evidence=? WHERE client_id=?",
                         (order["id"], json.dumps(order), client_id),
                     )
                 return order
             except Exception:
-                with self.db:
+                with self.mutex, self.db:
                     self.db.execute(
                         "UPDATE intents SET state='uncertain' WHERE client_id=?", (client_id,)
                     )
