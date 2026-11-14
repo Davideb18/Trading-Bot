@@ -86,8 +86,20 @@ def reconcile_journal(bot, trade_model):
                     "filled": order.filled or 0, "status": order.status, "trade_id": trade.id,
                 }
             if trade.is_open:
+                entry_side = getattr(trade, "entry_side", "sell" if trade.is_short else "buy")
+                open_delta = 0.0
+                for order in trade.orders:
+                    # Trade.recalc_trade_from_orders skips ft_is_open orders, while exchange
+                    # position size reflects their partial fills immediately.
+                    if not getattr(order, "ft_is_open", order.status == "open"):
+                        continue
+                    filled = (order.filled or 0.0) - (getattr(order, "ft_fee_base", None) or 0.0)
+                    if filled <= 0:
+                        continue
+                    order_side = getattr(order, "ft_order_side", None) or order.side
+                    open_delta += -filled if order_side != entry_side else filled
                 key = (trade.pair, "short" if trade.is_short else "long")
-                positions[key] = positions.get(key, 0) + trade.amount
+                positions[key] = positions.get(key, 0) + max(0.0, trade.amount + open_delta)
         try:
             snapshot = bot.exchange.fetch_journal_snapshot(journal.intents())
         except Exception as e:

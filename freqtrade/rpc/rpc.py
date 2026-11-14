@@ -1258,6 +1258,8 @@ class RPC:
         ).first()
         is_short = order_side == SignalDirection.SHORT
         if trade:
+            if self._config.get("prop_guard_enabled", False):
+                raise RPCException(f"position for {pair} already open - id: {trade.id}")
             is_short = trade.is_short
             if not self._freqtrade.strategy.position_adjustment_enable:
                 raise RPCException(f"position for {pair} already open - id: {trade.id}")

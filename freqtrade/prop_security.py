@@ -81,7 +81,9 @@ def _validate_common(config, exchange, env):
         profile = profile_from_config(config)
     except Exception:
         raise DeploymentRejected('Unverifiable deployment profile') from None
-    for value, label in zip(values[:5], ('exchange key', 'exchange secret', 'API password', 'JWT key', 'WS token')):
+    for value, label in zip(
+        values[:5], ('exchange key', 'exchange secret', 'API password', 'JWT key', 'WS token'), strict=True
+    ):
         secret(value, label, min_len=16 if label == 'exchange key' else 24)
     if len(set(values[:5])) != 5:
         raise DeploymentRejected('Deployment secrets must be distinct')

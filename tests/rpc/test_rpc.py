@@ -1447,6 +1447,37 @@ def test_rpc_force_entry_wrong_mode(mocker, default_conf) -> None:
         rpc._rpc_force_entry(pair, None, order_side=SignalDirection.SHORT)
 
 
+def test_rpc_force_entry_prop_guard_blocks_dca(
+    mocker, default_conf, ticker, fee, limit_buy_order_open
+) -> None:
+    default_conf["force_entry_enable"] = True
+    default_conf["max_open_trades"] = 3
+    mocker.patch("freqtrade.rpc.telegram.Telegram", MagicMock())
+    mocker.patch.multiple(
+        EXMS,
+        get_balances=MagicMock(return_value=ticker),
+        fetch_ticker=ticker,
+        get_fee=fee,
+        create_order=MagicMock(return_value=limit_buy_order_open),
+    )
+    freqtradebot = get_patched_freqtradebot(mocker, default_conf)
+    patch_get_signal(freqtradebot)
+    freqtradebot.strategy.position_adjustment_enable = True
+    rpc = RPC(freqtradebot)
+    pair = "ETH/BTC"
+
+    trade = rpc._rpc_force_entry(pair, None)
+    trade.orders[0].status = "closed"
+    trade.orders[0].ft_is_open = False
+    Trade.commit()
+    assert not trade.has_open_orders
+
+    freqtradebot.config["prop_guard_enabled"] = True
+    rpc._config["prop_guard_enabled"] = True
+    with pytest.raises(RPCException, match=r"position for ETH/BTC already open - id: 1"):
+        rpc._rpc_force_entry(pair, 0.0001)
+
+
 @pytest.mark.usefixtures("init_persistence")
 def test_rpc_add_and_delete_lock(mocker, default_conf):
     freqtradebot = get_patched_freqtradebot(mocker, default_conf)

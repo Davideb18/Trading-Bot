@@ -2375,6 +2375,8 @@ class FreqtradeBot(LoggingMixin):
 
         # First cancelling stoploss on exchange ...
         trade = self.cancel_stoploss_on_exchange(trade, allow_nonblocking=True)
+        if not trade.is_open:
+            return False
 
         amount = self._safe_exit_amount(trade, trade.pair, sub_trade_amt or trade.amount)
         time_in_force = self.strategy.order_time_in_force["exit"]
@@ -2400,6 +2402,16 @@ class FreqtradeBot(LoggingMixin):
         if trade.has_open_orders:
             if self.handle_similar_open_order(trade, limit, amount, trade.exit_side):
                 return False
+            # Cancelling or reconciling open orders may close the trade or change trade.amount.
+            if pending_recovery(trade) or not trade.is_open:
+                return False
+            target_amt = min(sub_trade_amt, trade.amount) if sub_trade_amt else trade.amount
+            amount = self._safe_exit_amount(trade, trade.pair, target_amt)
+        if (
+            (self.config.get("prop_guard_enabled") or getattr(self, "order_journal", None) is not None)
+            and amount <= 0
+        ):
+            return False
 
         try:
             # Execute exit and update trade record

@@ -257,6 +257,15 @@ class FreqtradeAPIClient(DeadlineClient):
             return data.get("state", "").lower()
         return None
 
+    def get_max_open_trades(self, default: int = 3) -> int:
+        """Returns configured max_open_trades from /show_config (falls back safely)."""
+        data = self.get("/show_config")
+        if isinstance(data, dict):
+            raw = data.get("max_open_trades")
+            if isinstance(raw, (int, float)) and not isinstance(raw, bool) and int(raw) > 0:
+                return int(raw)
+        return default
+
     def stop_buying(self) -> bool:
         """Pause trade entries (existing trades continue managing exits) with verification."""
         return self.execute_critical_command(
@@ -1138,26 +1147,70 @@ class RiskManager(RiskGuard):
 
                 if inactivity_days >= 24 and not self.nuclear_triggered:
                     state = getattr(self, "state", {})
-                    healthy_for_keepalive = (
+                    base_healthy = (
                         keepalive_enabled
-                        and len(open_trades) == 0
                         and isinstance(state, dict)
                         and state.get("data_valid") is True
                         and not state.get("data_fault")
                         and not state.get("wake_up_lock")
+                        and not state.get("macro_paused")
                     )
+
+                    def select_keepalive_pair() -> str | None:
+                        open_pairs: set[str] = set()
+                        for tr in open_trades:
+                            if not isinstance(tr, dict):
+                                return None
+                            pair_name = tr.get("pair")
+                            if not isinstance(pair_name, str) or not pair_name.strip():
+                                return None
+                            open_pairs.add(pair_name.strip())
+
+                        get_max_fn = getattr(self.rules_api, "get_max_open_trades", None)
+                        raw_max = get_max_fn() if callable(get_max_fn) else 3
+                        max_slots = (
+                            raw_max
+                            if isinstance(raw_max, int) and not isinstance(raw_max, bool) and raw_max > 0
+                            else 3
+                        )
+                        if len(open_trades) >= max_slots:
+                            return None
+
+                        get_wl_fn = getattr(self.rules_api, "get_whitelist", None)
+                        raw_wl = get_wl_fn() if callable(get_wl_fn) else []
+                        whitelist = (
+                            [str(p).strip() for p in raw_wl if isinstance(p, str) and p.strip()]
+                            if isinstance(raw_wl, list)
+                            else []
+                        )
+                        preferred = (
+                            ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "XRP/USDT:USDT"]
+                            if not open_pairs
+                            else ["ETH/USDT:USDT", "SOL/USDT:USDT", "XRP/USDT:USDT", "BTC/USDT:USDT"]
+                        )
+                        ordered = [p for p in preferred if (not whitelist or p in whitelist)] + [
+                            p for p in whitelist if p not in preferred
+                        ]
+                        for candidate in ordered:
+                            if candidate not in open_pairs:
+                                return candidate
+                        return None
+
+                    candidate_pair = select_keepalive_pair() if (base_healthy and not has_open_keepalive) else None
+                    healthy_for_keepalive = base_healthy and (candidate_pair is not None)
                     last_ka = float(getattr(self, "_last_keepalive_ts", 0.0) or 0.0)
                     last_ka_err = float(getattr(self, "_last_keepalive_err_ts", 0.0) or 0.0)
                     if has_open_keepalive:
                         logger.info("Keep-alive trade open/settling (%dd flat); deferring new entry/alert.", inactivity_days)
                     elif healthy_for_keepalive and (now_ts - last_ka >= 86400.0) and (now_ts - last_ka_err >= 60.0):
                         logger.warning(
-                            "⚠️ HYROTRADER 24-DAY INACTIVITY KEEP-ALIVE: Executing micro-trade on BTC/USDT:USDT (%d days flat).",
+                            "⚠️ HYROTRADER 24-DAY INACTIVITY KEEP-ALIVE: Executing micro-trade on %s (%d days flat).",
+                            candidate_pair,
                             inactivity_days,
                         )
                         entered = self.rules_api.post(
                             "/forceenter",
-                            json={"pair": "BTC/USDT:USDT", "side": "long", "ordertype": "limit", "stakeamount": 15.0},
+                            json={"pair": candidate_pair, "side": "long", "ordertype": "limit", "stakeamount": 15.0},
                         )
                         trade_id = entered.get("trade_id") if isinstance(entered, dict) else None
                         if trade_id is not None:

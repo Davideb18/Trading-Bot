@@ -897,29 +897,30 @@ class PropAuditRegressionTests(unittest.TestCase):
         rm._hyrotrader_rules_loop()
         rm.request_rules_pause.assert_called_once_with(True, "HyroTrader One-Step profit target and qualifying days achieved")
 
-        # A9: Open trade sitting untouched for 26 days triggers critical inactivity alert without forceenter.
+        # A9: 3/3 full slots sitting untouched for 26 days triggers critical inactivity alert without forceenter.
         stale_now = datetime(2026, 5, 20, 12, 0, 0, tzinfo=UTC)
         stale_entry = stale_now - timedelta(days=26)
-        stagnant_trade = {
-            "trade_id": 201,
-            "is_open": True,
-            "realized_profit": 0.0,
-            "open_timestamp": int(stale_entry.timestamp() * 1000),
-            "orders": [
-                {"ft_is_entry": True, "is_open": False, "filled": 1.0, "average": 100.0, "cost": 100.0, "order_filled_timestamp": int(stale_entry.timestamp() * 1000)},
-            ],
-        }
+        stagnant_orders = [
+            {"ft_is_entry": True, "is_open": False, "filled": 1.0, "average": 100.0, "cost": 100.0, "order_filled_timestamp": int(stale_entry.timestamp() * 1000)},
+        ]
+        stagnant_trades = [
+            {"trade_id": 201, "pair": "BTC/USDT:USDT", "is_open": True, "realized_profit": 0.0, "open_timestamp": int(stale_entry.timestamp() * 1000), "orders": stagnant_orders},
+            {"trade_id": 202, "pair": "ETH/USDT:USDT", "is_open": True, "realized_profit": 0.0, "open_timestamp": int(stale_entry.timestamp() * 1000), "orders": stagnant_orders},
+            {"trade_id": 203, "pair": "SOL/USDT:USDT", "is_open": True, "realized_profit": 0.0, "open_timestamp": int(stale_entry.timestamp() * 1000), "orders": stagnant_orders},
+        ]
         rm2 = RiskManager.__new__(RiskManager)
         rm2.profile = {**self.profile, "phase_start_utc": "2026-04-01T00:00:00Z"}
         rm2.initial_balance = 5000.0
-        rm2.state = {"nuclear_triggered": False}
+        rm2.state = {"nuclear_triggered": False, "data_valid": True, "data_fault": False, "wake_up_lock": False}
         rm2._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
         rm2.request_rules_pause = Mock()
         rm2.inactivity_keepalive_enabled = True
         rm2.rules_api = SimpleNamespace(
-            get_open_trades=lambda: [stagnant_trade],
+            get_open_trades=lambda: stagnant_trades,
             get_trades=lambda limit=500: [],
-            post=Mock(side_effect=AssertionError("Keepalive must not open second trade while one is open")),
+            get_max_open_trades=lambda: 3,
+            get_whitelist=lambda: ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "XRP/USDT:USDT"],
+            post=Mock(side_effect=AssertionError("Keepalive must not open trade when 3/3 slots are full")),
         )
         with patch("llm_risk_manager_prop.logger") as log_mock, patch("llm_risk_manager_prop.datetime") as dt_mock:
             dt_mock.now.return_value = stale_now
@@ -928,6 +929,56 @@ class PropAuditRegressionTests(unittest.TestCase):
             dt_mock.fromtimestamp = datetime.fromtimestamp
             rm2._hyrotrader_rules_loop()
         self.assertTrue(any("24-DAY INACTIVITY ALERT" in str(c) for c in log_mock.critical.call_args_list))
+
+        # A9-open-slot: 1/3 open NFIX8 trade on BTC + healthy state -> keeps BTC untouched, runs Keep-Alive on ETH.
+        ka_posts = []
+        ka_exits = []
+        rm2_slot = RiskManager.__new__(RiskManager)
+        rm2_slot.profile = {**self.profile, "phase_start_utc": "2026-04-01T00:00:00Z"}
+        rm2_slot.initial_balance = 5000.0
+        rm2_slot.state = {"nuclear_triggered": False, "data_valid": True, "data_fault": False, "wake_up_lock": False, "macro_paused": False}
+        rm2_slot._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
+        rm2_slot.request_rules_pause = Mock()
+        rm2_slot.inactivity_keepalive_enabled = True
+        rm2_slot.rules_api = SimpleNamespace(
+            get_open_trades=lambda: [stagnant_trades[0]],
+            get_trades=lambda limit=500: [],
+            get_max_open_trades=lambda: 3,
+            get_whitelist=lambda: ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"],
+            post=lambda ep, json=None: ka_posts.append((ep, json)) or {"trade_id": 999, "amount": 0.01, "has_open_orders": False},
+            force_exit=lambda tid: ka_exits.append(tid) or True,
+        )
+        with patch("llm_risk_manager_prop.datetime") as dt_mock:
+            dt_mock.now.return_value = stale_now
+            dt_mock.min = datetime.min
+            dt_mock.fromisoformat = datetime.fromisoformat
+            dt_mock.fromtimestamp = datetime.fromtimestamp
+            rm2_slot._hyrotrader_rules_loop()
+        self.assertEqual(len(ka_posts), 1)
+        self.assertEqual(ka_posts[0][0], "/forceenter")
+        self.assertEqual(ka_posts[0][1]["pair"], "ETH/USDT:USDT")
+        self.assertEqual(ka_exits, [999])  # Never exits NFIX8 trade 201!
+
+        # A9-macro-paused: macro_paused=True suppresses Keep-Alive and triggers alert instead.
+        rm2_paused = RiskManager.__new__(RiskManager)
+        rm2_paused.profile = {**self.profile, "phase_start_utc": "2026-04-01T00:00:00Z"}
+        rm2_paused.initial_balance = 5000.0
+        rm2_paused.state = {"nuclear_triggered": False, "data_valid": True, "data_fault": False, "wake_up_lock": False, "macro_paused": True}
+        rm2_paused._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
+        rm2_paused.request_rules_pause = Mock()
+        rm2_paused.inactivity_keepalive_enabled = True
+        rm2_paused.rules_api = SimpleNamespace(
+            get_open_trades=lambda: [stagnant_trades[0]],
+            get_trades=lambda limit=500: [],
+            post=Mock(side_effect=AssertionError("Keepalive must not open trade during macro_paused")),
+        )
+        with patch("llm_risk_manager_prop.logger") as log_mock_p, patch("llm_risk_manager_prop.datetime") as dt_mock:
+            dt_mock.now.return_value = stale_now
+            dt_mock.min = datetime.min
+            dt_mock.fromisoformat = datetime.fromisoformat
+            dt_mock.fromtimestamp = datetime.fromtimestamp
+            rm2_paused._hyrotrader_rules_loop()
+        self.assertTrue(any("24-DAY INACTIVITY ALERT" in str(c) for c in log_mock_p.critical.call_args_list))
 
         # A9b: Flat account >= 24d executes automatic limit keep-alive and passes RPC + reviewed_policy.
         from freqtrade.enums import SignalDirection, State, TradingMode

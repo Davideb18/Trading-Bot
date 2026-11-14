@@ -1,7 +1,9 @@
 import json
+import sys
 import numpy as np
 import pandas as pd
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.analyze_noncompounded_multiyear import (
     ROOT, FUT_DATA, SPOT_DATA, load_5m_closes
 )
@@ -120,6 +122,9 @@ def run_sliding_one_step():
         })
         
     df_att = pd.DataFrame(attempts)
+    if df_att.empty:
+        print("No cohorts tested (insufficient backtest or dataset data).")
+        return
     pass_rate = df_att["passed"].mean() * 100.0
     pass_days = df_att[df_att["passed"]]["days_taken"]
     
