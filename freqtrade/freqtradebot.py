@@ -891,42 +891,9 @@ class FreqtradeBot(LoggingMixin):
         """
         if not self.config.get("prop_guard_enabled"):
             return None
-        policy = self.config.get("prop_risk_budget")
-        journal = getattr(self, "order_journal", None)
-        if not isinstance(policy, dict) or journal is None or journal.risk_snapshot is None:
-            return None
-        try:
-            max_agg = float(policy["max_aggregate_notional_usdt"])
-            max_slot = float(policy["max_slot_notional_usdt"])
-            snap = journal.risk_snapshot
-            existing = 0.0
-            pair_existing = 0.0
-            for pos in snap.get("positions", []):
-                amt = float(pos.get("amount") or 0.0)
-                mp = float(pos.get("mark_price") or 0.0)
-                if amt > 0 and mp > 0:
-                    val = amt * mp
-                    existing += val
-                    if pos.get("symbol") == pair:
-                        pair_existing += val
-            pending = 0.0
-            pair_pending = 0.0
-            for order in snap.get("open_orders", []):
-                if order.get("reduceOnly") is True:
-                    continue
-                rem = max(0.0, float(order.get("amount") or 0.0) - float(order.get("filled") or 0.0))
-                op = float(order.get("price") or 0.0)
-                if rem > 0 and op > 0:
-                    val = rem * op
-                    pending += val
-                    if order.get("symbol") == pair:
-                        pair_pending += val
-            rem_agg = max(0.0, max_agg - existing - pending)
-            rem_slot = max(0.0, max_slot - pair_existing - pair_pending)
-            # Leave 0.5% cushion for contract step-size / limit-price rounding.
-            return max(0.0, min(rem_agg, rem_slot) * 0.995)
-        except (KeyError, TypeError, ValueError):
-            return None
+        from freqtrade.prop_risk_budget import remaining_notional_headroom
+
+        return remaining_notional_headroom(self.config, getattr(self, "order_journal", None), pair)
 
     def check_and_call_adjust_trade_position(self, trade: Trade):
         """

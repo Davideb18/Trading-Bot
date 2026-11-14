@@ -92,8 +92,6 @@ GEMINI_FALLBACK_MODELS = list(dict.fromkeys([
 # HyroTrader Prop Firm Specific Settings ($5K Trial)
 # ==================================================================================
 # The same non-secret contract is validated against Freqtrade's resolved configuration.
-from freqtrade.prop_profile import profile_from_config
-
 PROFILE_CONFIG = Path(__file__).resolve().parent.parent / "user_data" / "config_prop_nfix8.json"
 
 # Timing
@@ -765,10 +763,6 @@ class SentimentAnalyzer:
             if llm_result:
                 # Anti-Hallucination Dual-Factor Guardrail:
                 if llm_result.get("regime") == "PANIC":
-                    has_catastrophic_headline = any(
-                        any(kw in h.lower() for kw in CATASTROPHIC_KEYWORDS)
-                        for h in headlines
-                    )
                     has_price_collapse = (macro["btc_1h_pct"] <= -3.0 or macro["btc_24h_pct"] <= -6.0)
 
                     if not has_price_collapse:
@@ -925,8 +919,8 @@ class RiskManager(RiskGuard):
         config['user_data_dir'] = STATE_FILE.parent
         profile = validate_deployment(config, config['exchange'], role='supervisor')
         configure_logging()
-        api = FreqtradeAPIClient(FREQTRADE_API_URL, FREQTRADE_USERNAME, FREQTRADE_PASSWORD)
-        api, emergency = independent_supervisor(profile, STATE_FILE, api)
+        control_api = FreqtradeAPIClient(FREQTRADE_API_URL, FREQTRADE_USERNAME, FREQTRADE_PASSWORD)
+        api, emergency = independent_supervisor(profile, STATE_FILE, control_api)
         super().__init__(
             api,
             STATE_FILE,
@@ -936,9 +930,9 @@ class RiskManager(RiskGuard):
             autonomous_rollover=True,
             transient_grace_cycles=3,
         )
-        self.rules_api = FreqtradeAPIClient(FREQTRADE_API_URL, FREQTRADE_USERNAME, FREQTRADE_PASSWORD)
+        self.rules_api = control_api
         self.inactivity_keepalive_enabled = (
-            os.environ.get("PROP_INACTIVITY_KEEPALIVE", "false").lower() == "true"
+            os.environ.get("PROP_INACTIVITY_KEEPALIVE", "true").lower() == "true"
         )
         self._alert_timestamps: dict[str, float] = {}
         self.sentiment = SentimentAnalyzer(GEMINI_API_KEY)
@@ -1019,6 +1013,35 @@ class RiskManager(RiskGuard):
                 return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
             except Exception:
                 return None
+
+        def reconcile_keepalive(open_list: list, now_dt: datetime) -> bool:
+            ka_trades = [tr for tr in open_list if isinstance(tr, dict) and tr.get("enter_tag") == "force_entry"]
+            for tr in ka_trades:
+                tid = tr.get("trade_id")
+                if tid is None:
+                    continue
+                filled = float(tr.get("amount") or 0.0)
+                has_open = bool(tr.get("has_open_orders", False))
+                orders = tr.get("orders")
+                exit_open = isinstance(orders, list) and any(
+                    isinstance(o, dict) and o.get("is_open") and o.get("ft_is_entry") is False for o in orders
+                )
+                raw_ts = tr.get("open_timestamp")
+                if isinstance(raw_ts, (int, float)) and not isinstance(raw_ts, bool) and raw_ts < 1e12:
+                    raw_ts = raw_ts * 1000.0
+                open_dt = parse_dt(raw_ts or tr.get("open_date_utc") or tr.get("open_date"))
+                age_s = max(0.0, (now_dt - open_dt).total_seconds()) if open_dt else 0.0
+                if filled > 0.0 and not has_open:
+                    logger.info("Keep-alive trade_id=%s filled (amount=%s); executing force_exit.", tid, filled)
+                    self.rules_api.force_exit(tid)
+                elif has_open and exit_open:
+                    if age_s >= 60.0:
+                        logger.warning("Keep-alive exit still open for trade_id=%s after %.0fs.", tid, age_s)
+                elif age_s >= 30.0:
+                    logger.warning("Keep-alive trade_id=%s unsettled for %.0fs; issuing force_exit.", tid, age_s)
+                    if self.rules_api.force_exit(tid) and filled <= 0.0:
+                        self._last_keepalive_ts = 0.0
+            return bool(ka_trades)
 
         transient_failures = 0
         while not self._shutdown.is_set():
@@ -1105,8 +1128,15 @@ class RiskManager(RiskGuard):
                 elif phase_start is not None:
                     inactivity_days = max(0, (now_utc - phase_start).days)
 
+                keepalive_enabled = bool(getattr(self, "inactivity_keepalive_enabled", False))
+                now_ts = now_utc.timestamp()
+                has_open_keepalive = (
+                    reconcile_keepalive(open_trades, now_utc)
+                    if (keepalive_enabled and not self.nuclear_triggered)
+                    else False
+                )
+
                 if inactivity_days >= 24 and not self.nuclear_triggered:
-                    keepalive_enabled = bool(getattr(self, "inactivity_keepalive_enabled", False))
                     state = getattr(self, "state", {})
                     healthy_for_keepalive = (
                         keepalive_enabled
@@ -1116,33 +1146,45 @@ class RiskManager(RiskGuard):
                         and not state.get("data_fault")
                         and not state.get("wake_up_lock")
                     )
-                    now_ts = now_utc.timestamp()
                     last_ka = float(getattr(self, "_last_keepalive_ts", 0.0) or 0.0)
-                    if healthy_for_keepalive and (now_ts - last_ka >= 86400.0):
-                        self._last_keepalive_ts = now_ts
+                    last_ka_err = float(getattr(self, "_last_keepalive_err_ts", 0.0) or 0.0)
+                    if has_open_keepalive:
+                        logger.info("Keep-alive trade open/settling (%dd flat); deferring new entry/alert.", inactivity_days)
+                    elif healthy_for_keepalive and (now_ts - last_ka >= 86400.0) and (now_ts - last_ka_err >= 60.0):
                         logger.warning(
                             "⚠️ HYROTRADER 24-DAY INACTIVITY KEEP-ALIVE: Executing micro-trade on BTC/USDT:USDT (%d days flat).",
                             inactivity_days,
                         )
                         entered = self.rules_api.post(
                             "/forceenter",
-                            json={
-                                "pair": "BTC/USDT:USDT",
-                                "side": "long",
-                                "ordertype": "market",
-                                "stakeamount": 15.0,
-                            },
+                            json={"pair": "BTC/USDT:USDT", "side": "long", "ordertype": "limit", "stakeamount": 15.0},
                         )
                         trade_id = entered.get("trade_id") if isinstance(entered, dict) else None
                         if trade_id is not None:
-                            self.rules_api.force_exit(trade_id)
+                            self._last_keepalive_ts, self._last_keepalive_err_ts = now_ts, 0.0
+                            pending_fill = bool(entered.get("has_open_orders")) or (
+                                "amount" in entered and float(entered.get("amount") or 0.0) <= 0.0
+                            )
+                            if not pending_fill:
+                                self.rules_api.force_exit(trade_id)
+                            else:
+                                logger.info("Keep-alive trade_id=%s pending fill; deferring force_exit.", trade_id)
                         else:
-                            logger.error("Keep-alive forceenter did not return a verified trade_id; skipping force_exit.")
-                    else:
+                            self._last_keepalive_err_ts = now_ts
+                            logger.error("Keep-alive forceenter did not return a verified trade_id; skipping force_exit (retry 60s).")
+                            if notifier:
+                                notifier(
+                                    "inactivity_critical",
+                                    f"🚨 HyroTrader Keep-Alive Failed at {inactivity_days}d inactivity; retrying.",
+                                    min_interval_sec=43200.0,
+                                )
+                    elif not healthy_for_keepalive:
                         logger.critical(
                             "🚨 HYROTRADER 24-DAY INACTIVITY ALERT (%d days flat). "
-                            "Automated force-entry is disabled by safety policy; manual operator review required before 30d limit.",
-                            inactivity_days
+                            "Keep-alive deferred (open_trades=%d, enabled=%s); operator review required before 30d limit.",
+                            inactivity_days,
+                            len(open_trades),
+                            keepalive_enabled,
                         )
                         if notifier:
                             notifier(

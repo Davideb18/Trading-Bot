@@ -10,7 +10,7 @@ import tempfile
 import time
 import unittest
 from contextlib import nullcontext
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -24,14 +24,14 @@ from freqtrade.freqtradebot import FreqtradeBot
 from freqtrade.order_journal import OrderJournal
 from freqtrade.prop_capital import prop_capital_available
 from freqtrade.prop_controls import read_control, sync_prop_controls
-from freqtrade.prop_profile import profile_from_config, validate_baseline
+from freqtrade.prop_profile import profile_from_config
 from freqtrade.prop_risk_approval import reviewed_policy
 from freqtrade.prop_security import supervisor_config, validate_deployment
 from freqtrade.supervisor_bybit import AccountMismatch, SupervisorBybit, UnverifiedAccount
 from llm_risk_manager_prop import BinanceMacroMonitor, RiskManager
 from prop_approve_config import approve_and_bind_config, build_flat_initial_baseline
 from prop_independent import IndependentRiskAPI
-from prop_risk_guard import RiskGuard, finite_number, market_crash, reconciled_state
+from prop_risk_guard import RiskGuard, reconciled_state
 from test_prop_profile import baseline, configured_account
 
 
@@ -587,7 +587,7 @@ class BlindAuditRegressionTests(unittest.TestCase):
         sup_env = sup["environment"]
         self.assertEqual(sup_env.get("PROP_TELEGRAM_BOT_TOKEN"), "${PROP_TELEGRAM_BOT_TOKEN:-}")
         self.assertEqual(sup_env.get("PROP_TELEGRAM_CHAT_ID"), "${PROP_TELEGRAM_CHAT_ID:-}")
-        self.assertEqual(sup_env.get("PROP_INACTIVITY_KEEPALIVE"), "${PROP_INACTIVITY_KEEPALIVE:-false}")
+        self.assertEqual(sup_env.get("PROP_INACTIVITY_KEEPALIVE"), "${PROP_INACTIVITY_KEEPALIVE:-true}")
 
         proc = subprocess.run(
             [sys.executable, "-c", "import runpy, sys; sys.argv=['scripts/prop_secure_start.py']; runpy.run_path('scripts/prop_secure_start.py', run_name='__main__')"],
@@ -858,7 +858,6 @@ class PropAuditRegressionTests(unittest.TestCase):
         self.assertEqual(len(wallet_seq), 0)  # Verified parity loop ran attempt 1 (failed) + attempt 2 (passed)
 
     def test_a5_a8_a9_hyrotrader_rules_cap_multiday_derisk_and_inactivity(self):
-        now = datetime(2026, 4, 20, 12, 0, 0, tzinfo=UTC)
         d1 = datetime(2026, 4, 15, 14, 0, 0, tzinfo=UTC)
         d2 = datetime(2026, 4, 16, 14, 0, 0, tzinfo=UTC)
         d3 = datetime(2026, 4, 17, 14, 0, 0, tzinfo=UTC)
@@ -929,6 +928,109 @@ class PropAuditRegressionTests(unittest.TestCase):
             dt_mock.fromtimestamp = datetime.fromtimestamp
             rm2._hyrotrader_rules_loop()
         self.assertTrue(any("24-DAY INACTIVITY ALERT" in str(c) for c in log_mock.critical.call_args_list))
+
+        # A9b: Flat account >= 24d executes automatic limit keep-alive and passes RPC + reviewed_policy.
+        from freqtrade.enums import SignalDirection, State, TradingMode
+        from freqtrade.rpc.rpc import RPC
+
+        entered_payloads = []
+        exited_ids = []
+        exec_entries = []
+        fake_trade = SimpleNamespace(id=303, is_open=True, pair="BTC/USDT:USDT")
+        fake_ft = SimpleNamespace(
+            config={**self.account_cfg, "prop_guard_enabled": True, "force_entry_enable": False, "max_open_trades": 3, "stake_currency": "USDT"},
+            state=State.RUNNING,
+            trading_mode=TradingMode.FUTURES,
+            _exit_lock=nullcontext(),
+            strategy=SimpleNamespace(order_types={"entry": "limit", "force_entry": "limit"}, stoploss=-0.10),
+            exchange=SimpleNamespace(
+                get_markets=lambda tradable_only=True: {"BTC/USDT:USDT": {"active": True}},
+                get_pair_quote_currency=lambda p: "USDT",
+                get_rate=lambda p, side="exit", is_short=False, refresh=True: 100000.0,
+                get_min_pair_stake_amount=lambda p, price, sl, lev: 100.0,
+            ),
+            wallets=SimpleNamespace(get_trade_stake_amount=lambda p, m: 333.33),
+            execute_entry=lambda pair, stake, price, **kw: (exec_entries.append((pair, stake, price, kw)) or True),
+        )
+        rpc_obj = RPC.__new__(RPC)
+        rpc_obj._freqtrade = fake_ft
+        rpc_obj._config = fake_ft.config
+
+        def _fake_post(endpoint, json=None):
+            entered_payloads.append((endpoint, json))
+            with patch("freqtrade.rpc.rpc.Trade") as tr_mock:
+                tr_mock.is_open.is_.return_value = True
+                tr_mock.pair.__eq__.return_value = True
+                tr_mock.get_trades.side_effect = [
+                    SimpleNamespace(first=lambda: None),
+                    SimpleNamespace(first=lambda: fake_trade),
+                ]
+                tr_mock.get_open_trade_count.return_value = 0
+                t = rpc_obj._rpc_force_entry(
+                    json["pair"],
+                    None,
+                    order_type=json["ordertype"],
+                    order_side=SignalDirection.LONG,
+                    stake_amount=json["stakeamount"],
+                )
+            return {"trade_id": t.id}
+
+        rm3 = RiskManager.__new__(RiskManager)
+        rm3.profile = {**self.profile, "phase_start_utc": "2026-04-01T00:00:00Z"}
+        rm3.initial_balance = 5000.0
+        rm3.state = {"nuclear_triggered": False, "data_valid": True, "data_fault": False, "wake_up_lock": False}
+        rm3._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
+        rm3.request_rules_pause = Mock()
+        rm3.inactivity_keepalive_enabled = True
+        rm3.rules_api = SimpleNamespace(
+            get_open_trades=lambda: [],
+            get_trades=lambda limit=500: [],
+            post=_fake_post,
+            force_exit=lambda tid: exited_ids.append(tid) or True,
+        )
+        with patch("llm_risk_manager_prop.datetime") as dt_mock:
+            dt_mock.now.return_value = stale_now
+            dt_mock.min = datetime.min
+            dt_mock.fromisoformat = datetime.fromisoformat
+            dt_mock.fromtimestamp = datetime.fromtimestamp
+            rm3._hyrotrader_rules_loop()
+        self.assertEqual(
+            entered_payloads,
+            [("/forceenter", {"pair": "BTC/USDT:USDT", "side": "long", "ordertype": "limit", "stakeamount": 15.0})],
+        )
+        self.assertEqual(exited_ids, [303])
+        self.assertEqual(len(exec_entries), 1)
+        ep_pair, ep_stake, ep_price, ep_kw = exec_entries[0]
+        self.assertEqual(ep_pair, "BTC/USDT:USDT")
+        self.assertEqual(ep_kw["ordertype"], "limit")
+        self.assertAlmostEqual(ep_stake, 105.0, places=2)
+        self.assertAlmostEqual(ep_price, 100100.0, places=2)
+        approved_cfg = approve_and_bind_config(
+            self.account_cfg,
+            account_id="987654321",
+            challenge_id="HYRO-1STEP-42",
+            environment="demo",
+            reference="audit-ticket-001",
+        )
+        approved_prof = profile_from_config(approved_cfg)
+        self.assertTrue(
+            reviewed_policy(
+                approved_prof,
+                approved_cfg["prop_risk_budget"],
+                approved_cfg,
+                {"leverage": 1.0, "ordertype": ep_kw["ordertype"], "time_in_force": "GTC"},
+                {},
+            )
+        )
+        self.assertFalse(
+            reviewed_policy(
+                approved_prof,
+                approved_cfg["prop_risk_budget"],
+                approved_cfg,
+                {"leverage": 1.0, "ordertype": "market", "time_in_force": "GTC"},
+                {},
+            )
+        )
 
     def test_midnight_transient_rollover_atomicity_and_pre_baseline_outage_no_fault(self):
         day1 = datetime(2026, 11, 10, 23, 59, 55, tzinfo=UTC)
@@ -1326,6 +1428,203 @@ class PropAuditRegressionTests(unittest.TestCase):
         self.assertEqual(tracker.stop_calls_inside_budget, [False])
         self.assertEqual(tracker.budgets, [12.0])
         self.assertTrue(guard_run.state["transient_paused"])
+
+    def test_keepalive_async_limit_fill_and_reconciliation(self):
+        from llm_risk_manager_prop import RiskManager
+
+        base_now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
+        now_box = [base_now]
+        exited = []
+        open_trades_box = [[]]
+        recent_trades_box = [[]]
+
+        class _FakeDT:
+            @staticmethod
+            def now(tz=None):
+                return now_box[0]
+
+            @staticmethod
+            def fromtimestamp(ts, tz=None):
+                return datetime.fromtimestamp(ts, tz=tz)
+
+            @staticmethod
+            def fromisoformat(s):
+                return datetime.fromisoformat(s)
+
+        rm = RiskManager.__new__(RiskManager)
+        rm.profile = {**self.profile, "phase_start_utc": "2026-04-01T00:00:00Z"}
+        rm.initial_balance = 5000.0
+        rm.state = {"nuclear_triggered": False, "data_valid": True, "data_fault": False, "wake_up_lock": False}
+        rm.inactivity_keepalive_enabled = True
+        rm.request_rules_pause = Mock()
+        post_responses = iter([None, {"trade_id": 88, "amount": 0.0, "has_open_orders": True}])
+        posted = []
+
+        def _post(ep, json=None):
+            posted.append((ep, json))
+            return next(post_responses)
+
+        rm.rules_api = SimpleNamespace(
+            get_open_trades=lambda: open_trades_box[0],
+            get_trades=lambda limit=500: recent_trades_box[0],
+            post=_post,
+            force_exit=lambda tid: exited.append(tid) or True,
+        )
+
+        # 1) Transient /forceenter failure must NOT lock out keep-alive for 24h (only 60s retry backoff)
+        rm._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
+        with patch("llm_risk_manager_prop.datetime", _FakeDT):
+            RiskManager._hyrotrader_rules_loop(rm)
+        self.assertEqual(len(posted), 1)
+        self.assertEqual(exited, [])
+        self.assertEqual(getattr(rm, "_last_keepalive_ts", 0.0), 0.0)
+
+        # Within 60s error backoff, must not retry yet
+        now_box[0] = base_now + timedelta(seconds=20)
+        rm._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
+        with patch("llm_risk_manager_prop.datetime", _FakeDT):
+            RiskManager._hyrotrader_rules_loop(rm)
+        self.assertEqual(len(posted), 1)
+
+        # After 60s backoff, retry succeeds with async unfilled limit order (amount=0, has_open_orders=True)
+        now_box[0] = base_now + timedelta(seconds=65)
+        rm._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
+        with patch("llm_risk_manager_prop.datetime", _FakeDT):
+            RiskManager._hyrotrader_rules_loop(rm)
+        self.assertEqual(len(posted), 2)
+        self.assertEqual(exited, [])  # MUST NOT cancel before exchange fills!
+        self.assertGreater(rm._last_keepalive_ts, 0.0)
+
+        # Cycle 2 (+5s): order still settling -> waits quietly without force_exit or duplicate /forceenter
+        now_box[0] = base_now + timedelta(seconds=70)
+        open_trades_box[0] = [
+            {
+                "trade_id": 88,
+                "enter_tag": "force_entry",
+                "amount": 0.0,
+                "has_open_orders": True,
+                "open_timestamp": int((base_now + timedelta(seconds=65)).timestamp() * 1000),
+            }
+        ]
+        rm._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
+        with patch("llm_risk_manager_prop.datetime", _FakeDT):
+            RiskManager._hyrotrader_rules_loop(rm)
+        self.assertEqual(len(posted), 2)
+        self.assertEqual(exited, [])
+
+        # Cycle 3 (+10s): entry filled AND its filled order already reset inactivity_days to 0 -> STILL must exit!
+        now_box[0] = base_now + timedelta(seconds=75)
+        open_trades_box[0] = [
+            {
+                "trade_id": 88,
+                "enter_tag": "force_entry",
+                "amount": 0.001,
+                "has_open_orders": False,
+                "open_timestamp": int((base_now + timedelta(seconds=65)).timestamp() * 1000),
+                "orders": [
+                    {
+                        "order_id": "ka-1",
+                        "status": "closed",
+                        "filled": 0.001,
+                        "is_open": False,
+                        "ft_is_entry": True,
+                        "order_filled_timestamp": int((base_now + timedelta(seconds=72)).timestamp() * 1000),
+                    }
+                ],
+            }
+        ]
+        rm._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
+        with patch("llm_risk_manager_prop.datetime", _FakeDT):
+            RiskManager._hyrotrader_rules_loop(rm)
+        self.assertEqual(exited, [88])
+
+        # Exit order now open in flight -> must NOT re-issue force_exit redundantly
+        now_box[0] = base_now + timedelta(seconds=78)
+        open_trades_box[0][0]["has_open_orders"] = True
+        open_trades_box[0][0]["orders"].append(
+            {"order_id": "ka-exit-1", "status": "open", "is_open": True, "ft_is_entry": False}
+        )
+        rm._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
+        with patch("llm_risk_manager_prop.datetime", _FakeDT):
+            RiskManager._hyrotrader_rules_loop(rm)
+        self.assertEqual(exited, [88])
+
+        # Stale unfilled keep-alive limit order (>= 30s) -> cancels via force_exit and clears 24h cooldown
+        now_box[0] = base_now + timedelta(seconds=120)
+        open_trades_box[0] = [
+            {
+                "trade_id": 89,
+                "enter_tag": "force_entry",
+                "amount": 0.0,
+                "has_open_orders": True,
+                "open_timestamp": int((base_now + timedelta(seconds=80)).timestamp() * 1000),
+            }
+        ]
+        rm._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
+        with patch("llm_risk_manager_prop.datetime", _FakeDT):
+            RiskManager._hyrotrader_rules_loop(rm)
+        self.assertEqual(exited, [88, 89])
+        self.assertEqual(rm._last_keepalive_ts, 0.0)
+
+    def test_rpc_force_entry_crosses_ask_with_other_price_side(self):
+        from contextlib import nullcontext
+
+        from freqtrade.enums import State, TradingMode
+        from freqtrade.rpc.rpc import RPC
+
+        entered_calls = []
+
+        class _FakeFt:
+            def __init__(self, entry_ps, exit_ps):
+                self.state = State.RUNNING
+                self.trading_mode = TradingMode.FUTURES
+                self._exit_lock = nullcontext()
+                self.config = {
+                    **self_account_cfg,
+                    "prop_guard_enabled": True,
+                    "force_entry_enable": False,
+                    "max_open_trades": 3,
+                    "stake_currency": "USDT",
+                    "entry_pricing": {"price_side": entry_ps},
+                    "exit_pricing": {"price_side": exit_ps},
+                }
+                self.strategy = SimpleNamespace(order_types={"entry": "limit", "force_entry": "limit"}, stoploss=-0.99)
+                self.exchange = SimpleNamespace(
+                    get_markets=lambda tradable_only=True: {"BTC/USDT:USDT": {"active": True}},
+                    get_pair_quote_currency=lambda p: "USDT",
+                    get_rate=lambda p, side="entry", is_short=False, refresh=True: 90200.0 if side == "entry" else 90000.0,
+                    price_to_precision=lambda p, r: round(r, 1),
+                    get_min_pair_stake_amount=lambda p, price, sl, lev: 100.0,
+                )
+                self.wallets = SimpleNamespace(get_trade_stake_amount=lambda p, m: 333.33)
+
+            def execute_entry(self, pair, stake_amount, price, **kw):
+                entered_calls.append((pair, stake_amount, price, kw))
+                return True
+
+        self_account_cfg = self.account_cfg
+        fake_trade = SimpleNamespace(id=304, is_open=True, pair="BTC/USDT:USDT")
+        for entry_ps, exit_ps, expected_base in [("other", "other", 90200.0), ("same", "same", 90000.0)]:
+            entered_calls.clear()
+            rpc_obj = RPC.__new__(RPC)
+            rpc_obj._freqtrade = _FakeFt(entry_ps, exit_ps)
+            rpc_obj._config = rpc_obj._freqtrade.config
+            with patch("freqtrade.rpc.rpc.Trade") as tr_mock:
+                tr_mock.is_open.is_.return_value = True
+                tr_mock.pair.__eq__.return_value = True
+                tr_mock.get_open_trade_count.return_value = 0
+                tr_mock.get_trades.side_effect = [
+                    SimpleNamespace(first=lambda: None),
+                    SimpleNamespace(first=lambda: fake_trade),
+                ]
+                rpc_obj._rpc_force_entry(
+                    "BTC/USDT:USDT", price=None, order_type="market", stake_amount=15.0
+                )
+            self.assertEqual(len(entered_calls), 1)
+            _, stake, price, kw = entered_calls[0]
+            self.assertEqual(kw["ordertype"], "limit")
+            self.assertAlmostEqual(price, expected_base * 1.001, places=6)
+            self.assertGreaterEqual(stake, 100.0)
 
 
 if __name__ == "__main__":

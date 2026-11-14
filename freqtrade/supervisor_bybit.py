@@ -144,17 +144,24 @@ class SupervisorBybit:
                                    "read": {**self.last_read, "component": "equity"}}
         return equity[0]
 
-    def _pages(self, endpoint, params):
+    def _pages(self, endpoint, params, *, check_category=True):
         rows, seen = [], set()
-        request = {"category": "linear", "limit": 50, **params}
+        request = (
+            {"category": "linear", "limit": 50, **params}
+            if check_category
+            else {"limit": 50, **params}
+        )
         for _ in range(1000):
             result = self._call(endpoint, request.copy()).get("result")
-            if (not isinstance(result, dict) or result.get("category") != request["category"]
-                    or not isinstance(result.get("list"), list)):
+            if (
+                not isinstance(result, dict)
+                or (check_category and result.get("category") != request["category"])
+                or not isinstance(result.get("list"), list)
+            ):
                 raise UnverifiedAccount("Incomplete account page")
             rows.extend(result["list"])
-            cursor = result["nextPageCursor"]
-            if cursor == "":
+            cursor = result["nextPageCursor"] if check_category else result.get("nextPageCursor", "")
+            if not cursor:
                 return rows
             if not isinstance(cursor, str) or cursor in seen:
                 raise UnverifiedAccount("Invalid pagination")
@@ -274,28 +281,14 @@ class SupervisorBybit:
             if self.account_type == "UNIFIED"
             else self.api.privateGetV5AccountContractTransactionLog
         )
-        rows, seen = [], set()
         request = {
             "currency": self.profile["currency"],
             "startTime": int(start_ms),
             "endTime": int(end_ms),
-            "limit": 50,
         }
         if self.account_type == "UNIFIED":
             request["accountType"] = "UNIFIED"
-        for _ in range(1000):
-            result = self._call(endpoint, request.copy()).get("result")
-            if not isinstance(result, dict) or not isinstance(result.get("list"), list):
-                raise UnverifiedAccount("Incomplete Bybit transaction log page")
-            rows.extend(result["list"])
-            cursor = result.get("nextPageCursor", "")
-            if not cursor:
-                return rows
-            if not isinstance(cursor, str) or cursor in seen:
-                raise UnverifiedAccount("Invalid transaction log pagination")
-            seen.add(cursor)
-            request["cursor"] = cursor
-        raise UnverifiedAccount("Incomplete transaction log pagination")
+        return self._pages(endpoint, request, check_category=False)
 
     def _reconstruct_pair_midnight(self, pair, pos_info, pair_fills, get_closed_pnl):
         """Walk backward from current position across post-midnight fills to 00:00:00 UTC."""

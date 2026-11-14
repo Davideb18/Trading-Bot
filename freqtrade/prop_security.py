@@ -190,7 +190,10 @@ def commission_deployment(config, exchange, *, baseline, now=None, halted=False,
     from datetime import datetime, timezone
     from freqtrade.order_journal import OrderJournal
     from freqtrade.prop_profile import validate_baseline
-    from prop_risk_guard import reconciled_state
+    try:
+        from prop_risk_guard import reconciled_state
+    except ModuleNotFoundError:
+        from scripts.prop_risk_guard import reconciled_state
 
     env = os.environ if environ is None else environ
     os.umask(0o077)

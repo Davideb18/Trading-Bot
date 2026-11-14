@@ -1212,7 +1212,10 @@ class RPC:
             return {"result": f"Created exit order for trade {trade_id}."}
 
     def _force_entry_validations(self, pair: str, order_side: SignalDirection):
-        if not self._freqtrade.config.get("force_entry_enable", False):
+        if not (
+            self._freqtrade.config.get("force_entry_enable", False)
+            or self._freqtrade.config.get("prop_guard_enabled", False)
+        ):
             raise RPCException("Force_entry not enabled.")
 
         if self._freqtrade.state != State.RUNNING:
@@ -1274,7 +1277,23 @@ class RPC:
             )
 
         # execute buy
-        if not order_type:
+        if self._freqtrade.config.get("prop_guard_enabled", False):
+            order_type = self._freqtrade.strategy.order_types.get(
+                "force_entry", self._freqtrade.strategy.order_types["entry"]
+            )
+            if price is None:
+                entry_ps = (self._freqtrade.config.get("entry_pricing") or {}).get("price_side", "other")
+                exit_ps = (self._freqtrade.config.get("exit_pricing") or {}).get("price_side", "same")
+                rate_side = "exit" if (entry_ps == "same" and exit_ps == "same") else "entry"
+                opp_rate = self._freqtrade.exchange.get_rate(pair, side=rate_side, is_short=is_short, refresh=True)
+                if opp_rate:
+                    price = float(opp_rate) * (0.999 if is_short else 1.001)
+            min_stake = self._freqtrade.exchange.get_min_pair_stake_amount(
+                pair, price or 0.0, self._freqtrade.strategy.stoploss, leverage or 1.0
+            )
+            if min_stake and stake_amount and stake_amount < min_stake:
+                stake_amount = round(float(min_stake) * 1.05, 2)
+        elif not order_type:
             order_type = self._freqtrade.strategy.order_types.get(
                 "force_entry", self._freqtrade.strategy.order_types["entry"]
             )

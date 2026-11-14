@@ -11,7 +11,7 @@ from freqtrade.exchange import Exchange
 from freqtrade.exchange.common import retrier
 from freqtrade.exchange.exchange_types import CcxtOrder, FtHas
 from freqtrade.misc import deep_merge_dicts
-from freqtrade.order_recovery import normalized_order_quantities
+from freqtrade.order_recovery import populate_order_quantities
 from freqtrade.util import dt_from_ts, dt_ts
 
 
@@ -62,12 +62,7 @@ class Bybit(Exchange):
 
     def _order_contracts_to_amount(self, order: CcxtOrder) -> CcxtOrder:
         if order.get("status") == "rejected" and order.get("filled") is None:
-            raw = order.get("info") if isinstance(order.get("info"), dict) else None
-            _, filled, remaining = normalized_order_quantities(order, raw=raw)
-            if filled is not None:
-                order["filled"] = filled
-            if remaining is not None:
-                order["remaining"] = remaining
+            populate_order_quantities(order)
         return super()._order_contracts_to_amount(order)
 
     def fetch_journal_snapshot(self, intents):
@@ -78,17 +73,14 @@ class Bybit(Exchange):
         """
         import json
 
-        from freqtrade.order_recovery import normalized_order_quantities
+        from freqtrade.order_recovery import populate_order_quantities
         from freqtrade.snapshot_freshness import validate_snapshot
         reads = []
 
         def parse(raw):
-            parsed = self._api.parse_order(raw, self._journal_market(raw))
-            _, filled, remaining = normalized_order_quantities(parsed, raw=raw)
-            if parsed.get("filled") is None and filled is not None:
-                parsed["filled"] = filled
-            if parsed.get("remaining") is None and remaining is not None:
-                parsed["remaining"] = remaining
+            parsed = populate_order_quantities(
+                self._api.parse_order(raw, self._journal_market(raw)), raw=raw
+            )
             return self._order_contracts_to_amount(parsed)
 
         opened = self._journal_pages(self._api.privateGetV5OrderRealtime,

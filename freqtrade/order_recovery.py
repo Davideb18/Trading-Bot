@@ -91,16 +91,27 @@ def verified_prop_cancel(bot, trade, local_order, trade_model, *, terminal_evide
                 or not math.isclose(order["amount"], local_order.amount, rel_tol=1e-8, abs_tol=1e-12)
                 or order["status"] == "open"):
             return None
-        _, norm_filled, norm_remaining = normalized_order_quantities(
-            order,
-            raw=order.get("info") if isinstance(order.get("info"), dict) else None,
-            local_filled=getattr(local_order, "filled", None),
+        return populate_order_quantities(
+            dict(order), local_filled=getattr(local_order, "filled", None)
         )
-        if order.get("filled") is None and norm_filled is not None:
-            return {**order, "filled": norm_filled, "remaining": norm_remaining}
-        return order
     except (ExchangeError, ValueError, TypeError, KeyError):
         return None
+
+
+def populate_order_quantities(order, *, raw=None, local_filled=None):
+    """Populate missing filled/remaining fields when deterministically known (e.g. Bybit Rejected)."""
+    if order.get("filled") is None or order.get("remaining") is None:
+        raw_info = raw if isinstance(raw, dict) else (
+            order.get("info") if isinstance(order.get("info"), dict) else None
+        )
+        _, filled, remaining = normalized_order_quantities(
+            order, raw=raw_info, local_filled=local_filled
+        )
+        if order.get("filled") is None and filled is not None:
+            order["filled"] = filled
+        if order.get("remaining") is None and remaining is not None:
+            order["remaining"] = remaining
+    return order
 
 
 def order_evidence_valid(order, local_order, pair):

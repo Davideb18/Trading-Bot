@@ -119,35 +119,10 @@ def _evaluate_validated_budget(profile, policy, request, detail, snapshot, confi
         raise ValueError("Explicit order pair required")
     req_amount = quantity(request["amount"])
     req_notional = Decimal(str(req_amount)) * Decimal(str(float(req_rate)))
-
-    pair_notional = req_notional
-    existing_notional = Decimal("0")
-    for pos in snapshot["positions"]:
-        amt = quantity(pos["amount"])
-        if amt <= 0:
-            continue
-        mp = pos.get("mark_price")
-        if not number(mp) or float(mp) <= 0:
-            raise ValueError(f"Missing verified mark_price for open position {pos.get('symbol')}")
-        pos_val = Decimal(str(amt)) * Decimal(str(float(mp)))
-        existing_notional += pos_val
-        if pos.get("symbol") == req_pair:
-            pair_notional += pos_val
-
-    pending_notional = Decimal("0")
-    for order in snapshot["open_orders"]:
-        if order.get("reduceOnly") is True:
-            continue
-        rem = quantity(order["amount"]) - quantity(order["filled"])
-        if rem <= 0:
-            continue
-        op = order.get("price")
-        if not number(op) or float(op) <= 0:
-            raise ValueError(f"Missing limit price for open entry order {order.get('id')}")
-        ord_val = Decimal(str(rem)) * Decimal(str(float(op)))
-        pending_notional += ord_val
-        if order.get("symbol") == req_pair:
-            pair_notional += ord_val
+    existing_notional, pending_notional, pair_existing = _snapshot_notionals(
+        snapshot, req_pair, strict=True
+    )
+    pair_notional = req_notional + pair_existing
 
     aggregate_notional = existing_notional + pending_notional + req_notional
     total_cost_bps = fee_bps + funding_bps
@@ -178,6 +153,64 @@ def _evaluate_validated_budget(profile, policy, request, detail, snapshot, confi
     else:
         detail["authorized"] = True
         detail["reason"] = "authorized"
+
+
+def _snapshot_notionals(snapshot: dict, req_pair: str, *, strict: bool = True):
+    existing_notional = Decimal("0")
+    pending_notional = Decimal("0")
+    pair_notional = Decimal("0")
+    for pos in snapshot["positions"] if strict else (snapshot.get("positions") or ()):
+        amt = quantity(pos["amount"]) if strict else quantity(pos.get("amount") or 0.0)
+        if amt <= 0:
+            continue
+        mp = pos.get("mark_price")
+        if not number(mp) or float(mp) <= 0:
+            if strict:
+                raise ValueError(f"Missing verified mark_price for open position {pos.get('symbol')}")
+            continue
+        pos_val = Decimal(str(amt)) * Decimal(str(float(mp)))
+        existing_notional += pos_val
+        if pos.get("symbol") == req_pair:
+            pair_notional += pos_val
+    for order in snapshot["open_orders"] if strict else (snapshot.get("open_orders") or ()):
+        if order.get("reduceOnly") is True:
+            continue
+        amt = quantity(order["amount"]) if strict else quantity(order.get("amount") or 0.0)
+        fil = quantity(order["filled"]) if strict else quantity(order.get("filled") or 0.0)
+        rem = amt - fil
+        if rem <= 0:
+            continue
+        op = order.get("price")
+        if not number(op) or float(op) <= 0:
+            if strict:
+                raise ValueError(f"Missing limit price for open entry order {order.get('id')}")
+            continue
+        ord_val = Decimal(str(rem)) * Decimal(str(float(op)))
+        pending_notional += ord_val
+        if order.get("symbol") == req_pair:
+            pair_notional += ord_val
+    return existing_notional, pending_notional, pair_notional
+
+
+def remaining_notional_headroom(config: dict, journal, pair: str) -> float | None:
+    """Return remaining conservative USDT stake headroom for `pair` under prop notional caps."""
+    if not config.get("prop_guard_enabled"):
+        return None
+    policy = config.get("prop_risk_budget")
+    snap = getattr(journal, "risk_snapshot", None) if journal is not None else None
+    if not isinstance(policy, dict) or not isinstance(snap, dict):
+        return None
+    try:
+        max_agg = float(policy["max_aggregate_notional_usdt"])
+        max_slot = float(policy["max_slot_notional_usdt"])
+        if max_agg <= 0 or max_slot <= 0:
+            return None
+        existing_n, pending_n, pair_n = _snapshot_notionals(snap, pair, strict=False)
+        rem_agg = max(0.0, max_agg - float(existing_n) - float(pending_n))
+        rem_slot = max(0.0, max_slot - float(pair_n))
+        return max(0.0, min(rem_agg, rem_slot) * 0.995)
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def require_risk_budget(bot, request, trade_id=None):

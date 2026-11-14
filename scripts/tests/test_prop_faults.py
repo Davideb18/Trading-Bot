@@ -529,7 +529,7 @@ class HttpTests(unittest.TestCase):
         Worker._hyrotrader_rules_loop(mgr)
         post_mock.assert_called_once_with(
             "/forceenter",
-            json={"pair": "BTC/USDT:USDT", "side": "long", "ordertype": "market", "stakeamount": 15.0},
+            json={"pair": "BTC/USDT:USDT", "side": "long", "ordertype": "limit", "stakeamount": 15.0},
         )
         force_exit_mock.assert_called_once_with(99)
 

@@ -1,5 +1,4 @@
 """Container preflight before Freqtrade logging, HTTP clients or worker imports."""
-from datetime import datetime, timezone
 import json
 import os
 import runpy
