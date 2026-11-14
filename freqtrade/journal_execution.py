@@ -78,7 +78,6 @@ def reconcile_journal(bot, trade_model):
         return
     with getattr(journal, "exec_mutex", journal.mutex):
         with journal.mutex:
-            journal.ready = False
             trades = trade_model.get_trades_proxy()
             orders, positions = {}, {}
             for trade in trades:

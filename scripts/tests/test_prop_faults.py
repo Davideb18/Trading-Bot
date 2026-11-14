@@ -426,14 +426,27 @@ class FaultTests(unittest.TestCase):
         status = control_status(self.bot, Trade, Order)
         elapsed = time.monotonic() - start
         self.assertLess(elapsed, 0.2)
-        self.assertFalse(status["verified"])
-        self.assertTrue(status["reconciliation_required"])
+        self.assertTrue(status["verified"])
+        self.assertFalse(status["reconciliation_required"])
 
         snap_release.set()
         t1.join(timeout=3.0)
         t2.join(timeout=3.0)
         self.assertFalse(errors)
         self.assertEqual(active_snapshots["max"], 1)
+        self.assertTrue(control_status(self.bot, Trade, Order)["verified"])
+
+        # Starting unverified must stay unverified while snapshot is in flight.
+        self.journal.ready = False
+        snap_entered.clear()
+        snap_release.clear()
+        t1b = threading.Thread(target=run_reconcile)
+        t1b.start()
+        self.assertTrue(snap_entered.wait(timeout=2.0))
+        self.assertFalse(control_status(self.bot, Trade, Order)["verified"])
+        snap_release.set()
+        t1b.join(timeout=3.0)
+        self.assertFalse(errors)
         self.assertTrue(control_status(self.bot, Trade, Order)["verified"])
 
         # Same non-blocking behavior when OrderJournal.dispatch awaits exchange create_order I/O.
