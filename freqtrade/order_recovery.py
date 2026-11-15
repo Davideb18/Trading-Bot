@@ -56,6 +56,48 @@ def normalized_order_quantities(order, raw=None, *, local_filled=None):
     return amount, filled, remaining
 
 
+def expected_order_side(local_order):
+    return getattr(local_order, "side", None) or getattr(local_order, "ft_order_side", None)
+
+
+def _finite_pos(value):
+    return (
+        isinstance(value, (int, float))
+        and type(value) in (int, float)
+        and math.isfinite(value)
+        and value > 0
+    )
+
+
+def expected_order_amount(local_order, pair=None, exchange=None):
+    """Resolve local order base quantity, quantizing ft_amount when createOrder omitted amount."""
+    local_amount = getattr(local_order, "amount", None)
+    if _finite_pos(local_amount):
+        return float(local_amount), True
+    ft_amount = getattr(local_order, "ft_amount", None)
+    if not _finite_pos(ft_amount):
+        return None, False
+    if exchange is not None and pair:
+        try:
+            contracts = exchange._amount_to_contracts(pair, float(ft_amount))
+            q_contracts = exchange.amount_to_precision(pair, contracts)
+            quantized = exchange._contracts_to_amount(pair, q_contracts)
+            if _finite_pos(quantized):
+                return float(quantized), True
+        except (AttributeError, TypeError, ValueError):
+            pass
+    return float(ft_amount), False
+
+
+def _amount_matches_local(exchange_amount, local_order, pair=None, exchange=None):
+    expected, exact = expected_order_amount(local_order, pair, exchange)
+    if expected is None:
+        return False
+    if exact:
+        return math.isclose(exchange_amount, expected, rel_tol=1e-8, abs_tol=1e-12)
+    return 0 < exchange_amount <= expected * (1 + 1e-8)
+
+
 def verified_prop_cancel(bot, trade, local_order, trade_model, *, terminal_evidence=None):
     """Cancel only with core authority; a fresh lookup, never an ACK, proves the outcome.
 
@@ -75,7 +117,9 @@ def verified_prop_cancel(bot, trade, local_order, trade_model, *, terminal_evide
                  else bot.exchange.fetch_order(local_order.order_id, trade.pair))
         if (not order_evidence_valid(order, local_order, trade.pair)
                 or order.get("symbol") != trade.pair
-                or not math.isclose(order["amount"], local_order.amount, rel_tol=1e-8, abs_tol=1e-12)):
+                or not _amount_matches_local(
+                    order["amount"], local_order, trade.pair, getattr(bot, "exchange", None)
+                )):
             return None
         if terminal_evidence is not None and order["status"] == "open":
             return None
@@ -88,7 +132,9 @@ def verified_prop_cancel(bot, trade, local_order, trade_model, *, terminal_evide
             order = bot.exchange.fetch_order(local_order.order_id, trade.pair)
         if (not order_evidence_valid(order, local_order, trade.pair)
                 or order.get("symbol") != trade.pair
-                or not math.isclose(order["amount"], local_order.amount, rel_tol=1e-8, abs_tol=1e-12)
+                or not _amount_matches_local(
+                    order["amount"], local_order, trade.pair, getattr(bot, "exchange", None)
+                )
                 or order["status"] == "open"):
             return None
         return populate_order_quantities(
@@ -118,9 +164,11 @@ def order_evidence_valid(order, local_order, pair):
     """Unknown/missing quantities and regressing fills cannot authorize reconciliation."""
     if not isinstance(order, dict):
         return False
+    expected_side = expected_order_side(local_order)
     if (str(order.get("id")) != str(local_order.order_id)
             or order.get("symbol", pair) != pair
-            or order.get("side") != local_order.side
+            or order.get("side") not in ("buy", "sell")
+            or (expected_side is not None and order.get("side") != expected_side)
             or order.get("status") not in ("open", *NON_OPEN_EXCHANGE_STATES)):
         return False
     raw = order.get("info") if isinstance(order.get("info"), dict) else None

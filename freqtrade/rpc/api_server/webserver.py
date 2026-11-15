@@ -332,6 +332,7 @@ class ApiServer(RPCHandler):
             log_config=None,
             access_log=True if verbosity != "error" else False,
             ws_ping_interval=None,  # We do this explicitly ourselves
+            timeout_graceful_shutdown=5,
         )
         try:
             self._server = UvicornServer(uvconfig)

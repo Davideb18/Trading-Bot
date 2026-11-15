@@ -394,9 +394,8 @@ class RiskGuard:
         if self._transient_failures > limit:
             if daily_unavailable_on_escalate and now is not None:
                 self._daily_unavailable(now, read_exposure=False)
-            self._pause_on_fault(
-                f"Sustained API outage ({self._transient_failures} cycles): {reason}"
-            )
+            log.error("Sustained API outage (%s cycles): %s", self._transient_failures, reason)
+            self._pause_on_fault(f"Sustained API outage: {reason}")
             return
         with self._state_lock:
             self.state["transient_paused"] = True

@@ -31,8 +31,20 @@ def publish_fault_event(directory, profile, reason):
         if any(binding.get(k) != profile[k] for k in ("account_id", "challenge_id", "phase_id", "profile_id")):
             return False
         with connection:
-            connection.execute("INSERT INTO fault_events(event_id,created_ms,reason) VALUES (?,?,?)",
-                (uuid.uuid4().hex, int(time.time() * 1000), str(reason)[:500]))
+            ctrl_row = connection.execute("SELECT value FROM control WHERE id=1").fetchone()
+            ctrl_state = json.loads(ctrl_row[0]) if ctrl_row else {}
+            ack = ctrl_state.get("ack") or {}
+            ack_events = set(ack.get("events", [])) if isinstance(ack, dict) else set()
+            reason_text = str(reason)[:500]
+            existing = connection.execute(
+                "SELECT event_id FROM fault_events WHERE acknowledged=0 AND reason=? ORDER BY rowid DESC LIMIT 1",
+                (reason_text,),
+            ).fetchone()
+            if existing is None or existing[0] in ack_events:
+                connection.execute(
+                    "INSERT INTO fault_events(event_id,created_ms,reason) VALUES (?,?,?)",
+                    (uuid.uuid4().hex, int(time.time() * 1000), reason_text),
+                )
         return True
     except (OSError, sqlite3.Error, ValueError, TypeError, KeyError):
         return False
@@ -168,7 +180,10 @@ def control_status(bot, trade_model, order_model):
             fresh = False
         trades = trade_model.get_open_trades()
         local_pending = any(pending_recovery(t) for t in trades)
-        pending_entries = any(o.side == t.entry_side for t in trades for o in t.open_orders)
+        pending_entries = any(
+            (o.side or getattr(o, "ft_order_side", None)) == t.entry_side
+            for t in trades for o in t.open_orders
+        )
         orphan = any(o.trade is None for o in order_model.get_open_orders())
         cancellation_pending = journal.db.execute(
             "SELECT 1 FROM cancellations WHERE state!='confirmed' LIMIT 1").fetchone() is not None

@@ -6,7 +6,9 @@ import logging
 from pathlib import Path
 
 from freqtrade.order_journal import JournalBlocked, OrderJournal
-from freqtrade.order_recovery import clear_recovery, mark_recovery, pending_recovery
+from freqtrade.order_recovery import (
+    clear_recovery, expected_order_amount, expected_order_side, mark_recovery, pending_recovery,
+)
 from freqtrade.prop_profile import profile_from_config
 from freqtrade.prop_controls import sync_prop_controls
 from freqtrade.emergency_authority import EmergencyTakeover, require_core_authority
@@ -82,9 +84,14 @@ def reconcile_journal(bot, trade_model):
             orders, positions = {}, {}
             for trade in trades:
                 for order in trade.orders:
+                    amt, exact = expected_order_amount(order, trade.pair, getattr(bot, "exchange", None))
                     orders[order.order_id] = {
-                        "symbol": trade.pair, "side": order.side, "amount": order.amount,
-                        "filled": order.filled or 0, "status": order.status, "trade_id": trade.id,
+                        "symbol": trade.pair,
+                        "side": expected_order_side(order),
+                        "amount": amt if exact else None,
+                        "filled": order.filled or 0,
+                        "status": order.status,
+                        "trade_id": trade.id,
                     }
                 if trade.is_open:
                     entry_side = getattr(trade, "entry_side", "sell" if trade.is_short else "buy")

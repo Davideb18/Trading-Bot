@@ -997,6 +997,7 @@ class RPC:
         self._freqtrade.state = State.RUNNING
         return {"status": "starting trader ..."}
 
+    @custom_data_rpc_wrapper
     def _rpc_prop_control(self, action=None, reason=None, flags=None):
         from freqtrade.prop_controls import control_status, request_control
 
@@ -1160,6 +1161,7 @@ class RPC:
             Trade.commit()
             return False
 
+    @custom_data_rpc_wrapper
     def _rpc_force_exit(
         self,
         trade_id: str,
@@ -1357,6 +1359,7 @@ class RPC:
                 )
             Trade.commit()
 
+    @custom_data_rpc_wrapper
     def _rpc_delete(self, trade_id: int) -> dict[str, str | int]:
         """
         Handler for delete <id>.

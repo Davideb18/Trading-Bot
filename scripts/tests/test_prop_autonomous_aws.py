@@ -1678,5 +1678,161 @@ class PropAuditRegressionTests(unittest.TestCase):
             self.assertGreaterEqual(stake, 100.0)
 
 
+class ProductionRuntimeRegressionTests(unittest.TestCase):
+    def test_sqlite_nullpool_and_deps_get_rpc_remove_custom_data_session(self):
+        import asyncio
+        from sqlalchemy.pool import NullPool
+        from freqtrade.order_recovery import pending_recovery
+        from freqtrade.persistence.custom_data import _CustomData
+        from freqtrade.persistence.models import init_db
+        from freqtrade.persistence.trade_model import Order, Trade
+        from freqtrade.persistence.wallet_history import WalletHistory
+        from freqtrade.persistence.key_value_store import _KeyValueStoreModel
+        from freqtrade.persistence.pairlock import PairLock
+        from freqtrade.rpc.api_server import deps
+        from freqtrade.rpc.api_server.uvicorn_threaded import UvicornServer
+        from freqtrade.rpc.api_server.webserver import ApiServer
+
+        prev = (
+            getattr(Trade, "session", None),
+            getattr(_CustomData, "session", None),
+        )
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        db_path = Path(tmp.name) / "trades_prop.sqlite"
+        init_db(f"sqlite:///{db_path}")
+        engine = Trade.session.bind
+
+        def _restore():
+            Trade.session.remove()
+            _CustomData.session.remove()
+            engine.dispose()
+            if prev[0] is not None:
+                Trade.session = prev[0]
+                Order.session = prev[0]
+                PairLock.session = prev[0]
+                _KeyValueStoreModel.session = prev[0]
+                WalletHistory.session = prev[0]
+            if prev[1] is not None:
+                _CustomData.session = prev[1]
+
+        self.addCleanup(_restore)
+        self.assertIsInstance(engine.pool, NullPool)
+
+        trade = Trade(
+            pair="INJ/USDT:USDT",
+            is_short=False,
+            leverage=1.0,
+            stake_amount=333.0,
+            amount=46.4,
+            amount_requested=46.4,
+            open_rate=7.174,
+            fee_open=0.0006,
+            fee_close=0.0006,
+            exchange="bybit",
+            strategy="NostalgiaForInfinityX8_Prop",
+            timeframe=5,
+            is_open=True,
+        )
+        Trade.session.add(trade)
+        Trade.session.commit()
+        Trade.session.remove()
+
+        async def _exercise():
+            with patch.object(deps, "get_rpc_optional", return_value=SimpleNamespace()):
+                for _ in range(20):
+                    agen = deps.get_rpc()
+                    await agen.__anext__()
+                    pending_recovery(Trade.get_open_trades()[0])
+                    with self.assertRaises(StopAsyncIteration):
+                        await agen.__anext__()
+                    self.assertEqual(len(_CustomData.session.registry.registry), 0)
+
+        asyncio.run(_exercise())
+
+        # Verify bounded shutdown timeout in ApiServer + UvicornServer.cleanup().
+        uv_calls = []
+
+        class _StubServer:
+            def __init__(self, cfg):
+                uv_calls.append(cfg)
+                self.thread = Mock()
+
+            def run_in_thread(self):
+                pass
+
+        with patch("freqtrade.rpc.api_server.webserver.UvicornServer", _StubServer):
+            srv = ApiServer.__new__(ApiServer)
+            srv._config = {
+                "api_server": {
+                    "listen_ip_address": "127.0.0.1",
+                    "listen_port": 18080,
+                    "username": "u",
+                    "password": "p",
+                    "jwt_secret_key": "0123456789abcdef0123456789abcdef01234567",
+                }
+            }
+            srv.app = Mock()
+            srv._standalone = False
+            srv._server = None
+            srv.start_api()
+        self.assertEqual(len(uv_calls), 1)
+        self.assertEqual(uv_calls[0].timeout_graceful_shutdown, 5)
+
+        fake_thread = Mock()
+        us = UvicornServer.__new__(UvicornServer)
+        us.should_exit = False
+        us.thread = fake_thread
+        us.cleanup()
+        self.assertTrue(us.should_exit)
+        fake_thread.join.assert_called_once_with(timeout=10)
+
+    def test_exchange_create_order_populates_omitted_fields_without_fabricating_fills(self):
+        from test_order_recovery import load_methods
+
+        Adapter = load_methods("freqtrade/exchange/exchange.py", "Exchange", {"create_order"}, {})
+        adapter = Adapter()
+        adapter._config = {"dry_run": False}
+        adapter._get_params = lambda *a, **kw: {"timeInForce": "GTC"}
+        adapter._amount_to_contracts = lambda pair, amt: amt / 10.0
+        adapter.amount_to_precision = lambda pair, contracts: round(contracts, 1)
+        adapter._order_needs_price = lambda side, kind: True
+        adapter.price_to_precision = lambda pair, price: round(price, 1)
+        adapter._order_contracts_to_amount = lambda o: {**o, "amount": o["amount"] * 10.0}
+        adapter._log_exchange_response = lambda *a, **kw: None
+        adapter._lev_prep = lambda *a, **kw: None
+        adapter._api = SimpleNamespace(
+            create_order=Mock(
+                return_value={
+                    "id": "bybit-1",
+                    "clientOrderId": "ftj-1",
+                    "symbol": None,
+                    "side": None,
+                    "type": None,
+                    "amount": None,
+                    "price": None,
+                    "filled": None,
+                    "remaining": None,
+                    "status": "open",
+                }
+            )
+        )
+        order = adapter.create_order(
+            pair="BTC/USDT:USDT",
+            ordertype="limit",
+            side="buy",
+            amount=2.04,
+            rate=90000.04,
+            leverage=1.0,
+        )
+        self.assertEqual(order["symbol"], "BTC/USDT:USDT")
+        self.assertEqual(order["side"], "buy")
+        self.assertEqual(order["type"], "limit")
+        self.assertEqual(order["amount"], 2.0)
+        self.assertEqual(order["price"], 90000.0)
+        self.assertIsNone(order["filled"])
+        self.assertIsNone(order["remaining"])
+
+
 if __name__ == "__main__":
     unittest.main()

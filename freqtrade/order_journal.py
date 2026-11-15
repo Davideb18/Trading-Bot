@@ -329,6 +329,7 @@ class OrderJournal:
                             if (
                                 order.get("symbol") != local["symbol"]
                                 or order.get("side") != local["side"]
+                                or local["amount"] is None
                                 or not same(order.get("amount"), local["amount"])
                                 or not same(order.get("filled"), local["filled"])
                                 or local["status"] != "open"
@@ -387,6 +388,7 @@ class OrderJournal:
                             and local["symbol"] == request["pair"]
                             and local["side"] == request["side"]
                             and same(local["filled"], filled)
+                            and local["amount"] is not None
                             and same(local["amount"], amount)
                             and local["status"] == status
                             and (row["trade_id"] is None or row["trade_id"] == local["trade_id"])

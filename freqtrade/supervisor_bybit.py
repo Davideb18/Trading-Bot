@@ -109,7 +109,7 @@ class SupervisorBybit:
         status = account.get("unifiedMarginStatus")
         if type(status) is not int or status not in (1, 3, 4, 5, 6):
             raise AccountMismatch("Unsupported account mode")
-        if status in (5, 6) and account.get("marginMode") != "ISOLATED_MARGIN":
+        if status in (3, 4, 5, 6) and account.get("marginMode") != "ISOLATED_MARGIN":
             raise AccountMismatch("Account is not in configured isolated mode")
         self.account_status = status
         self.account_type = "CONTRACT" if status == 1 else "UNIFIED"
@@ -243,7 +243,9 @@ class SupervisorBybit:
             size = number(raw["size"])
             if size < 0 or int(raw["positionIdx"]) != 0:
                 raise UnverifiedAccount("Unsupported position mode")
-            if self.account_status in (1, 3, 4) and size and int(raw["tradeMode"]) != 1:
+            # Unified Margin / UTA accounts deprecate per-position tradeMode (returns 0) and report
+            # isolation via account.marginMode == ISOLATED_MARGIN checked in verify_identity().
+            if self.account_status == 1 and size and int(raw["tradeMode"]) != 1:
                 raise UnverifiedAccount("Position is not isolated")
             if size:
                 if raw["side"] not in ("Buy", "Sell"):

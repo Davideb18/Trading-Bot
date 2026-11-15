@@ -29,8 +29,12 @@ def cancel_fault_entries(bot, trade_model):
     with bot._exit_lock:
         trades = trade_model.get_trades_proxy()
         local = {o.order_id: (t, o) for t in trades for o in t.orders}
-        candidates = {o.order_id: (t.pair, o.side, None) for t in trades for o in t.open_orders
-                      if o.side == t.entry_side}
+        candidates = {
+            o.order_id: (t.pair, (o.side or getattr(o, "ft_order_side", None)), None)
+            for t in trades
+            for o in t.open_orders
+            if (o.side or getattr(o, "ft_order_side", None)) == t.entry_side
+        }
         for intent in journal.intents():
             request = json.loads(intent["request"])
             if (not request["reduceOnly"] and intent["exchange_id"]

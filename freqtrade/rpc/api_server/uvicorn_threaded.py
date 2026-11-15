@@ -61,4 +61,4 @@ class UvicornServer(uvicorn.Server):
 
     def cleanup(self):
         self.should_exit = True
-        self.thread.join()
+        self.thread.join(timeout=10)

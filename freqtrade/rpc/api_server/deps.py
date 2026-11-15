@@ -7,6 +7,7 @@ from fastapi import Depends, HTTPException
 from freqtrade.constants import Config
 from freqtrade.enums import TRADE_MODES, RunMode
 from freqtrade.persistence import Trade
+from freqtrade.persistence.custom_data import _CustomData
 from freqtrade.persistence.models import _request_id_ctx_var
 from freqtrade.rpc.api_server.webserver_bgwork import ApiBG
 from freqtrade.rpc.rpc import RPC, RPCException
@@ -26,10 +27,14 @@ async def get_rpc() -> AsyncIterator[RPC] | None:
         request_id = str(uuid4())
         ctx_token = _request_id_ctx_var.set(request_id)
         Trade.rollback()
+        if hasattr(_CustomData, "session"):
+            _CustomData.session.rollback()
         try:
             yield _rpc
         finally:
             Trade.session.remove()
+            if hasattr(_CustomData, "session"):
+                _CustomData.session.remove()
             _request_id_ctx_var.reset(ctx_token)
 
     else:

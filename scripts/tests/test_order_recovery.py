@@ -175,6 +175,7 @@ class RecoveryTests(unittest.TestCase):
                   delete_verified_empty_trade=delete_verified_empty_trade,
                   UNKNOWN_FORCE_EXIT=UNKNOWN_FORCE_EXIT,
                   safe_value_fallback2=lambda first, second, k1, k2: first.get(k1, second.get(k2)),
+                  custom_data_rpc_wrapper=lambda fn: fn,
                   sleep=lambda _: None)
         self.Bot = load_methods("freqtrade/freqtradebot.py", "FreqtradeBot", {
             "startup_update_open_orders", "has_unresolved_orders", "manage_open_orders",
@@ -460,6 +461,76 @@ class RecoveryTests(unittest.TestCase):
         self.bot.startup_update_open_orders()
         self.assertNotIn(trade.id, Trade.rows)
         self.assertFalse(self.bot.has_unresolved_orders())
+
+    def test_incomplete_create_order_local_fields_heal_and_cancel_safely(self):
+        import tempfile
+        from types import SimpleNamespace
+        from freqtrade.journal_execution import reconcile_journal
+        from freqtrade.order_journal import OrderJournal
+        from snapshot_fixtures import timed_snapshot
+
+        trade = Trade(base=0)
+        order = Order(trade, "bybit-incomplete", amount=10.0, filled=0.0, status="open")
+        order.amount = None
+        order.side = None
+        order.ft_order_side = "buy"
+        order.ft_amount = 10.04
+        trade.orders.append(order)
+        self.bot.config = {**self.bot.config, "prop_guard_enabled": True}
+        self.bot.exchange._amount_to_contracts = lambda pair, amt: amt
+        self.bot.exchange.amount_to_precision = lambda pair, contracts: 10.0
+        self.bot.exchange._contracts_to_amount = lambda pair, q: q
+
+        fetched = {
+            "id": order.order_id, "symbol": trade.pair, "side": "buy", "status": "open",
+            "amount": 10.0, "filled": 0.0, "remaining": 10.0, "price": 100.0,
+        }
+        self.assertTrue(order_evidence_valid(fetched, order, trade.pair))
+        self.assertFalse(order_evidence_valid(fetched | {"side": "sell"}, order, trade.pair))
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        journal = OrderJournal(
+            Path(tmp.name),
+            {
+                "account_id": "1", "challenge_id": "c", "phase_id": "p", "profile_id": "h",
+                "exchange": "bybit", "environment": "demo", "currency": "USDT",
+            },
+        )
+        self.addCleanup(journal.close)
+        self.bot.order_journal = journal
+        journal.reconcile(
+            timed_snapshot({"complete": True, "open_orders": [], "orders": {}, "fills": {}, "positions": []}),
+            {},
+            {},
+        )
+        cid = journal.prepare({"pair": trade.pair, "side": "buy", "amount": 10.0, "reduceOnly": False}, trade.id)
+        with journal.mutex, journal.db:
+            journal.db.execute("UPDATE intents SET state='submitted', exchange_id=? WHERE client_id=?",
+                               (order.order_id, cid))
+        journal.ready = False
+        self.bot.exchange.fetch_journal_snapshot.return_value = timed_snapshot({
+            "complete": True,
+            "open_orders": [fetched | {"clientOrderId": cid}],
+            "orders": {cid: fetched | {"clientOrderId": cid}},
+            "fills": {cid: 0.0},
+            "positions": [],
+        })
+        reconcile_journal(
+            self.bot,
+            SimpleNamespace(get_trades_proxy=lambda: [trade], commit=Trade.commit),
+        )
+        self.assertTrue(journal.ready)
+
+        # Quantized mismatch (10.5 != 10.0) still fails verification; exact 10.0 succeeds.
+        bad_cancel = fetched | {"status": "canceled", "amount": 10.5, "remaining": 0.0}
+        self.bot.exchange.fetch_order.return_value = bad_cancel
+        with patch("freqtrade.emergency_authority.require_core_authority"):
+            self.assertIsNone(verified_prop_cancel(self.bot, trade, order, Trade))
+        good_cancel = fetched | {"status": "canceled", "remaining": 0.0}
+        self.bot.exchange.fetch_order.return_value = good_cancel
+        with patch("freqtrade.emergency_authority.require_core_authority"):
+            self.assertIsNotNone(verified_prop_cancel(self.bot, trade, order, Trade))
 
 
 if __name__ == "__main__":

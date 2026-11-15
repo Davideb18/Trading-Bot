@@ -529,6 +529,37 @@ class FaultTests(unittest.TestCase):
         with rm.api_client.operation_budget(4.0):
             self.assertEqual(rm.api_client.control.get("/prop/control"), [])
 
+    def test_duplicate_unacknowledged_fault_events_deduplicated_except_during_pending_ack(self):
+        from freqtrade.prop_controls import publish_fault_event
+        for _ in range(4):
+            self.assertTrue(publish_fault_event(self.tmp.name, self.profile, "Daily floor unverifiable; same"))
+        self.assertEqual(
+            self.journal.db.execute("SELECT count(*) FROM fault_events WHERE acknowledged=0").fetchone()[0], 1
+        )
+        for _ in range(3):
+            sync_prop_controls(self.bot)
+        before_ack_audits = self.journal.db.execute("SELECT count(*) FROM control_audit").fetchone()[0]
+
+        self.guard._check_drawdown(self.now)
+        self.api.get_prop_control.side_effect = lambda: control_status(self.bot, Trade, Order)
+        request_control(self.bot, Trade, Order, "acknowledge", "Verified account")
+        # Same reason occurring during an active ack MUST insert a new event to invalidate ack.
+        self.assertTrue(publish_fault_event(self.tmp.name, self.profile, "Daily floor unverifiable; same"))
+        self.assertEqual(
+            self.journal.db.execute("SELECT count(*) FROM fault_events WHERE acknowledged=0").fetchone()[0], 2
+        )
+        self.assertEqual(before_ack_audits, 1)
+
+    def test_sustained_outage_reason_is_stable_across_cycles(self):
+        self.guard.transient_grace_cycles = 1
+        self.guard.max_transient_outage_cycles = 1
+        self.guard._pause_on_fault = Mock()
+        self.guard._pause_on_transient("Risk operation deadline exceeded", now=self.now, allow_startup_grace=False)
+        self.guard._pause_on_transient("Risk operation deadline exceeded", now=self.now, allow_startup_grace=False)
+        self.guard._pause_on_transient("Risk operation deadline exceeded", now=self.now, allow_startup_grace=False)
+        reasons = [c.args[0] for c in self.guard._pause_on_fault.call_args_list]
+        self.assertEqual(reasons, ["Sustained API outage: Risk operation deadline exceeded"] * 2)
+
 
 class HttpTests(unittest.TestCase):
     def setUp(self):
@@ -694,6 +725,7 @@ class HttpTests(unittest.TestCase):
                 Trade=FakeTrade,
                 logger=logging.getLogger(__name__),
                 pending_recovery=lambda t: [],
+                custom_data_rpc_wrapper=lambda fn: fn,
             ),
         )
         rpc = Rpc()

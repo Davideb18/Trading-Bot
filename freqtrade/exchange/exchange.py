@@ -1476,6 +1476,7 @@ class Exchange:
             if order.get("status") is None or (
                 order.get("status") in ("closed", "expired")
                 and order.get("average") is None
+                and order.get("filled") is not None
                 and float(order["filled"]) != 0
             ):
                 # Map empty status to open to force another round.
@@ -1484,6 +1485,14 @@ class Exchange:
 
             if order.get("type") is None:
                 order["type"] = ordertype
+            if order.get("symbol") is None:
+                order["symbol"] = pair
+            if order.get("side") is None:
+                order["side"] = side
+            if order.get("amount") is None:
+                order["amount"] = amount
+            if order.get("price") is None and rate_for_order is not None:
+                order["price"] = rate_for_order
 
             self._log_exchange_response("create_order", order)
             order = self._order_contracts_to_amount(order)

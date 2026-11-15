@@ -757,5 +757,35 @@ class MultiPositionEmergencyTests(unittest.TestCase):
         self.assertEqual(len(kill_evt), 1)
 
 
+class UtaIsolatedMarginTests(unittest.TestCase):
+    setUp = AdapterTests.setUp
+    response = AdapterTests.response
+    page = AdapterTests.page
+
+    def test_uta_open_position_with_deprecated_trade_mode_zero_is_accepted(self):
+        # Live Bybit UTA 1.0/2.0 returns marginMode=ISOLATED_MARGIN on account info and tradeMode=0 on positions.
+        self.api.privateGetV5AccountInfo.return_value = self.response(
+            {"unifiedMarginStatus": 3, "marginMode": "ISOLATED_MARGIN"}
+        )
+        self.api.privateGetV5PositionList.return_value = self.page([
+            dict(symbol="BTCUSDT", size="2", positionIdx=0, tradeMode=0, side="Buy", markPrice="100")
+        ])
+        snap = self.adapter.snapshot()
+        self.assertEqual(snap["positions"][0]["amount"], 20)
+
+        self.api.privateGetV5AccountInfo.return_value = self.response(
+            {"unifiedMarginStatus": 3, "marginMode": "REGULAR_MARGIN"}
+        )
+        with self.assertRaises(AccountMismatch):
+            self.adapter.verify_identity()
+
+        # Classic Contract mode (unifiedMarginStatus=1) must still enforce per-position tradeMode == 1.
+        self.api.privateGetV5AccountInfo.return_value = self.response({"unifiedMarginStatus": 1})
+        self.api.privateGetV5AccountWalletBalance.return_value["result"]["list"][0]["accountType"] = "CONTRACT"
+        self.adapter.verify_identity()
+        with self.assertRaises(UnverifiedAccount):
+            self.adapter.snapshot()
+
+
 if __name__ == "__main__":
     unittest.main()

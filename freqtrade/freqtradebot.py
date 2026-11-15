@@ -256,6 +256,9 @@ class FreqtradeBot(LoggingMixin):
         try:
             if hasattr(Trade, "session"):
                 Trade.commit()
+            from freqtrade.persistence.custom_data import _CustomData
+            if hasattr(_CustomData, "session"):
+                _CustomData.session.remove()
         except Exception:
             # Exceptions here will be happening if the db disappeared.
             # At which point we can no longer commit anyway.
@@ -1119,6 +1122,9 @@ class FreqtradeBot(LoggingMixin):
             leverage=leverage,
             initial_order=trade is None,
         )
+        if self.config.get("prop_guard_enabled") and order.get("status") in constants.CANCELED_EXCHANGE_STATES:
+            from freqtrade.order_recovery import populate_order_quantities
+            order = populate_order_quantities(dict(order))
         order_obj = Order.parse_from_ccxt_object(order, pair, side, amount, enter_limit_requested)
         order_obj.ft_order_tag = enter_tag
         order_id = order["id"]
@@ -1131,7 +1137,7 @@ class FreqtradeBot(LoggingMixin):
 
         if order_status == "expired" or order_status == "rejected":
             # return false if the order is not filled
-            if float(order["filled"]) == 0:
+            if float(order.get("filled") or 0.0) == 0:
                 logger.warning(
                     f"{name} {time_in_force} order with time in force {order_type} "
                     f"for {pair} is {order_status} by {self.exchange.name}."
@@ -2439,6 +2445,9 @@ class FreqtradeBot(LoggingMixin):
             return False
 
         self._exit_reason_cache[f"{trade.pair}_{trade.id}_{exit_reason}"] = dt_now()
+        if self.config.get("prop_guard_enabled") and order.get("status") in constants.CANCELED_EXCHANGE_STATES:
+            from freqtrade.order_recovery import populate_order_quantities
+            order = populate_order_quantities(dict(order))
         order_obj = Order.parse_from_ccxt_object(order, trade.pair, trade.exit_side, amount, limit)
         order_obj.ft_order_tag = exit_reason
         trade.orders.append(order_obj)
