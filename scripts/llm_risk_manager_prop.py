@@ -1079,47 +1079,75 @@ class RiskManager(RiskGuard):
                         seen_trade_ids.add(tid)
                     all_trades.append(tr)
 
-                def extract_filled_orders(tr):
+                order_slice_ledger = getattr(self, "_hyro_order_slice_ledger", None)
+                if not isinstance(order_slice_ledger, dict):
+                    order_slice_ledger = self._hyro_order_slice_ledger = {}
+                exit_net_ledger = getattr(self, "_hyro_exit_net_ledger", None)
+                if not isinstance(exit_net_ledger, dict):
+                    exit_net_ledger = self._hyro_exit_net_ledger = {}
+
+                def extract_filled_orders(tr, t_idx_fallback=0):
                     raw_orders = tr.get("orders")
                     if not isinstance(raw_orders, list):
                         return []
-                    filled_list = []
+                    tid_key = tr.get("trade_id") or f"t_{t_idx_fallback}_{tr.get('open_timestamp') or ''}"
+                    filled_list, out_idx = [], 0
                     for idx, ord_obj in enumerate(raw_orders):
-                        if not isinstance(ord_obj, dict) or ord_obj.get("is_open") is True:
+                        if not isinstance(ord_obj, dict):
                             continue
                         filled_qty = float(ord_obj.get("filled", 0.0) or 0.0)
                         if filled_qty <= 0:
                             continue
+                        is_entry = bool(ord_obj.get("ft_is_entry", True))
+                        ord_open = bool(ord_obj.get("is_open", False))
                         fill_dt = parse_dt(
                             ord_obj.get("order_filled_timestamp")
                             or ord_obj.get("order_filled_date")
+                            or ord_obj.get("order_update_timestamp")
+                            or ord_obj.get("order_update_date")
                             or ord_obj.get("order_timestamp")
                             or ord_obj.get("order_date")
-                        )
+                        ) or (now_utc if ord_open else None)
                         price = float(
-                            ord_obj.get("average")
-                            or ord_obj.get("safe_price")
-                            or ord_obj.get("price")
-                            or 0.0
+                            ord_obj.get("average") or ord_obj.get("safe_price") or ord_obj.get("price") or 0.0
                         )
-                        cost_val = float(ord_obj.get("cost", 0.0) or 0.0)
-                        if cost_val <= 0 and price > 0:
-                            cost_val = filled_qty * price
-                        filled_list.append({
-                            "idx": idx,
-                            "dt": fill_dt,
-                            "is_entry": bool(ord_obj.get("ft_is_entry", True)),
-                            "filled": filled_qty,
-                            "price": price,
-                            "cost": cost_val,
-                        })
+                        cost_val = float(ord_obj.get("cost", 0.0) or 0.0) or (filled_qty * price if price > 0 else 0.0)
+                        funding_val = float(ord_obj.get("funding_fee", 0.0) or 0.0)
+                        okey = (tid_key, ord_obj.get("order_id") if ord_obj.get("order_id") is not None else f"idx_{idx}")
+                        prev = order_slice_ledger.get(okey)
+                        prev_qty = sum(s["filled"] for s in prev) if prev else 0.0
+                        if not prev or filled_qty < prev_qty - 1e-12:
+                            prev = [{"filled": filled_qty, "price": price, "cost": cost_val, "dt": fill_dt, "funding_fee": funding_val}]
+                            order_slice_ledger[okey] = prev
+                        elif filled_qty > prev_qty + 1e-12:
+                            d_qty = filled_qty - prev_qty
+                            d_cost = max(0.0, cost_val - sum(s["cost"] for s in prev)) or (d_qty * price if price > 0 else 0.0)
+                            d_fund = funding_val - sum(s.get("funding_fee", 0.0) for s in prev)
+                            last_s = prev[-1]
+                            if last_s["dt"] and fill_dt and last_s["dt"].strftime("%Y-%m-%d") == fill_dt.strftime("%Y-%m-%d"):
+                                last_s["filled"] += d_qty
+                                last_s["cost"] += d_cost
+                                last_s["price"] = (last_s["cost"] / last_s["filled"]) if last_s["cost"] > 0 else price
+                                last_s["funding_fee"] = last_s.get("funding_fee", 0.0) + d_fund
+                                last_s["dt"] = fill_dt
+                            else:
+                                prev.append({"filled": d_qty, "price": (d_cost / d_qty) if d_cost > 0 else price, "cost": d_cost, "dt": fill_dt, "funding_fee": d_fund})
+                        elif prev[-1]["dt"] is None and fill_dt is not None:
+                            prev[-1]["dt"] = fill_dt
+                        for s_idx, sl in enumerate(prev):
+                            filled_list.append({
+                                "idx": out_idx, "slice_key": f"{okey[1]}#{s_idx}", "dt": sl["dt"],
+                                "is_entry": is_entry, "is_open": ord_open, "filled": sl["filled"],
+                                "price": sl["price"], "cost": sl["cost"], "funding_fee": sl.get("funding_fee", 0.0),
+                            })
+                            out_idx += 1
                     return filled_list
 
                 # 1. 30-Day Inactivity Sentinel (based on real fill/trade timestamps, never masked indefinitely by open positions)
                 activity_dts = []
                 parsed_orders_by_idx = {}
                 for t_idx, tr in enumerate(all_trades):
-                    orders_for_trade = extract_filled_orders(tr)
+                    orders_for_trade = extract_filled_orders(tr, t_idx)
                     parsed_orders_by_idx[t_idx] = orders_for_trade
                     for ord_item in orders_for_trade:
                         if ord_item["dt"] is not None and (not phase_start or ord_item["dt"] >= phase_start):
@@ -1274,12 +1302,14 @@ class RiskManager(RiskGuard):
                     if has_exit_orders:
                         sorted_orders = sorted(orders_for_trade, key=lambda o: (o["dt"] or epoch_min, o["idx"]))
                         direction = -1.0 if tr.get("is_short") else 1.0
-                        cur_qty = 0.0
-                        cur_entry_cost = 0.0
-                        cur_weighted_price_sum = 0.0
+                        tid_key = tr.get("trade_id") or f"t_{t_idx}_{tr.get('open_timestamp') or ''}"
+                        fee_open_r = float(tr.get("fee_open", 0.0) or 0.0)
+                        fee_close_r = float(tr.get("fee_close", 0.0) or 0.0)
+                        cur_qty = cur_entry_cost = cur_weighted_price_sum = cur_funding = 0.0
                         exit_events = []
                         fallback_open_rate = float(tr.get("open_rate", 0.0) or 0.0)
                         for o in sorted_orders:
+                            cur_funding += float(o.get("funding_fee", 0.0) or 0.0)
                             if o["is_entry"]:
                                 cur_qty += o["filled"]
                                 cur_entry_cost += o["cost"]
@@ -1291,29 +1321,29 @@ class RiskManager(RiskGuard):
                                 avg_entry = (cur_weighted_price_sum / cur_qty) if cur_weighted_price_sum > 0 else fallback_open_rate
                                 close_qty = min(o["filled"], cur_qty)
                                 frac = close_qty / cur_qty
-                                entry_notional = cur_entry_cost * frac
-                                if entry_notional <= 0 and avg_entry > 0:
-                                    entry_notional = close_qty * avg_entry
+                                entry_notional = (cur_entry_cost * frac) or (close_qty * avg_entry if avg_entry > 0 else 0.0)
                                 exit_price = o["price"] if o["price"] > 0 else (o["cost"] / close_qty if close_qty > 0 else 0.0)
                                 exit_notional = o["cost"] if o["cost"] > 0 else close_qty * exit_price
-                                gross_pnl = (
-                                    direction * close_qty * (exit_price - avg_entry)
-                                    if avg_entry > 0 and exit_price > 0
-                                    else 0.0
-                                )
+                                gross_pnl = direction * close_qty * (exit_price - avg_entry) if avg_entry > 0 and exit_price > 0 else 0.0
                                 gross_ratio = (gross_pnl / entry_notional) if entry_notional > 0 else 0.0
+                                fund_pnl = -cur_funding if tr.get("is_short") else cur_funding
+                                cur_funding = 0.0
                                 cur_qty = max(0.0, cur_qty - close_qty)
                                 cur_entry_cost = max(0.0, cur_entry_cost - entry_notional)
                                 if avg_entry > 0:
                                     cur_weighted_price_sum = max(0.0, cur_weighted_price_sum - close_qty * avg_entry)
                                 exit_dt = o["dt"]
                                 if exit_dt is not None and (not phase_start or exit_dt >= phase_start):
+                                    base_net = gross_pnl - (entry_notional * fee_open_r + exit_notional * fee_close_r) + fund_pnl
                                     exit_events.append({
+                                        "slice_key": o.get("slice_key", f"idx_{o['idx']}"),
                                         "day": exit_dt.strftime("%Y-%m-%d"),
                                         "entry_notional": entry_notional,
                                         "weight": max(entry_notional + exit_notional, 1e-9),
                                         "gross_pnl": gross_pnl,
                                         "gross_ratio": gross_ratio,
+                                        "base_net": base_net,
+                                        "is_open": bool(o.get("is_open", False)),
                                     })
 
                         if not exit_events:
@@ -1323,18 +1353,27 @@ class RiskManager(RiskGuard):
                             if "is_open" in tr
                             else (parse_dt(tr.get("close_timestamp") or tr.get("close_date")) is None)
                         )
-                        sum_gross = sum(ev["gross_pnl"] for ev in exit_events)
-                        if is_open_tr:
-                            raw_realized = tr.get("realized_profit")
-                        else:
-                            raw_realized = tr.get("profit_abs")
-                            if raw_realized is None:
-                                raw_realized = tr.get("realized_profit")
-                        trade_realized = float(raw_realized) if raw_realized is not None else sum_gross
-                        residual = trade_realized - sum_gross
-                        total_weight = sum(ev["weight"] for ev in exit_events)
+                        closed_evs = [ev for ev in exit_events if not ev["is_open"]]
+                        sum_closed_base = sum(ev["base_net"] for ev in closed_evs)
+                        raw_realized = tr.get("realized_profit") if is_open_tr else (tr.get("profit_abs") if tr.get("profit_abs") is not None else tr.get("realized_profit"))
+                        has_realized = raw_realized is not None and bool(closed_evs) and (not is_open_tr or float(raw_realized) != 0.0 or sum_closed_base == 0.0)
+                        trade_realized = float(raw_realized) if has_realized else sum_closed_base
+
+                        locked_map = exit_net_ledger.setdefault(tid_key, {})
+                        if any(k not in {ev["slice_key"] for ev in closed_evs} for k in locked_map):
+                            locked_map.clear()
+                        unlocked = [ev for ev in closed_evs if ev["slice_key"] not in locked_map]
+                        if unlocked:
+                            rem_realized = trade_realized - sum(locked_map[ev["slice_key"]] for ev in closed_evs if ev["slice_key"] in locked_map)
+                            residual = rem_realized - sum(ev["base_net"] for ev in unlocked)
+                            tot_w = sum(ev["weight"] for ev in unlocked)
+                            for ev in unlocked:
+                                ev_net = ev["base_net"] + residual * ((ev["weight"] / tot_w) if tot_w > 0 else (1.0 / len(unlocked)))
+                                if has_realized:
+                                    locked_map[ev["slice_key"]] = ev_net
+                                ev["net_pnl"] = ev_net
                         for ev in exit_events:
-                            ev_net = ev["gross_pnl"] + (residual * (ev["weight"] / total_weight) if total_weight > 0 else 0.0)
+                            ev_net = ev["base_net"] if ev["is_open"] else locked_map.get(ev["slice_key"], ev.get("net_pnl", ev["base_net"]))
                             day_profits[ev["day"]] = day_profits.get(ev["day"], 0.0) + ev_net
                             if ev["entry_notional"] >= min_qualifying_stake and abs(ev["gross_ratio"]) >= 0.01:
                                 qualifying_days.add(ev["day"])
@@ -1364,6 +1403,7 @@ class RiskManager(RiskGuard):
 
                 target_profit = self.initial_balance * self.profile["profit_target_percent"]
                 daily_cap = target_profit * self.profile["daily_profit_cap_percent"]
+                self._hyro_last_day_profits = dict(day_profits)
                 counted_profit = sum(min(d_pnl, daily_cap) if d_pnl > 0 else d_pnl for d_pnl in day_profits.values())
 
                 today_profit = day_profits.get(today_str, 0.0)

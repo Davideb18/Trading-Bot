@@ -1680,7 +1680,6 @@ class PropAuditRegressionTests(unittest.TestCase):
 
 class ProductionRuntimeRegressionTests(unittest.TestCase):
     def test_sqlite_nullpool_and_deps_get_rpc_remove_custom_data_session(self):
-        import asyncio
         from sqlalchemy.pool import NullPool
         from freqtrade.order_recovery import pending_recovery
         from freqtrade.persistence.custom_data import _CustomData
@@ -1748,7 +1747,13 @@ class ProductionRuntimeRegressionTests(unittest.TestCase):
                         await agen.__anext__()
                     self.assertEqual(len(_CustomData.session.registry.registry), 0)
 
-        asyncio.run(_exercise())
+        coro = _exercise()
+        try:
+            coro.send(None)
+        except StopIteration:
+            pass
+        finally:
+            coro.close()
 
         # Verify bounded shutdown timeout in ApiServer + UvicornServer.cleanup().
         uv_calls = []
@@ -1832,6 +1837,70 @@ class ProductionRuntimeRegressionTests(unittest.TestCase):
         self.assertEqual(order["price"], 90000.0)
         self.assertIsNone(order["filled"])
         self.assertIsNone(order["remaining"])
+
+    def test_codex_multiday_partial_order_fill_and_immutable_prior_day_net_pnl(self):
+        from llm_risk_manager_prop import RiskManager
+
+        d1 = datetime(2026, 4, 10, 23, 59, 0, tzinfo=UTC)
+        d2 = datetime(2026, 4, 11, 0, 1, 0, tzinfo=UTC)
+        now_box = [d1]
+
+        class _FakeDT:
+            min = datetime.min
+            now = staticmethod(lambda tz=None: now_box[0])
+            fromtimestamp = staticmethod(datetime.fromtimestamp)
+            fromisoformat = staticmethod(datetime.fromisoformat)
+
+        def make_rm(open_fn, closed_fn):
+            rm = RiskManager.__new__(RiskManager)
+            rm.profile = {**profile_from_config(configured_account()), "phase_start_utc": "2026-04-01T00:00:00Z"}
+            rm.initial_balance, rm.state, rm.inactivity_keepalive_enabled = 5000.0, {"nuclear_triggered": False}, False
+            rm.request_rules_pause = Mock()
+            rm.rules_api = SimpleNamespace(get_open_trades=open_fn, get_trades=closed_fn)
+            return rm
+
+        # Scenario 1 (Codex #1): 1 exit order fills 1.5 @ 110 on Day 1 (is_open=True), 3.0 @ 110 on Day 2 -> 15 + 15.
+        t0_ms, d1_ms, d2_ms = int((d1 - timedelta(hours=1)).timestamp() * 1000), int(d1.timestamp() * 1000), int(d2.timestamp() * 1000)
+        ent_s1 = {"order_id": "ent-501", "ft_is_entry": True, "is_open": False, "filled": 3.0, "average": 100.0, "cost": 300.0, "order_filled_timestamp": t0_ms}
+        s1_open = [{"trade_id": 501, "is_open": True, "is_short": False, "realized_profit": 0.0, "open_timestamp": t0_ms,
+                    "orders": [ent_s1, {"order_id": "ex-501", "ft_is_entry": False, "is_open": True, "filled": 1.5, "average": 110.0, "cost": 165.0, "order_timestamp": d1_ms}]}]
+        s1_closed = [[]]
+        rm1 = make_rm(lambda: s1_open, lambda limit=500: s1_closed[0])
+        rm1._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
+        with patch("llm_risk_manager_prop.datetime", _FakeDT):
+            rm1._hyrotrader_rules_loop()
+        self.assertAlmostEqual(rm1._hyro_last_day_profits["2026-04-10"], 15.0, places=6)
+
+        now_box[0], s1_open[:] = d2, []
+        s1_closed[0] = [{"trade_id": 501, "is_open": False, "is_short": False, "profit_abs": 30.0, "open_timestamp": t0_ms, "close_timestamp": d2_ms,
+                         "orders": [ent_s1, {"order_id": "ex-501", "ft_is_entry": False, "is_open": False, "filled": 3.0, "average": 110.0, "cost": 330.0, "order_filled_timestamp": d2_ms}]}]
+        rm1._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
+        with patch("llm_risk_manager_prop.datetime", _FakeDT):
+            rm1._hyrotrader_rules_loop()
+        self.assertAlmostEqual(rm1._hyro_last_day_profits["2026-04-10"], 15.0, places=6)
+        self.assertAlmostEqual(rm1._hyro_last_day_profits["2026-04-11"], 15.0, places=6)
+
+        # Scenario 2 (Codex #2): 2 exits on Day 1 (14.685) & Day 2 (13.425, total 28.110) -> Day 1 never rewritten to 14.055.
+        now_box[0] = d1
+        ent_s2 = {"order_id": "ent-502", "ft_is_entry": True, "is_open": False, "filled": 3.0, "average": 100.0, "cost": 300.0, "funding_fee": 0.0, "order_filled_timestamp": t0_ms}
+        ex1_s2 = {"order_id": "ex-502-1", "ft_is_entry": False, "is_open": False, "filled": 1.5, "average": 110.0, "cost": 165.0, "funding_fee": 0.0, "order_filled_timestamp": d1_ms}
+        ex2_s2 = {"order_id": "ex-502-2", "ft_is_entry": False, "is_open": False, "filled": 1.5, "average": 110.0, "cost": 165.0, "funding_fee": -1.26, "order_filled_timestamp": d2_ms}
+        s2_open = [{"trade_id": 502, "is_open": True, "is_short": False, "fee_open": 0.001, "fee_close": 0.001, "realized_profit": 14.685, "open_timestamp": t0_ms, "orders": [ent_s2, ex1_s2]}]
+        s2_closed = [[]]
+        rm2 = make_rm(lambda: s2_open, lambda limit=500: s2_closed[0])
+        rm2._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
+        with patch("llm_risk_manager_prop.datetime", _FakeDT):
+            rm2._hyrotrader_rules_loop()
+        self.assertAlmostEqual(rm2._hyro_last_day_profits["2026-04-10"], 14.685, places=6)
+
+        now_box[0], s2_open[:] = d2, []
+        s2_closed[0] = [{"trade_id": 502, "is_open": False, "is_short": False, "fee_open": 0.001, "fee_close": 0.001, "profit_abs": 28.110, "open_timestamp": t0_ms, "close_timestamp": d2_ms, "orders": [ent_s2, ex1_s2, ex2_s2]}]
+        for candidate_rm in (rm2, make_rm(lambda: [], lambda limit=500: s2_closed[0])):
+            candidate_rm._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
+            with patch("llm_risk_manager_prop.datetime", _FakeDT):
+                candidate_rm._hyrotrader_rules_loop()
+            self.assertAlmostEqual(candidate_rm._hyro_last_day_profits["2026-04-10"], 14.685, places=6)
+            self.assertAlmostEqual(candidate_rm._hyro_last_day_profits["2026-04-11"], 13.425, places=6)
 
 
 if __name__ == "__main__":

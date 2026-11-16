@@ -705,6 +705,7 @@ class MultiPositionEmergencyTests(unittest.TestCase):
                 return res
 
         sup = EmergencySupervisor(MultiAdapter(self.profile), self.root, state_file, self.profile, KEY, coordinated=True)
+        self.addCleanup(sup.close)
         # Step 1: liquidates BOTH BTC and ETH in a single pass.
         self.assertFalse(sup.step())
         self.assertEqual(len(orders_by_cid), 2)
@@ -721,7 +722,7 @@ class MultiPositionEmergencyTests(unittest.TestCase):
         # Step 2: confirms flat cleanly.
         self.assertTrue(sup.step())
         self.assertEqual(read_emergency(self.root)["phase"], "flat_confirmed")
-        sup.journal.close()
+        sup.close()
 
         # Verify trade_commands returns 0 on KeyboardInterrupt during emergency handoff, raises otherwise.
         from freqtrade.commands.trade_commands import start_trading
