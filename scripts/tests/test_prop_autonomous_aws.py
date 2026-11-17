@@ -396,7 +396,10 @@ class HyroRulesAndCommissioningTests(unittest.TestCase):
             "BTC/USDT:USDT": {"active": True, "quote": "USDT", "swap": True, "spot": False, "linear": True},
         }
         pm = PairListManager(ex, cfg)
-        self.assertEqual(pm.name_list, ["VolumePairList", "DelistFilter", "AgeFilter", "SpreadFilter"])
+        self.assertEqual(
+            pm.name_list,
+            ["VolumePairList", "DelistFilter", "AgeFilter", "VolatilityFilter", "RangeStabilityFilter", "SpreadFilter"],
+        )
         strat = StrategyResolver.load_strategy(cfg)
         self.assertEqual(strat.get_strategy_name(), "NostalgiaForInfinityX8_Prop")
         self.assertEqual(cfg["max_open_trades"], 3)

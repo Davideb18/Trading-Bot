@@ -4,7 +4,7 @@
     "max_open_trades": 3,
     "stake_currency": "USDT",
     "stake_amount": "unlimited",
-    "tradable_balance_ratio": 0.2,
+    "tradable_balance_ratio": 0.19,
     "prop_non_compounding": true,
     "prop_initial_balance": 5000,
     "prop_guard_enabled": true,
@@ -110,7 +110,7 @@
             "(ARKK|BITO|BMNU|BWET|CONL|DRAM|EWJ|EWT|EWZ|EWZS|GDX|IBIT|INTW|IWM|KODEX200|KORU|KSTR|LYTE|MAGS|MSFU|MSTU|MUU|MVLL|NCLD|NVDL|RAM|SKDD|SKUU|SMH|SOXL|SOXS|SOXX|SPCH|SSPC|TBT|TLT|TMF|TSLL|TZA|URNM|UVXY|XBI|XLE|XLF|XLI|XLK|XLP|XLU|XLV|ZCSH)/.*",
             "(EURUSD|GBPUSD|USDBRL|USDJPY)/.*",
             "(CL|BZ|NATGAS|XPT)/.*",
-            "(OGN|XAU|XAG|PAXG|XAUT|GOLD|SILVER|WTI|BRENT)/.*"
+            "(INIT|OGN|XAU|XAG|PAXG|XAUT|GOLD|SILVER|WTI|BRENT)/.*"
         ]
     },
     "pairlists": [
@@ -127,6 +127,20 @@
         {
             "method": "AgeFilter",
             "min_days_listed": 60
+        },
+        {
+            "method": "VolatilityFilter",
+            "lookback_days": 10,
+            "min_volatility": 0.0,
+            "max_volatility": 0.5,
+            "refresh_period": 1800
+        },
+        {
+            "method": "RangeStabilityFilter",
+            "lookback_days": 10,
+            "min_rate_of_change": 0.0,
+            "max_rate_of_change": 0.85,
+            "refresh_period": 1800
         },
         {
             "method": "SpreadFilter",
@@ -177,8 +191,8 @@
     },
     "prop_risk_budget": {
         "model": "hyrotrader_one_step_validated_v2",
-        "max_slot_notional_usdt": 666.0,
-        "max_aggregate_notional_usdt": 1000.0,
+        "max_slot_notional_usdt": 500.0,
+        "max_aggregate_notional_usdt": 950.0,
         "roundtrip_fee_bps": 12.0,
         "funding_bound_bps": 10.0,
         "execution_slippage_bps": 28.0,
