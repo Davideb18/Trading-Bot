@@ -101,7 +101,7 @@ class RiskBudgetTests(unittest.TestCase):
 
     def test_static_overall_floor_dominates(self):
         self.assertEqual(budget(self.profile, 4800, 4800),
-                         dict(operating_floor=4740, headroom=60))
+                         dict(operating_floor=4675, headroom=125))
 
     def test_concurrent_entry_dca_replacement_unchanged_never_dispatchable(self):
         def attempt(i):

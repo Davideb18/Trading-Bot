@@ -47,11 +47,14 @@ def validate_profile(profile, environ=None):
         if not number(p.get(key)) or p[key] <= 0:
             raise ValueError(f"Invalid {key}")
     for key, expected in (("official_daily_limit_percent", 0.04),
-                          ("official_max_loss_percent", 0.06),
                           ("profit_target_percent", 0.10),
-                          ("daily_profit_cap_percent", 0.40), ("min_trading_days", 5)):
+                          ("daily_profit_cap_percent", 0.40)):
         if p[key] != expected:
             raise ValueError(f"Invalid One-Step {key}")
+    if p["official_max_loss_percent"] not in (0.06, 0.08):
+        raise ValueError("Invalid One-Step official_max_loss_percent")
+    if p["min_trading_days"] not in (3, 4, 5):
+        raise ValueError("Invalid One-Step min_trading_days")
     if not (p["daily_limit_percent"] < p["official_daily_limit_percent"]
             and p["max_loss_percent"] < p["official_max_loss_percent"]):
         raise ValueError("Operating loss limits must be below official limits")

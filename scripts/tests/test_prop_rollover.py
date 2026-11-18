@@ -100,11 +100,11 @@ class RolloverTests(unittest.TestCase):
         self.direct.snapshot.side_effect = TimeoutError('offline')
         self.rollover()
         self.assertEqual(self.guard.state['overnight_exposure']['status'], 'unknown')
-        self.assertEqual(self.guard.state['operating_overall_floor'], 4740.)
+        self.assertEqual(self.guard.state['operating_overall_floor'], 4675.)
         self.emergency.step.assert_not_called()
 
     def test_overall_emergency_does_not_wait_for_exposure_query(self):
-        self.direct.equity.return_value = 4740.
+        self.direct.equity.return_value = 4675.
         self.guard._check_drawdown(self.after)
         self.assertTrue(self.guard.state['nuclear_triggered'])
         self.direct.snapshot.assert_not_called()

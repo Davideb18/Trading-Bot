@@ -182,12 +182,12 @@
         "challenge_start_utc": null,
         "phase_start_utc": null,
         "official_daily_limit_percent": 0.04,
-        "official_max_loss_percent": 0.06,
+        "official_max_loss_percent": 0.08,
         "daily_limit_percent": 0.036,
-        "max_loss_percent": 0.052,
+        "max_loss_percent": 0.065,
         "profit_target_percent": 0.1,
         "daily_profit_cap_percent": 0.4,
-        "min_trading_days": 5
+        "min_trading_days": 3
     },
     "prop_risk_budget": {
         "model": "hyrotrader_one_step_validated_v2",

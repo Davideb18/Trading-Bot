@@ -427,7 +427,7 @@ except JournalBlocked:
 
     def test_corrupt_or_missing_state_file_still_persists_halt_and_liquidates_on_overall_floor_breach(self):
         self.state_file.write_text("{corrupt-state-json")
-        self.adapter.equity_value = 4740  # Operating overall floor on 5000 balance
+        self.adapter.equity_value = 4675  # Operating overall floor on 5000 balance
         facade = IndependentRiskAPI(self.adapter, Mock())
         guard = RiskGuard(facade, self.state_file, profile=self.profile, emergency=self.supervisor)
         self.assertIsNotNone(guard.state_error)
@@ -688,7 +688,7 @@ class MultiPositionEmergencyTests(unittest.TestCase):
                 self.profile = profile
                 self.deadline = None
             def snapshot(self):
-                return {"equity": 4700.0, "positions": list(positions), "orders": [], "checked_ms": int(time.time() * 1000)}
+                return {"equity": 4600.0, "positions": list(positions), "orders": [], "checked_ms": int(time.time() * 1000)}
             def lookup(self, pair, *, client_id=None, order_id=None):
                 if client_id in entry_ev_by_cid:
                     return entry_ev_by_cid[client_id]

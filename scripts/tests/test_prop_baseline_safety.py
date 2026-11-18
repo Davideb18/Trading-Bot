@@ -90,7 +90,7 @@ class BaselineSafetyTests(unittest.TestCase):
                 self.assertFalse(guard.state['data_valid'])
                 self.assertTrue(guard.state['data_fault'])
                 self.assertIsNone(guard.state['operating_daily_floor'])
-                self.api.get_equity.return_value = 4740
+                self.api.get_equity.return_value = 4675
                 guard._check_drawdown(tomorrow + timedelta(seconds=1))
                 self.assertTrue(guard.nuclear_triggered)
                 # Emergency adapter remains the authority; False is not flat.
@@ -126,7 +126,7 @@ class BaselineSafetyTests(unittest.TestCase):
 
     def test_state_fault_breach_reaches_existing_emergency_without_http(self):
         self.path.write_text('{broken')
-        self.api.get_equity.return_value = 4740
+        self.api.get_equity.return_value = 4675
         self.api.report_fault.side_effect = AssertionError('HTTP must not precede emergency')
         guard = self.guard()
         guard._check_drawdown(self.now)

@@ -77,8 +77,8 @@ class GuardTests(unittest.TestCase):
 
     def test_official_and_operating_floors_use_initial_allocation(self):
         self.assertEqual(floors(self.profile, 5500), {
-            "official_daily_floor": 5300, "official_overall_floor": 4700,
-            "operating_daily_floor": 5320, "operating_overall_floor": 4740,
+            "official_daily_floor": 5300, "official_overall_floor": 4600,
+            "operating_daily_floor": 5320, "operating_overall_floor": 4675,
         })
         self.assertEqual(floors(self.profile, 4800)["operating_daily_floor"], 4620)
 
@@ -100,12 +100,12 @@ class GuardTests(unittest.TestCase):
         self.api.get_equity.return_value = 5130
         self.assertFalse(self.guard._check_drawdown(NOW + timedelta(seconds=1)))
         self.assertEqual(self.guard.state["operating_daily_floor"], 4820)
-        self.assertEqual(self.guard.state["operating_overall_floor"], 4740)
+        self.assertEqual(self.guard.state["operating_overall_floor"], 4675)
 
     def test_overall_equality_when_daily_floor_is_lower(self):
         self.install(4800)
         guard = self.new_guard()
-        self.api.get_equity.return_value = 4740
+        self.api.get_equity.return_value = 4675
         self.assertTrue(guard._check_drawdown(NOW))
         self.assertIn("overall", guard.state["halt_reason"])
 
@@ -126,7 +126,7 @@ class GuardTests(unittest.TestCase):
         self.assertFalse(self.guard._check_drawdown(tomorrow))
         self.assertIsNone(self.guard.state["operating_daily_floor"])
         self.assertFalse(self.authorized(tomorrow))
-        self.api.get_equity.return_value = 4740
+        self.api.get_equity.return_value = 4675
         self.assertTrue(self.guard._check_drawdown(tomorrow + timedelta(seconds=1)))
 
     def test_rollover_accepts_only_explicit_current_midnight_record(self):
@@ -154,7 +154,7 @@ class GuardTests(unittest.TestCase):
         self.assertFalse(guard.state['baseline_estimate']['confirmed'])
         self.assertFalse(self.authorized(post))
         self.assertIsNone(guard.state['operating_daily_floor'])
-        self.assertEqual(guard.state['operating_overall_floor'], 4740)
+        self.assertEqual(guard.state['operating_overall_floor'], 4675)
         restarted = RiskGuard(self.api, self.path, profile=self.profile, emergency=Mock())
         self.assertEqual(restarted.state['baseline_estimate'], guard.state['baseline_estimate'])
         self.assertTrue(restarted.state['data_fault'])
@@ -243,13 +243,19 @@ class GuardTests(unittest.TestCase):
         raw = json.loads((ROOT / "user_data/config_prop_nfix8.json").read_text())
         with self.assertRaises(ValueError):
             profile_from_config(raw)
-        for key, value in (("daily_limit_percent", .04), ("max_loss_percent", .06),
-                           ("official_daily_limit_percent", .05), ("account_id", ""),
+        for key, value in (("daily_limit_percent", .04), ("max_loss_percent", .08),
+                           ("official_daily_limit_percent", .05), ("official_max_loss_percent", .10),
+                           ("min_trading_days", 2), ("min_trading_days", 6), ("account_id", ""),
                            ("phase_id", "funded"), ("daily_limit_percent", math.nan)):
             changed = copy.deepcopy(self.config)
             changed["prop_guard"][key] = value
             with self.assertRaises(ValueError):
                 profile_from_config(changed)
+        legacy = copy.deepcopy(self.config)
+        legacy["prop_guard"].update(official_max_loss_percent=.06, max_loss_percent=.052, min_trading_days=5)
+        legacy_prof = profile_from_config(legacy)
+        self.assertEqual(floors(legacy_prof, 5000)["official_overall_floor"], 4700)
+        self.assertEqual(floors(legacy_prof, 5000)["operating_overall_floor"], 4740)
         for key in ("prop_initial_balance",):
             changed = copy.deepcopy(self.config)
             changed[key] = True
