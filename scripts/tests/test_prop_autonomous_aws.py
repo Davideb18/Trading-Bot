@@ -1854,9 +1854,13 @@ class ProductionRuntimeRegressionTests(unittest.TestCase):
             fromtimestamp = staticmethod(datetime.fromtimestamp)
             fromisoformat = staticmethod(datetime.fromisoformat)
 
+        tmp_ledger = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp_ledger.cleanup)
+
         def make_rm(open_fn, closed_fn):
             rm = RiskManager.__new__(RiskManager)
             rm.profile = {**profile_from_config(configured_account()), "phase_start_utc": "2026-04-01T00:00:00Z"}
+            rm.state_file = Path(tmp_ledger.name) / "risk_manager_prop_state.json"
             rm.initial_balance, rm.state, rm.inactivity_keepalive_enabled = 5000.0, {"nuclear_triggered": False}, False
             rm.request_rules_pause = Mock()
             rm.rules_api = SimpleNamespace(get_open_trades=open_fn, get_trades=closed_fn)
@@ -1872,16 +1876,37 @@ class ProductionRuntimeRegressionTests(unittest.TestCase):
         rm1._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
         with patch("llm_risk_manager_prop.datetime", _FakeDT):
             rm1._hyrotrader_rules_loop()
-        self.assertAlmostEqual(rm1._hyro_last_day_profits["2026-04-10"], 15.0, places=6)
+        self.assertEqual(rm1._hyro_last_day_profits, {"2026-04-10": 15.0})
 
-        now_box[0], s1_open[:] = d2, []
-        s1_closed[0] = [{"trade_id": 501, "is_open": False, "is_short": False, "profit_abs": 30.0, "open_timestamp": t0_ms, "close_timestamp": d2_ms,
-                         "orders": [ent_s1, {"order_id": "ex-501", "ft_is_entry": False, "is_open": False, "filled": 3.0, "average": 110.0, "cost": 330.0, "order_filled_timestamp": d2_ms}]}]
+        # Tick across midnight while order is STILL open at filled=1.5 -> must remain on 2026-04-10!
+        now_box[0] = d2
         rm1._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
         with patch("llm_risk_manager_prop.datetime", _FakeDT):
             rm1._hyrotrader_rules_loop()
-        self.assertAlmostEqual(rm1._hyro_last_day_profits["2026-04-10"], 15.0, places=6)
-        self.assertAlmostEqual(rm1._hyro_last_day_profits["2026-04-11"], 15.0, places=6)
+        self.assertEqual(rm1._hyro_last_day_profits, {"2026-04-10": 15.0})
+
+        s1_open[:] = []
+        s1_closed[0] = [{"trade_id": 501, "is_open": False, "is_short": False, "profit_abs": 30.0, "open_timestamp": t0_ms, "close_timestamp": d2_ms,
+                         "orders": [ent_s1, {"order_id": "ex-501", "ft_is_entry": False, "is_open": False, "filled": 3.0, "average": 110.0, "cost": 330.0, "order_filled_timestamp": d2_ms}]}]
+        for inst in (rm1, make_rm(lambda: [], lambda limit=500: s1_closed[0])):
+            inst._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
+            with patch("llm_risk_manager_prop.datetime", _FakeDT):
+                inst._hyrotrader_rules_loop()
+            self.assertAlmostEqual(inst._hyro_last_day_profits["2026-04-10"], 15.0, places=6)
+            self.assertAlmostEqual(inst._hyro_last_day_profits["2026-04-11"], 15.0, places=6)
+            self.assertAlmostEqual(inst._hyro_last_counted_profit, 30.0, places=6)
+
+        # Scenario 1b (Codex #2 new): order created 2026-04-10 23:59 UTC (order_timestamp=d1_ms),
+        # partial fill occurs at 2026-04-11 00:01 UTC while order is still open (order_filled_timestamp=None) -> attributed to 2026-04-11.
+        now_box[0] = d2
+        s1b_open = [{"trade_id": 503, "is_open": True, "is_short": False, "realized_profit": 0.0, "open_timestamp": t0_ms,
+                     "orders": [{"order_id": "ent-503", "ft_is_entry": True, "is_open": False, "filled": 5.0, "average": 100.0, "cost": 500.0, "order_filled_timestamp": t0_ms},
+                                {"order_id": "ex-503", "ft_is_entry": False, "is_open": True, "filled": 2.5, "average": 150.0, "cost": 375.0, "order_timestamp": d1_ms, "order_filled_timestamp": None}]}]
+        rm1b = make_rm(lambda: s1b_open, lambda limit=500: [])
+        rm1b._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
+        with patch("llm_risk_manager_prop.datetime", _FakeDT):
+            rm1b._hyrotrader_rules_loop()
+        self.assertEqual(rm1b._hyro_last_day_profits, {"2026-04-11": 125.0})
 
         # Scenario 2 (Codex #2): 2 exits on Day 1 (14.685) & Day 2 (13.425, total 28.110) -> Day 1 never rewritten to 14.055.
         now_box[0] = d1

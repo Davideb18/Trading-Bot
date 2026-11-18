@@ -54,10 +54,12 @@ def run_sliding_one_step():
 
     attempts = []
 
-    target_profit = 500.0   # 10% on $5,000
-    daily_cap = 200.0       # 40% consistency cap per day ($200)
-    max_loss_usd = 300.0    # 6% Static Overall Max Loss ($300 -> floor $4,700)
-    daily_loss_usd = 200.0  # 4% Static Daily Loss ($200 from midnight UTC equity)
+    pg = curated_cfg.get("prop_guard", {})
+    target_profit = target_bal * float(pg.get("profit_target_pct", 0.10))
+    daily_cap = target_profit * float(pg.get("daily_profit_cap_pct", 0.40))
+    max_loss_usd = target_bal * float(pg.get("max_drawdown_limit_pct", 0.08))
+    daily_loss_usd = target_bal * float(pg.get("daily_loss_limit_pct", 0.04))
+    min_days = int(pg.get("min_trading_days", 3))
 
     for s_dt in start_dates:
         # Evaluate challenge starting at s_dt
@@ -113,7 +115,7 @@ def run_sliding_one_step():
                 counted_pnl = min(d_pnl, daily_cap) if d_pnl > 0 else d_pnl
                 total_counted_profit += counted_pnl
 
-            if total_counted_profit >= target_profit and len(qualifying_days) >= 5:
+            if total_counted_profit >= target_profit and len(qualifying_days) >= min_days:
                 passed = True
                 days_taken = (t["close_dt"] - s_dt).days
                 break

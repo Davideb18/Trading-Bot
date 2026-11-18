@@ -1079,18 +1079,46 @@ class RiskManager(RiskGuard):
                         seen_trade_ids.add(tid)
                     all_trades.append(tr)
 
+                import hashlib as _hashlib
+                import json as _json
+                import os as _os
+                import tempfile as _tempfile
+                from pathlib import Path as _Path
+
+                def _ledger_path():
+                    sf = getattr(self, "state_file", None)
+                    if sf is not None:
+                        return _Path(sf).with_name(".hyro_accounting_ledger.json")
+                    prof_raw = _json.dumps(getattr(self, "profile", None) or {}, sort_keys=True, default=str)
+                    digest = _hashlib.sha256(prof_raw.encode("utf-8")).hexdigest()[:16]
+                    return _Path(_tempfile.gettempdir()) / f"hyro_accounting_ledger_{digest}.json"
+
                 order_slice_ledger = getattr(self, "_hyro_order_slice_ledger", None)
-                if not isinstance(order_slice_ledger, dict):
-                    order_slice_ledger = self._hyro_order_slice_ledger = {}
                 exit_net_ledger = getattr(self, "_hyro_exit_net_ledger", None)
-                if not isinstance(exit_net_ledger, dict):
-                    exit_net_ledger = self._hyro_exit_net_ledger = {}
+                if not isinstance(order_slice_ledger, dict) or not isinstance(exit_net_ledger, dict):
+                    loaded_slices, loaded_net = {}, {}
+                    st_dict = getattr(self, "state", None)
+                    if isinstance(st_dict, dict) and isinstance(st_dict.get("hyro_order_slice_ledger"), dict):
+                        loaded_slices = dict(st_dict.get("hyro_order_slice_ledger") or {})
+                        loaded_net = dict(st_dict.get("hyro_exit_net_ledger") or {})
+                    else:
+                        try:
+                            lp = _ledger_path()
+                            if lp.exists():
+                                raw_l = _json.loads(lp.read_text(encoding="utf-8"))
+                                if isinstance(raw_l, dict):
+                                    loaded_slices = dict(raw_l.get("slices") or {})
+                                    loaded_net = dict(raw_l.get("exit_net") or {})
+                        except Exception:
+                            loaded_slices, loaded_net = {}, {}
+                    order_slice_ledger = self._hyro_order_slice_ledger = loaded_slices
+                    exit_net_ledger = self._hyro_exit_net_ledger = loaded_net
 
                 def extract_filled_orders(tr, t_idx_fallback=0):
                     raw_orders = tr.get("orders")
                     if not isinstance(raw_orders, list):
                         return []
-                    tid_key = tr.get("trade_id") or f"t_{t_idx_fallback}_{tr.get('open_timestamp') or ''}"
+                    tid_key = f"{tr.get('trade_id', t_idx_fallback)}_{tr.get('open_timestamp') or tr.get('open_date') or ''}"
                     filled_list, out_idx = [], 0
                     for idx, ord_obj in enumerate(raw_orders):
                         if not isinstance(ord_obj, dict):
@@ -1100,43 +1128,56 @@ class RiskManager(RiskGuard):
                             continue
                         is_entry = bool(ord_obj.get("ft_is_entry", True))
                         ord_open = bool(ord_obj.get("is_open", False))
-                        fill_dt = parse_dt(
+                        explicit_dt = parse_dt(
                             ord_obj.get("order_filled_timestamp")
                             or ord_obj.get("order_filled_date")
                             or ord_obj.get("order_update_timestamp")
                             or ord_obj.get("order_update_date")
-                            or ord_obj.get("order_timestamp")
-                            or ord_obj.get("order_date")
-                        ) or (now_utc if ord_open else None)
+                        )
+                        created_dt = parse_dt(ord_obj.get("order_timestamp") or ord_obj.get("order_date"))
+                        fill_dt = explicit_dt or (now_utc if ord_open else created_dt)
+                        fill_iso = fill_dt.isoformat() if fill_dt else None
                         price = float(
                             ord_obj.get("average") or ord_obj.get("safe_price") or ord_obj.get("price") or 0.0
                         )
                         cost_val = float(ord_obj.get("cost", 0.0) or 0.0) or (filled_qty * price if price > 0 else 0.0)
                         funding_val = float(ord_obj.get("funding_fee", 0.0) or 0.0)
-                        okey = (tid_key, ord_obj.get("order_id") if ord_obj.get("order_id") is not None else f"idx_{idx}")
+                        ord_id_str = str(ord_obj.get("order_id") if ord_obj.get("order_id") is not None else f"idx_{idx}")
+                        okey = f"{tid_key}|{ord_id_str}"
                         prev = order_slice_ledger.get(okey)
                         prev_qty = sum(s["filled"] for s in prev) if prev else 0.0
-                        if not prev or filled_qty < prev_qty - 1e-12:
-                            prev = [{"filled": filled_qty, "price": price, "cost": cost_val, "dt": fill_dt, "funding_fee": funding_val}]
+                        prev_cost = sum(s["cost"] for s in prev) if prev else 0.0
+                        first_prev_dt = parse_dt(prev[0].get("dt")) if prev else None
+                        stale_match = bool(
+                            prev
+                            and abs(filled_qty - prev_qty) <= 1e-12
+                            and (
+                                abs(cost_val - prev_cost) > 1e-4
+                                or (created_dt is not None and first_prev_dt is not None and created_dt > first_prev_dt)
+                            )
+                        )
+                        if not prev or filled_qty < prev_qty - 1e-12 or stale_match:
+                            prev = [{"filled": filled_qty, "price": price, "cost": cost_val, "dt": fill_iso, "funding_fee": funding_val}]
                             order_slice_ledger[okey] = prev
                         elif filled_qty > prev_qty + 1e-12:
                             d_qty = filled_qty - prev_qty
-                            d_cost = max(0.0, cost_val - sum(s["cost"] for s in prev)) or (d_qty * price if price > 0 else 0.0)
+                            d_cost = max(0.0, cost_val - prev_cost) or (d_qty * price if price > 0 else 0.0)
                             d_fund = funding_val - sum(s.get("funding_fee", 0.0) for s in prev)
                             last_s = prev[-1]
-                            if last_s["dt"] and fill_dt and last_s["dt"].strftime("%Y-%m-%d") == fill_dt.strftime("%Y-%m-%d"):
+                            last_dt = parse_dt(last_s.get("dt"))
+                            if last_dt and fill_dt and last_dt.strftime("%Y-%m-%d") == fill_dt.strftime("%Y-%m-%d"):
                                 last_s["filled"] += d_qty
                                 last_s["cost"] += d_cost
                                 last_s["price"] = (last_s["cost"] / last_s["filled"]) if last_s["cost"] > 0 else price
                                 last_s["funding_fee"] = last_s.get("funding_fee", 0.0) + d_fund
-                                last_s["dt"] = fill_dt
+                                last_s["dt"] = fill_iso
                             else:
-                                prev.append({"filled": d_qty, "price": (d_cost / d_qty) if d_cost > 0 else price, "cost": d_cost, "dt": fill_dt, "funding_fee": d_fund})
-                        elif prev[-1]["dt"] is None and fill_dt is not None:
-                            prev[-1]["dt"] = fill_dt
+                                prev.append({"filled": d_qty, "price": (d_cost / d_qty) if d_cost > 0 else price, "cost": d_cost, "dt": fill_iso, "funding_fee": d_fund})
+                        elif prev[-1].get("dt") is None and fill_iso is not None:
+                            prev[-1]["dt"] = fill_iso
                         for s_idx, sl in enumerate(prev):
                             filled_list.append({
-                                "idx": out_idx, "slice_key": f"{okey[1]}#{s_idx}", "dt": sl["dt"],
+                                "idx": out_idx, "slice_key": f"{ord_id_str}#{s_idx}", "dt": parse_dt(sl.get("dt")),
                                 "is_entry": is_entry, "is_open": ord_open, "filled": sl["filled"],
                                 "price": sl["price"], "cost": sl["cost"], "funding_fee": sl.get("funding_fee", 0.0),
                             })
@@ -1302,7 +1343,7 @@ class RiskManager(RiskGuard):
                     if has_exit_orders:
                         sorted_orders = sorted(orders_for_trade, key=lambda o: (o["dt"] or epoch_min, o["idx"]))
                         direction = -1.0 if tr.get("is_short") else 1.0
-                        tid_key = tr.get("trade_id") or f"t_{t_idx}_{tr.get('open_timestamp') or ''}"
+                        tid_key = f"{tr.get('trade_id', t_idx)}_{tr.get('open_timestamp') or tr.get('open_date') or ''}"
                         fee_open_r = float(tr.get("fee_open", 0.0) or 0.0)
                         fee_close_r = float(tr.get("fee_close", 0.0) or 0.0)
                         cur_qty = cur_entry_cost = cur_weighted_price_sum = cur_funding = 0.0
@@ -1401,10 +1442,31 @@ class RiskManager(RiskGuard):
                     if cost >= min_qualifying_stake and abs(profit_ratio) >= 0.01:
                         qualifying_days.add(tr_day)
 
+                try:
+                    raw_payload = _json.dumps({"slices": order_slice_ledger, "exit_net": exit_net_ledger})
+                    if isinstance(getattr(self, "state", None), dict):
+                        snap_copy = _json.loads(raw_payload)
+                        st_lock = getattr(self, "_state_lock", None)
+                        if st_lock is not None:
+                            with st_lock:
+                                self.state["hyro_order_slice_ledger"] = snap_copy["slices"]
+                                self.state["hyro_exit_net_ledger"] = snap_copy["exit_net"]
+                        else:
+                            self.state["hyro_order_slice_ledger"] = snap_copy["slices"]
+                            self.state["hyro_exit_net_ledger"] = snap_copy["exit_net"]
+                    lp = _ledger_path()
+                    tmp_lp = lp.with_suffix(f".tmp.{_os.getpid()}")
+                    tmp_lp.write_text(raw_payload, encoding="utf-8")
+                    _os.chmod(tmp_lp, 0o600)
+                    tmp_lp.replace(lp)
+                except Exception:
+                    pass
+
                 target_profit = self.initial_balance * self.profile["profit_target_percent"]
                 daily_cap = target_profit * self.profile["daily_profit_cap_percent"]
                 self._hyro_last_day_profits = dict(day_profits)
                 counted_profit = sum(min(d_pnl, daily_cap) if d_pnl > 0 else d_pnl for d_pnl in day_profits.values())
+                self._hyro_last_counted_profit = counted_profit
 
                 today_profit = day_profits.get(today_str, 0.0)
                 daily_pause_threshold = min(daily_cap * 0.875, daily_cap - 25.0) if daily_cap > 30.0 else daily_cap * 0.85
