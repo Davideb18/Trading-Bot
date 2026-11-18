@@ -6,6 +6,7 @@ Provides dynamic pair list based on Market Cap
 
 import logging
 import math
+import time
 
 from freqtrade.constants import PairPrefixes
 from freqtrade.exceptions import OperationalException
@@ -38,6 +39,10 @@ class MarketCapPairList(IPairList):
         self._max_rank = self._pairlistconfig.get("max_rank", 30)
         self._refresh_period = self._pairlistconfig.get("refresh_period", 86400)
         self._categories = self._pairlistconfig.get("categories", [])
+        self._min_market_cap = float(self._pairlistconfig.get("min_market_cap", 0))
+        self._fallback_max_age = float(self._pairlistconfig.get("fallback_max_age", 86400))
+        self._last_good_data = None
+        self._last_good_at = 0.0
         self._marketcap_cache: FtTTLCache = FtTTLCache(maxsize=2, ttl=self._refresh_period)
 
         _coingecko_config = self._config.get("coingecko", {})
@@ -185,6 +190,9 @@ class MarketCapPairList(IPairList):
         :return: new whitelist
         """
         marketcap_list = self._marketcap_cache.get("marketcap")
+        if (self._last_good_data is not None
+                and time.monotonic() - self._last_good_at > self._fallback_max_age):
+            marketcap_list = None
         mode = self._mode
         is_whitelist_mode = mode == "whitelist"
         filtered_pairlist: list[str] = []
@@ -201,23 +209,41 @@ class MarketCapPairList(IPairList):
         if marketcap_list is None:
             data = []
 
-            if not self._categories:
-                pages_required = math.ceil(self._max_rank / 250)
-                for page in range(1, pages_required + 1):
-                    default_kwargs["page"] = str(page)
-                    page_data = self._coingecko.get_coins_markets(**default_kwargs)
-                    data.extend(page_data)
-            else:
-                for category in self._categories:
-                    category_data = self._coingecko.get_coins_markets(
-                        **default_kwargs, **({"category": category} if category else {})
-                    )
-                    data += category_data
+            try:
+                if not self._categories:
+                    pages_required = math.ceil(self._max_rank / 250)
+                    for page in range(1, pages_required + 1):
+                        default_kwargs["page"] = str(page)
+                        page_data = self._coingecko.get_coins_markets(**default_kwargs)
+                        if not page_data:
+                            raise ValueError("Empty CoinGecko response")
+                        data.extend(page_data)
+                else:
+                    for category in self._categories:
+                        category_data = self._coingecko.get_coins_markets(
+                            **default_kwargs, **({"category": category} if category else {})
+                        )
+                        if not category_data:
+                            raise ValueError("Empty CoinGecko response")
+                        data += category_data
+                if not data or any(not isinstance(row.get("symbol"), str) for row in data):
+                    raise ValueError("Invalid CoinGecko response")
+                self._last_good_data = data.copy()
+                self._last_good_at = time.monotonic()
+            except Exception as exc:
+                if (self._last_good_data is None
+                        or time.monotonic() - self._last_good_at > self._fallback_max_age):
+                    raise OperationalException(
+                        "Market-cap evidence unavailable: no unverified volume fallback allowed"
+                    ) from exc
+                logger.warning("CoinGecko unavailable; using bounded last-known market caps")
+                data = self._last_good_data.copy()
 
             data.sort(key=lambda d: float(d.get("market_cap") or 0.0), reverse=True)
 
             if data:
-                marketcap_list = [row["symbol"] for row in data]
+                marketcap_list = [row["symbol"] for row in data
+                                  if float(row.get("market_cap") or 0) >= self._min_market_cap]
                 self._marketcap_cache["marketcap"] = marketcap_list
 
         if marketcap_list:

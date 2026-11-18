@@ -1,0 +1,184 @@
+VALIDAZIONE HYROTRADER — STATO VERIFICATO, NON REPORT DI OTTIMIZZAZIONE COMPLETATA
+Data: 18 novembre 2026
+Repository: Trading-Bot, branch bot/prop-one-step
+Base remota verificata con git pull --ff-only: a8b903788b3a5aa2eb085f11220599b4c152e8a0
+
+VERDETTO
+
+Non è ancora possibile scegliere quantitativamente One-Step o Two-Step, né dichiarare
+una configurazione ottimale. Non sono stati eseguiti i benchmark completi di due anni,
+le coorti, la sequenza Two-Step, i prelievi o l'ottimizzazione fuori campione.
+Un backtest senza violazioni non dimostra una probabilità futura di fallimento nulla.
+La configurazione modificata è una patch da revisionare, non una configurazione certificata per il live.
+Non sono stati effettuati deploy AWS, ordini di trading, acquisti o commit.
+
+CORREZIONI ESEGUITE
+
+1. Qualifying days: live e backtest condividono prop_qualification.qualifying_close_day.
+   Sono necessari trade completamente chiuso, quantità residua nulla, data finale UTC,
+   nozionale aggregato delle uscite >= 5% del saldo iniziale e valore assoluto del PnL
+   lordo aggregato >= 1% del nozionale. Commissioni e funding non vengono usati come
+   sostituti del PnL lordo. Senza eseguiti verificabili il giorno non viene qualificato.
+   Il profitto netto continua a essere contabilizzato per il limite giornaliero.
+   Le chiusure parziali di un trade aperto non qualificano giornate.
+
+2. Keep-alive: rimossi /forceenter e force_exit dal controllo di inattività.
+   Rimangono avvisi; il vecchio flag di abilitazione non riattiva micro-trade artificiali.
+   Eliminato anche il micro-trade fittizio che azzerava l'inattività nel backtest.
+
+3. DCA: la strategia Prop applica un limite comune dopo la decisione nativa.
+   Massimo due aggiunte per vita del trade per default; ogni aggiunta non può superare
+   nessun precedente ingresso eseguito. Il limite non si azzera dopo uscite parziali.
+   prop_max_dca_additions=0 impone single-entry; i valori ammessi sono 0..3.
+   Gli ordini aperti bloccano nuove aggiunte; le riduzioni restano disponibili.
+   I limiti di esposizione esistenti continuano a operare. Questo non sostituisce
+   una verifica formale del sizing di tutti i percorsi di invio ordini.
+
+4. Universo live: PropInstrumentFilter richiede metadati espliciti per perpetual USDT
+   standard, negoziabili, senza tag. Esclude Innovation Zone, ST, stock, ETF, commodity,
+   forex e classificazioni sconosciute senza affidarsi ai nomi dei ticker.
+   MarketCapPairList applica min_market_cap=100000000. Un errore o una risposta vuota
+   CoinGecko usa l'ultima risposta valida entro il limite temporale. Senza tale prova
+   solleva OperationalException, anziché restituire silenziosamente [] o ammettere
+   monete tramite un ranking di volume che non ne dimostra la capitalizzazione.
+   La cache è in memoria, non sopravvive al riavvio, e non garantisce la capitalizzazione
+   corrente durante un crollo. Il problema delle collisioni fra ticker richiede ulteriore
+   riconciliazione tramite identità dell'asset.
+
+5. Lookahead trovato in HistoricalPairListAdapter: prima del primo snapshot disponibile
+   veniva utilizzato proprio quel primo snapshot futuro. Ora restituisce lista vuota.
+   Questo corregge il difetto individuato, non certifica zero lookahead nell'intero motore.
+
+PARAMETRI MODIFICATI, NON OTTIMIZZATI
+
+Parametro                         Valore
+prop_max_dca_additions             2
+Filtro strumenti                  PropInstrumentFilter
+MarketCapPairList.number_assets    40
+MarketCapPairList.max_rank         1000
+MarketCapPairList.min_market_cap   100000000 USD
+MarketCapPairList.refresh_period   3600 secondi
+MarketCapPairList.fallback_max_age 86400 secondi
+Keep-alive artificiale             rimosso
+
+Il sizing preesistente resta 500 USD per slot e 950 USD aggregati; non è stato promosso
+come sicuro. Le sezioni One-Step esistenti non sono state trasformate in un motore
+Two-Step/Funded: quella parte del lavoro resta da implementare e verificare.
+
+DATI SCARICATI E LIMITI
+
+Percorso: user_data/forensic/strict_validation/ (ignorato da Git).
+I file manifest contengono URL, hash e date di osservazione.
+
+Fonte / artefatto                     Evidenza
+Bybit instruments.json               932 strumenti; 824 perpetual USDT
+archive_inventory.json               Indici ufficiali di 8 simboli storici
+archive_download_manifest.json       19 giornate campione, NON due anni completi
+Eseguiti scaricati                    21.782.399
+Barre 1m ricostruite                  19.733
+Dimensione eseguiti compressi         823.338.608 byte
+Coin Metrics community.zip           Circa 79 MB
+Capitalizzazione storica disponibile  803 asset, copertura variabile
+Coincidenze ticker con perpetual live 338 su 824; NON mapping di identità certificato
+
+Gli archivi Bybit conservano ALPACA, FTM, MKR, UXLINK, NEIROETH e VOXEL anche quando
+l'endpoint REST interrogato restituisce lista vuota. Sono stati scaricati campioni
+iniziali/finali e OM 12–14 aprile 2025. Le barre derivano dai trade osservati, includono
+turnover reale e non riempiono artificialmente minuti senza eseguiti. L'ultimo giorno
+di un contratto può essere parziale. Non confondere assenza di trade con perdita di dati.
+
+Coin Metrics fornisce serie giornaliere storiche, non versioni archiviate certificate
+come conosciute in ogni istante. Diverse serie terminano a maggio 2026; NEIROETH non è
+coperto nell'importazione e UXLINK inizia solo a settembre 2025. Per prudenza la data
+earliest_usable_at è il giorno seguente all'osservazione; questo NON elimina eventuali
+revisioni retroattive. Dati e attribuzione originali sono conservati nel file ZIP e
+SOURCE_README.md. La licenza della fonte è CC BY-NC 4.0: non assumere autorizzazione
+all'impiego commerciale del dataset gratuito.
+
+Non sono ancora disponibili: universo storico completo riconciliato, classificazioni
+Innovation/ST/TradFi con date di efficacia e conoscenza, market cap completo su tutti
+i due anni, mark e funding storici completi, spread storici, tariffa reale dell'account.
+Acquistare solo CoinGecko non risolverebbe automaticamente gli altri dati mancanti.
+
+VINCOLI ANALITICI DI SHOCK — NON SONO BACKTEST
+
+Saldo 5000 USD; leva 1x; slippage 28 bps roundtrip; commissioni illustrative 11 bps
+roundtrip applicate conservativamente sul nozionale iniziale; funding escluso.
+Limiti giornalieri assunti: One-Step 200 USD, Two-Step 250 USD. Uguaglianza = violazione.
+Si assume nessuna perdita precedente nella giornata e nessuna altra posizione in perdita.
+
+Slot USD | Perdita 1 coin -35% | Perdita 1 coin -50% | Perdita 2 coin -25%
+350      | 123,865            | 176,365            | 177,730
+450      | 159,255            | 226,755            | 228,510
+500      | 176,950            | 251,950            | 253,900
+600      | 212,340            | 302,340            | 304,680
+
+Quindi 500 USD per slot non supera neppure il test necessario -50% da parità giornaliera
+in nessuno dei due programmi. 450 USD fallisce One-Step; 350 USD lascia soltanto 23,635
+USD di margine One-Step nello scenario singolo -50%. Perdite precedenti o funding possono
+consumare questo margine. Lo scenario con due slot da 500/600 può superare anche il limite
+aggregato di alcune configurazioni: non è una traiettoria simulata del portafoglio corrente.
+Uno stop della guardia non garantisce esecuzione prima di un salto di prezzo.
+
+PROVE RICHIESTE ANCORA NON ESEGUITE
+
+Prova                            Stato
+Continuo 2+ anni, tre prelievi    NON ESEGUITA
+Coorti One-Step e Two-Step       NON ESEGUITE
+Partenze giornaliere Set–Nov     NON ESEGUITE
+Shock su ogni posizione/giorno   NON ESEGUITI (solo vincoli analitici sopra)
+Confronto training/validazione   NON ESEGUITO
+Confronto long/short e entry tag NON ESEGUITO
+Tempo mediano/p95 al payout      NON CALCOLABILE
+Profitto netto annuo             NON CALCOLABILE
+Contatori zero-violazioni        NON MISURATI; NON trattare assenza di run come zero
+
+RIPRODUCIBILITÀ
+
+Risultati finali: 402 test scripts/tests/ passati; 27 test MarketCapPairList passati
+(295 altri test della pairlist non selezionati). git diff --check e compilazione dei
+nuovi moduli riusciti. Log: strict_validation/pytest.txt e pairlist_pytest.txt.
+
+Ambiente locale: .venv-prop, Python 3.13.5; dipendenze da requirements.txt e plugin pytest.
+La suite viene eseguita senza credenziali di trading. Su Windows il sandbox impediva
+alcuni file temporanei: la verifica finale è stata eseguita fuori da quel vincolo.
+
+Comandi dalla radice repository:
+  .venv-prop\Scripts\python.exe -m pytest scripts/tests/ -q
+  .venv-prop\Scripts\python.exe -m pytest tests/plugins/test_pairlist.py -k MarketCapPairList -q
+  .venv-prop\Scripts\python.exe scripts/prop_source_probe.py
+  .venv-prop\Scripts\python.exe scripts/prop_archive_data.py --sample
+  .venv-prop\Scripts\python.exe scripts/prop_marketcap_archive.py
+  .venv-prop\Scripts\python.exe scripts/prop_shock_bounds.py
+
+prop_archive_data.py senza --sample scarica tutte le giornate disponibili dei simboli
+indicati nell'intervallo richiesto. Non è stato eseguito il download integrale; i dati
+grezzi possono occupare molto spazio. Il file --sample non deve diventare input di un
+benchmark presentato come completo.
+
+PASSI NECESSARI PRIMA DEL LIVE
+
+1. Completare e riconciliare i dataset, conservando identità asset e provenienza.
+2. Implementare preflight che rifiuti intervalli incompleti e metadati futuri o ignoti.
+3. Implementare profili di ricerca Two-Step sequenziali, Funded e prelievi, senza
+   indebolire le verifiche del profilo operativo live.
+4. Fissare candidati e split prima della validazione; conservare hash di dati/config/codice.
+5. Eseguire i benchmark richiesti a 1m, tutti i contatori e stress con costi verificati.
+6. Revisionare patch e nuova approvazione della configurazione; poi Bybit Demo con
+   riconciliazione di ogni ordine. Challenge e Funded solo dopo superamento dei controlli.
+
+FONTI CONSULTATE
+
+https://www.hyrotrader.com/faq/evaluation-process/minimum-trading-days/
+La FAQ corrente indica 3 giorni One-Step, 4 per fase Two-Step e movimento lordo ±1%.
+I contratti precedenti possono conservare regole diverse; le email citate dall'utente
+sono assunzioni fornite, non email originali ispezionate in questa sessione.
+https://bybit-exchange.github.io/docs/v5/market/instrument
+https://public.bybit.com/trading/
+https://github.com/coinmetrics/data/blob/master/README.md
+https://support.coingecko.com/articles/5723073761-what-granularity-do-you-support-for-historical-data
+La pagina di supporto CoinGecko limita il piano pubblico a 365 giorni; altre pagine
+commerciali risultano discordanti. Verificare entitlement effettivo prima di acquistare.
+https://docs.tardis.dev/api/instruments-metadata-api
+La cronologia dei metadati diversi dal contractMultiplier è descritta come best effort:
+non è automaticamente una garanzia di ricostruzione completa dei tag Bybit.

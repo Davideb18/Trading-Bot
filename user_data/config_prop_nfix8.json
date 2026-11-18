@@ -5,6 +5,7 @@
     "stake_currency": "USDT",
     "stake_amount": "unlimited",
     "tradable_balance_ratio": 0.19,
+    "prop_max_dca_additions": 2,
     "prop_non_compounding": true,
     "prop_initial_balance": 5000,
     "prop_guard_enabled": true,
@@ -120,6 +121,17 @@
             "sort_key": "quoteVolume",
             "min_value": 20000000,
             "refresh_period": 1800
+        },
+        {
+            "method": "PropInstrumentFilter"
+        },
+        {
+            "method": "MarketCapPairList",
+            "number_assets": 40,
+            "max_rank": 1000,
+            "min_market_cap": 100000000,
+            "refresh_period": 3600,
+            "fallback_max_age": 86400
         },
         {
             "method": "DelistFilter"

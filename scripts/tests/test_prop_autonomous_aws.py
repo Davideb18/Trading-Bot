@@ -390,6 +390,7 @@ class HyroRulesAndCommissioningTests(unittest.TestCase):
         cfg = Configuration.from_files([str(ROOT / "user_data" / "config_prop_nfix8.json")])
         with patch.object(Bybit, "validate_config", return_value=None), \
              patch.object(Bybit, "reload_markets", return_value=None), \
+             patch.object(Bybit, "_init_async_loop", return_value=Mock()), \
              patch.object(Bybit, "additional_exchange_init", return_value=None):
             ex = Bybit(cfg, validate=False)
         ex._markets = {
@@ -398,7 +399,7 @@ class HyroRulesAndCommissioningTests(unittest.TestCase):
         pm = PairListManager(ex, cfg)
         self.assertEqual(
             pm.name_list,
-            ["VolumePairList", "DelistFilter", "AgeFilter", "VolatilityFilter", "RangeStabilityFilter", "SpreadFilter"],
+            ["VolumePairList", "PropInstrumentFilter", "MarketCapPairList", "DelistFilter", "AgeFilter", "VolatilityFilter", "RangeStabilityFilter", "SpreadFilter"],
         )
         strat = StrategyResolver.load_strategy(cfg)
         self.assertEqual(strat.get_strategy_name(), "NostalgiaForInfinityX8_Prop")
@@ -898,7 +899,7 @@ class PropAuditRegressionTests(unittest.TestCase):
         rm.request_rules_pause = Mock()
         rm.rules_api = SimpleNamespace(get_open_trades=lambda: [open_derisk_trade], get_trades=lambda limit=500: closed_days)
         rm._hyrotrader_rules_loop()
-        rm.request_rules_pause.assert_called_once_with(True, "HyroTrader One-Step profit target and qualifying days achieved")
+        rm.request_rules_pause.assert_called_once_with(False)  # No closed execution evidence.
 
         # A9: 3/3 full slots sitting untouched for 26 days triggers critical inactivity alert without forceenter.
         stale_now = datetime(2026, 5, 20, 12, 0, 0, tzinfo=UTC)
@@ -957,10 +958,8 @@ class PropAuditRegressionTests(unittest.TestCase):
             dt_mock.fromisoformat = datetime.fromisoformat
             dt_mock.fromtimestamp = datetime.fromtimestamp
             rm2_slot._hyrotrader_rules_loop()
-        self.assertEqual(len(ka_posts), 1)
-        self.assertEqual(ka_posts[0][0], "/forceenter")
-        self.assertEqual(ka_posts[0][1]["pair"], "ETH/USDT:USDT")
-        self.assertEqual(ka_exits, [999])  # Never exits NFIX8 trade 201!
+        self.assertEqual(ka_posts, [])
+        self.assertEqual(ka_exits, [])  # No artificial entry or exit.
 
         # A9-macro-paused: macro_paused=True suppresses Keep-Alive and triggers alert instead.
         rm2_paused = RiskManager.__new__(RiskManager)
@@ -1048,17 +1047,9 @@ class PropAuditRegressionTests(unittest.TestCase):
             dt_mock.fromisoformat = datetime.fromisoformat
             dt_mock.fromtimestamp = datetime.fromtimestamp
             rm3._hyrotrader_rules_loop()
-        self.assertEqual(
-            entered_payloads,
-            [("/forceenter", {"pair": "BTC/USDT:USDT", "side": "long", "ordertype": "limit", "stakeamount": 15.0})],
-        )
-        self.assertEqual(exited_ids, [303])
-        self.assertEqual(len(exec_entries), 1)
-        ep_pair, ep_stake, ep_price, ep_kw = exec_entries[0]
-        self.assertEqual(ep_pair, "BTC/USDT:USDT")
-        self.assertEqual(ep_kw["ordertype"], "limit")
-        self.assertAlmostEqual(ep_stake, 105.0, places=2)
-        self.assertAlmostEqual(ep_price, 100100.0, places=2)
+        self.assertEqual(entered_payloads, [])
+        self.assertEqual(exited_ids, [])
+        self.assertEqual(exec_entries, [])
         approved_cfg = approve_and_bind_config(
             self.account_cfg,
             account_id="987654321",
@@ -1072,7 +1063,7 @@ class PropAuditRegressionTests(unittest.TestCase):
                 approved_prof,
                 approved_cfg["prop_risk_budget"],
                 approved_cfg,
-                {"leverage": 1.0, "ordertype": ep_kw["ordertype"], "time_in_force": "GTC"},
+                {"leverage": 1.0, "ordertype": "limit", "time_in_force": "GTC"},
                 {},
             )
         )
@@ -1483,142 +1474,23 @@ class PropAuditRegressionTests(unittest.TestCase):
         self.assertEqual(tracker.budgets, [12.0])
         self.assertTrue(guard_run.state["transient_paused"])
 
-    def test_keepalive_async_limit_fill_and_reconciliation(self):
-        from llm_risk_manager_prop import RiskManager
-
-        base_now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
-        now_box = [base_now]
-        exited = []
-        open_trades_box = [[]]
-        recent_trades_box = [[]]
-
-        class _FakeDT:
-            @staticmethod
-            def now(tz=None):
-                return now_box[0]
-
-            @staticmethod
-            def fromtimestamp(ts, tz=None):
-                return datetime.fromtimestamp(ts, tz=tz)
-
-            @staticmethod
-            def fromisoformat(s):
-                return datetime.fromisoformat(s)
-
+    def test_legacy_keepalive_flag_never_forces_activity(self):
         rm = RiskManager.__new__(RiskManager)
         rm.profile = {**self.profile, "phase_start_utc": "2026-04-01T00:00:00Z"}
         rm.initial_balance = 5000.0
-        rm.state = {"nuclear_triggered": False, "data_valid": True, "data_fault": False, "wake_up_lock": False}
+        rm.state = {"nuclear_triggered": False, "data_valid": True,
+                    "data_fault": False, "wake_up_lock": False}
         rm.inactivity_keepalive_enabled = True
         rm.request_rules_pause = Mock()
-        post_responses = iter([None, {"trade_id": 88, "amount": 0.0, "has_open_orders": True}])
-        posted = []
-
-        def _post(ep, json=None):
-            posted.append((ep, json))
-            return next(post_responses)
-
-        rm.rules_api = SimpleNamespace(
-            get_open_trades=lambda: open_trades_box[0],
-            get_trades=lambda limit=500: recent_trades_box[0],
-            post=_post,
-            force_exit=lambda tid: exited.append(tid) or True,
-        )
-
-        # 1) Transient /forceenter failure must NOT lock out keep-alive for 24h (only 60s retry backoff)
+        rm._notify_telegram = Mock()
+        rm.rules_api = SimpleNamespace(get_open_trades=lambda: [],
+            get_trades=lambda limit=500: [], post=Mock(), force_exit=Mock())
         rm._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
-        with patch("llm_risk_manager_prop.datetime", _FakeDT):
-            RiskManager._hyrotrader_rules_loop(rm)
-        self.assertEqual(len(posted), 1)
-        self.assertEqual(exited, [])
-        self.assertEqual(getattr(rm, "_last_keepalive_ts", 0.0), 0.0)
-
-        # Within 60s error backoff, must not retry yet
-        now_box[0] = base_now + timedelta(seconds=20)
-        rm._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
-        with patch("llm_risk_manager_prop.datetime", _FakeDT):
-            RiskManager._hyrotrader_rules_loop(rm)
-        self.assertEqual(len(posted), 1)
-
-        # After 60s backoff, retry succeeds with async unfilled limit order (amount=0, has_open_orders=True)
-        now_box[0] = base_now + timedelta(seconds=65)
-        rm._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
-        with patch("llm_risk_manager_prop.datetime", _FakeDT):
-            RiskManager._hyrotrader_rules_loop(rm)
-        self.assertEqual(len(posted), 2)
-        self.assertEqual(exited, [])  # MUST NOT cancel before exchange fills!
-        self.assertGreater(rm._last_keepalive_ts, 0.0)
-
-        # Cycle 2 (+5s): order still settling -> waits quietly without force_exit or duplicate /forceenter
-        now_box[0] = base_now + timedelta(seconds=70)
-        open_trades_box[0] = [
-            {
-                "trade_id": 88,
-                "enter_tag": "force_entry",
-                "amount": 0.0,
-                "has_open_orders": True,
-                "open_timestamp": int((base_now + timedelta(seconds=65)).timestamp() * 1000),
-            }
-        ]
-        rm._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
-        with patch("llm_risk_manager_prop.datetime", _FakeDT):
-            RiskManager._hyrotrader_rules_loop(rm)
-        self.assertEqual(len(posted), 2)
-        self.assertEqual(exited, [])
-
-        # Cycle 3 (+10s): entry filled AND its filled order already reset inactivity_days to 0 -> STILL must exit!
-        now_box[0] = base_now + timedelta(seconds=75)
-        open_trades_box[0] = [
-            {
-                "trade_id": 88,
-                "enter_tag": "force_entry",
-                "amount": 0.001,
-                "has_open_orders": False,
-                "open_timestamp": int((base_now + timedelta(seconds=65)).timestamp() * 1000),
-                "orders": [
-                    {
-                        "order_id": "ka-1",
-                        "status": "closed",
-                        "filled": 0.001,
-                        "is_open": False,
-                        "ft_is_entry": True,
-                        "order_filled_timestamp": int((base_now + timedelta(seconds=72)).timestamp() * 1000),
-                    }
-                ],
-            }
-        ]
-        rm._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
-        with patch("llm_risk_manager_prop.datetime", _FakeDT):
-            RiskManager._hyrotrader_rules_loop(rm)
-        self.assertEqual(exited, [88])
-
-        # Exit order now open in flight -> must NOT re-issue force_exit redundantly
-        now_box[0] = base_now + timedelta(seconds=78)
-        open_trades_box[0][0]["has_open_orders"] = True
-        open_trades_box[0][0]["orders"].append(
-            {"order_id": "ka-exit-1", "status": "open", "is_open": True, "ft_is_entry": False}
-        )
-        rm._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
-        with patch("llm_risk_manager_prop.datetime", _FakeDT):
-            RiskManager._hyrotrader_rules_loop(rm)
-        self.assertEqual(exited, [88])
-
-        # Stale unfilled keep-alive limit order (>= 30s) -> cancels via force_exit and clears 24h cooldown
-        now_box[0] = base_now + timedelta(seconds=120)
-        open_trades_box[0] = [
-            {
-                "trade_id": 89,
-                "enter_tag": "force_entry",
-                "amount": 0.0,
-                "has_open_orders": True,
-                "open_timestamp": int((base_now + timedelta(seconds=80)).timestamp() * 1000),
-            }
-        ]
-        rm._shutdown = SimpleNamespace(is_set=Mock(side_effect=[False, True]), wait=Mock())
-        with patch("llm_risk_manager_prop.datetime", _FakeDT):
-            RiskManager._hyrotrader_rules_loop(rm)
-        self.assertEqual(exited, [88, 89])
-        self.assertEqual(rm._last_keepalive_ts, 0.0)
+        rm._hyrotrader_rules_loop()
+        rm.rules_api.post.assert_not_called()
+        rm.rules_api.force_exit.assert_not_called()
+        self.assertTrue(any(c.args[0] == "inactivity_critical"
+                            for c in rm._notify_telegram.call_args_list))
 
     def test_rpc_force_entry_crosses_ask_with_other_price_side(self):
         from contextlib import nullcontext

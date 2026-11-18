@@ -10,8 +10,9 @@ Instead, subclasses `Backtesting` in-memory to replicate exact live behavior:
     floors vs -4% / -6% official, checked at 00:00 UTC rollover on floating equity)
   - BTC Macro Crash Pause (-4.0% 1h / -8.0% 24h trigger; >-2.5% / >-6.0% recovery)
   - HyroTrader 40% daily consistency cap ($175.00 live pause until 00:00 UTC,
-    partial-exit order attribution, >= 5 qualifying days >= $250 & |gross_ratio| >= 1%)
-  - 24-day inactivity keep-alive ($15 micro-trade roundtrip) and 30d breach check
+    partial-exit profit attribution; qualifying days require fully closed trades,
+    combined notional >= $250 and aggregate absolute gross return >= 1%)
+  - 30d inactivity breach check without artificial keep-alive trades
   - Multi-cohort rolling start simulation + execution slippage stress testing
 """
 
@@ -65,6 +66,7 @@ from freqtrade.optimize.backtesting import (
 )
 from freqtrade.persistence import LocalTrade
 from freqtrade.prop_profile import floors, profile_from_config
+from freqtrade.prop_qualification import qualifying_close_day
 
 logger = logging.getLogger("prop_backtest_1to1")
 
@@ -172,8 +174,12 @@ def compute_hyrotrader_ledger(
                     residual * (ev["weight"] / total_weight) if total_weight > 0 else 0.0
                 )
                 day_profits[ev["day"]] = day_profits.get(ev["day"], 0.0) + ev_net
-                if ev["entry_notional"] >= min_qualifying_stake and abs(ev["gross_ratio"]) >= 0.01:
-                    qualifying_days.add(ev["day"])
+            qualifying_day = qualifying_close_day(
+                is_open=tr["is_open"], close_dt=tr["close_dt"], remaining_qty=cur_qty,
+                exit_events=exit_events, initial_balance=initial_balance,
+            )
+            if qualifying_day:
+                qualifying_days.add(qualifying_day)
         elif not tr["is_open"]:
             close_dt = tr["close_dt"]
             if close_dt is None or (phase_start and close_dt < phase_start):
@@ -182,9 +188,7 @@ def compute_hyrotrader_ledger(
             pnl = float(tr["profit_abs"] or 0.0)
             day_profits[tr_day] = day_profits.get(tr_day, 0.0) + pnl
             cost = float(tr["cost"] or tr["max_stake_amount"] or tr["stake_amount"] or 0.0)
-            pr = float(tr["profit_ratio"] or 0.0)
-            if cost >= min_qualifying_stake and abs(pr) >= 0.01:
-                qualifying_days.add(tr_day)
+            # Missing fills cannot prove pre-fee PnL or aggregate traded notional.
 
     target_profit = initial_balance * profit_target_percent
     daily_cap = target_profit * daily_profit_cap_percent
@@ -404,7 +408,7 @@ class HistoricalPairListAdapter:
                 base = self._schedule[key]
             elif self._sorted_keys:
                 pos = bisect.bisect_right(self._sorted_keys, bucket) - 1
-                base = self._schedule[str(self._sorted_keys[max(0, pos)])]
+                base = self._schedule[str(self._sorted_keys[pos])] if pos >= 0 else []
             else:
                 base = []
         if pairs is not None:
@@ -988,17 +992,7 @@ class PropParityBacktesting(Backtesting):
         inact_days = (dt_utc - self.prop_latest_activity_dt).total_seconds() / 86400.0
         if inact_days >= 30.0:
             self.prop_inactivity_breach = True
-        elif inact_days >= 24.0 and self.prop_last_keepalive_day != day_str:
-            if not self._is_entry_paused() and len(LocalTrade.bt_trades_open) < int(
-                self.strategy.max_open_trades
-            ):
-                # $15 micro-trade immediate round-trip fee impact (2 * 15 * effective_fee)
-                ka_cost = 15.0 * 2.0 * float(self.fee)
-                LocalTrade.bt_total_profit -= ka_cost
-                self.wallets.update()
-                self.prop_latest_activity_dt = dt_utc
-                self.prop_last_keepalive_day = day_str
-                self.prop_keepalive_events.append(dt_utc)
+        # Artificial micro-trades must never reset the inactivity clock.
 
     def _time_generator(self, start_date: datetime, end_date: datetime):
         for ct in super()._time_generator(start_date, end_date):

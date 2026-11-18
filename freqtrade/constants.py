@@ -64,6 +64,7 @@ AVAILABLE_PAIRLISTS = [
     "CrossMarketPairList",
     "AgeFilter",
     "DelistFilter",
+    "PropInstrumentFilter",
     "FullTradesFilter",
     "OffsetFilter",
     "PairInformationFilter",

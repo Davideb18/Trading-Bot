@@ -695,18 +695,15 @@ class HttpTests(unittest.TestCase):
         Worker._hyrotrader_rules_loop(mgr)
         post_mock.assert_not_called()
 
-        # When keep-alive is explicitly enabled AND state is healthy, verify keyword json= and strict trade_id
+        # Even a legacy enabled flag and healthy state cannot authorize artificial activity.
         post_mock.return_value = {"trade_id": 99}
         force_exit_mock = Mock(return_value=True)
         mgr.rules_api.force_exit = force_exit_mock
         mgr.state = {"data_valid": True, "data_fault": False, "wake_up_lock": False}
         mgr._shutdown.is_set.side_effect = [False, True]
         Worker._hyrotrader_rules_loop(mgr)
-        post_mock.assert_called_once_with(
-            "/forceenter",
-            json={"pair": "BTC/USDT:USDT", "side": "long", "ordertype": "limit", "stakeamount": 15.0},
-        )
-        force_exit_mock.assert_called_once_with(99)
+        post_mock.assert_not_called()
+        force_exit_mock.assert_not_called()
 
     def test_rpc_delete_and_cancel_open_order_blocked_under_prop_profile(self):
         from freqtrade.enums import State

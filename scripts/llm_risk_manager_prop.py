@@ -940,9 +940,7 @@ class RiskManager(RiskGuard):
             transient_grace_cycles=3,
         )
         self.rules_api = FreqtradeAPIClient(FREQTRADE_API_URL, FREQTRADE_USERNAME, FREQTRADE_PASSWORD)
-        self.inactivity_keepalive_enabled = (
-            os.environ.get("PROP_INACTIVITY_KEEPALIVE", "true").lower() == "true"
-        )
+        self.inactivity_keepalive_enabled = False
         self._alert_timestamps: dict[str, float] = {}
         self.sentiment = SentimentAnalyzer(GEMINI_API_KEY)
         self.macro_monitor = BinanceMacroMonitor()
@@ -1011,7 +1009,7 @@ class RiskManager(RiskGuard):
             self._shutdown.wait(900)
 
     def _hyrotrader_rules_loop(self):
-        """Monitors HyroTrader One-Step compliance: 30d inactivity, 5 qualifying days, 40% daily profit cap."""
+        """Monitors HyroTrader One-Step compliance: 30d inactivity, profile-specific qualifying days, 40% daily profit cap."""
         def parse_dt(value) -> datetime | None:
             if value is None or isinstance(value, bool):
                 return None
@@ -1022,35 +1020,6 @@ class RiskManager(RiskGuard):
                 return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
             except Exception:
                 return None
-
-        def reconcile_keepalive(open_list: list, now_dt: datetime) -> bool:
-            ka_trades = [tr for tr in open_list if isinstance(tr, dict) and tr.get("enter_tag") == "force_entry"]
-            for tr in ka_trades:
-                tid = tr.get("trade_id")
-                if tid is None:
-                    continue
-                filled = float(tr.get("amount") or 0.0)
-                has_open = bool(tr.get("has_open_orders", False))
-                orders = tr.get("orders")
-                exit_open = isinstance(orders, list) and any(
-                    isinstance(o, dict) and o.get("is_open") and o.get("ft_is_entry") is False for o in orders
-                )
-                raw_ts = tr.get("open_timestamp")
-                if isinstance(raw_ts, (int, float)) and not isinstance(raw_ts, bool) and raw_ts < 1e12:
-                    raw_ts = raw_ts * 1000.0
-                open_dt = parse_dt(raw_ts or tr.get("open_date_utc") or tr.get("open_date"))
-                age_s = max(0.0, (now_dt - open_dt).total_seconds()) if open_dt else 0.0
-                if filled > 0.0 and not has_open:
-                    logger.info("Keep-alive trade_id=%s filled (amount=%s); executing force_exit.", tid, filled)
-                    self.rules_api.force_exit(tid)
-                elif has_open and exit_open:
-                    if age_s >= 60.0:
-                        logger.warning("Keep-alive exit still open for trade_id=%s after %.0fs.", tid, age_s)
-                elif age_s >= 30.0:
-                    logger.warning("Keep-alive trade_id=%s unsettled for %.0fs; issuing force_exit.", tid, age_s)
-                    if self.rules_api.force_exit(tid) and filled <= 0.0:
-                        self._last_keepalive_ts = 0.0
-            return bool(ka_trades)
 
         transient_failures = 0
         while not self._shutdown.is_set():
@@ -1206,114 +1175,18 @@ class RiskManager(RiskGuard):
                 elif phase_start is not None:
                     inactivity_days = max(0, (now_utc - phase_start).days)
 
-                keepalive_enabled = bool(getattr(self, "inactivity_keepalive_enabled", False))
-                now_ts = now_utc.timestamp()
-                has_open_keepalive = (
-                    reconcile_keepalive(open_trades, now_utc)
-                    if (keepalive_enabled and not self.nuclear_triggered)
-                    else False
-                )
-
+                # Inactivity requires genuine strategy activity, never forced round trips.
                 if inactivity_days >= 24 and not self.nuclear_triggered:
-                    state = getattr(self, "state", {})
-                    base_healthy = (
-                        keepalive_enabled
-                        and isinstance(state, dict)
-                        and state.get("data_valid") is True
-                        and not state.get("data_fault")
-                        and not state.get("wake_up_lock")
-                        and not state.get("macro_paused")
+                    logger.critical(
+                        "HYROTRADER 24-DAY INACTIVITY ALERT (%d days without genuine activity).",
+                        inactivity_days,
                     )
-
-                    def select_keepalive_pair() -> str | None:
-                        open_pairs: set[str] = set()
-                        for tr in open_trades:
-                            if not isinstance(tr, dict):
-                                return None
-                            pair_name = tr.get("pair")
-                            if not isinstance(pair_name, str) or not pair_name.strip():
-                                return None
-                            open_pairs.add(pair_name.strip())
-
-                        get_max_fn = getattr(self.rules_api, "get_max_open_trades", None)
-                        raw_max = get_max_fn() if callable(get_max_fn) else 3
-                        max_slots = (
-                            raw_max
-                            if isinstance(raw_max, int) and not isinstance(raw_max, bool) and raw_max > 0
-                            else 3
+                    if notifier:
+                        notifier(
+                            "inactivity_critical",
+                            f"HyroTrader inactivity: {inactivity_days}d/30d. Review strategy activity.",
+                            min_interval_sec=43200.0,
                         )
-                        if len(open_trades) >= max_slots:
-                            return None
-
-                        get_wl_fn = getattr(self.rules_api, "get_whitelist", None)
-                        raw_wl = get_wl_fn() if callable(get_wl_fn) else []
-                        whitelist = (
-                            [str(p).strip() for p in raw_wl if isinstance(p, str) and p.strip()]
-                            if isinstance(raw_wl, list)
-                            else []
-                        )
-                        preferred = (
-                            ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "XRP/USDT:USDT"]
-                            if not open_pairs
-                            else ["ETH/USDT:USDT", "SOL/USDT:USDT", "XRP/USDT:USDT", "BTC/USDT:USDT"]
-                        )
-                        ordered = [p for p in preferred if (not whitelist or p in whitelist)] + [
-                            p for p in whitelist if p not in preferred
-                        ]
-                        for candidate in ordered:
-                            if candidate not in open_pairs:
-                                return candidate
-                        return None
-
-                    candidate_pair = select_keepalive_pair() if (base_healthy and not has_open_keepalive) else None
-                    healthy_for_keepalive = base_healthy and (candidate_pair is not None)
-                    last_ka = float(getattr(self, "_last_keepalive_ts", 0.0) or 0.0)
-                    last_ka_err = float(getattr(self, "_last_keepalive_err_ts", 0.0) or 0.0)
-                    if has_open_keepalive:
-                        logger.info("Keep-alive trade open/settling (%dd flat); deferring new entry/alert.", inactivity_days)
-                    elif healthy_for_keepalive and (now_ts - last_ka >= 86400.0) and (now_ts - last_ka_err >= 60.0):
-                        logger.warning(
-                            "⚠️ HYROTRADER 24-DAY INACTIVITY KEEP-ALIVE: Executing micro-trade on %s (%d days flat).",
-                            candidate_pair,
-                            inactivity_days,
-                        )
-                        entered = self.rules_api.post(
-                            "/forceenter",
-                            json={"pair": candidate_pair, "side": "long", "ordertype": "limit", "stakeamount": 15.0},
-                        )
-                        trade_id = entered.get("trade_id") if isinstance(entered, dict) else None
-                        if trade_id is not None:
-                            self._last_keepalive_ts, self._last_keepalive_err_ts = now_ts, 0.0
-                            pending_fill = bool(entered.get("has_open_orders")) or (
-                                "amount" in entered and float(entered.get("amount") or 0.0) <= 0.0
-                            )
-                            if not pending_fill:
-                                self.rules_api.force_exit(trade_id)
-                            else:
-                                logger.info("Keep-alive trade_id=%s pending fill; deferring force_exit.", trade_id)
-                        else:
-                            self._last_keepalive_err_ts = now_ts
-                            logger.error("Keep-alive forceenter did not return a verified trade_id; skipping force_exit (retry 60s).")
-                            if notifier:
-                                notifier(
-                                    "inactivity_critical",
-                                    f"🚨 HyroTrader Keep-Alive Failed at {inactivity_days}d inactivity; retrying.",
-                                    min_interval_sec=43200.0,
-                                )
-                    elif not healthy_for_keepalive:
-                        logger.critical(
-                            "🚨 HYROTRADER 24-DAY INACTIVITY ALERT (%d days flat). "
-                            "Keep-alive deferred (open_trades=%d, enabled=%s); operator review required before 30d limit.",
-                            inactivity_days,
-                            len(open_trades),
-                            keepalive_enabled,
-                        )
-                        if notifier:
-                            notifier(
-                                "inactivity_critical",
-                                f"🚨 HyroTrader Inactivity Critical: {inactivity_days}d without trades (30d limit)!",
-                                min_interval_sec=43200.0,
-                            )
                 elif inactivity_days >= 20:
                     logger.warning("⚠️ HyroTrader Inactivity Warning: %d days without trades (forfeiture at 30d).", inactivity_days)
                     if notifier and inactivity_days >= 22:
@@ -1416,8 +1289,16 @@ class RiskManager(RiskGuard):
                         for ev in exit_events:
                             ev_net = ev["base_net"] if ev["is_open"] else locked_map.get(ev["slice_key"], ev.get("net_pnl", ev["base_net"]))
                             day_profits[ev["day"]] = day_profits.get(ev["day"], 0.0) + ev_net
-                            if ev["entry_notional"] >= min_qualifying_stake and abs(ev["gross_ratio"]) >= 0.01:
-                                qualifying_days.add(ev["day"])
+                        from freqtrade.prop_qualification import qualifying_close_day
+                        qualifying_day = qualifying_close_day(
+                            is_open=is_open_tr,
+                            close_dt=parse_dt(tr.get("close_timestamp") or tr.get("close_date")),
+                            remaining_qty=cur_qty,
+                            exit_events=closed_evs,
+                            initial_balance=self.initial_balance,
+                        )
+                        if qualifying_day:
+                            qualifying_days.add(qualifying_day)
                         continue
 
                     if tr.get("is_open"):
@@ -1438,9 +1319,7 @@ class RiskManager(RiskGuard):
                         or tr.get("stake_amount")
                         or 0.0
                     )
-                    profit_ratio = float(tr.get("profit_ratio", 0.0) or 0.0)
-                    if cost >= min_qualifying_stake and abs(profit_ratio) >= 0.01:
-                        qualifying_days.add(tr_day)
+                    # Missing fills cannot prove pre-fee PnL or aggregate traded notional.
 
                 try:
                     raw_payload = _json.dumps({"slices": order_slice_ledger, "exit_net": exit_net_ledger})

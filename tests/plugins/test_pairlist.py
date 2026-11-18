@@ -2546,9 +2546,9 @@ def test_MarketCapPairList_filter_special_no_pair_from_coingecko(
     exchange = get_patched_exchange(mocker, default_conf_usdt)
 
     pm = PairListManager(exchange, default_conf_usdt)
-    pm.refresh_pairlist()
+    with pytest.raises(OperationalException, match="Market-cap evidence unavailable"):
+        pm.refresh_pairlist()
     assert gcm_mock.call_count == 1
-    assert pm.whitelist == []
 
 
 def test_MarketCapPairList_exceptions(mocker, default_conf_usdt, caplog):
