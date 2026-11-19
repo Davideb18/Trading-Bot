@@ -1363,6 +1363,20 @@ class FreqtradeBot(LoggingMixin):
                 entry_tag=entry_tag,
                 side=trade_side,
             )
+            if (
+                self.config.get("prop_guard_enabled")
+                and not self.config.get("amend_last_stake_amount", False)
+                and stake_amount
+                and prop_headroom is not None
+                and stake_amount > prop_headroom
+            ):
+                logger.info(
+                    "Skipping new initial entry for %s: requested stake %.2f exceeds remaining prop headroom %.2f (preserving DCA reserve)",
+                    pair,
+                    stake_amount,
+                    prop_headroom,
+                )
+                return enter_limit_requested, 0.0, leverage
 
         if stake_amount and prop_headroom is not None and stake_amount > prop_headroom:
             stake_amount = prop_headroom

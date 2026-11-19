@@ -3,9 +3,8 @@
     "db_url": "sqlite:////freqtrade/user_data/trades_prop.sqlite",
     "max_open_trades": 3,
     "stake_currency": "USDT",
-    "stake_amount": "unlimited",
+    "stake_amount": 255.0,
     "tradable_balance_ratio": 0.19,
-    "prop_max_dca_additions": 2,
     "prop_non_compounding": true,
     "prop_initial_balance": 5000,
     "prop_guard_enabled": true,
@@ -19,7 +18,7 @@
     "dry_run": false,
     "dry_run_wallet": 5000,
     "initial_state": "running",
-    "amend_last_stake_amount": true,
+    "amend_last_stake_amount": false,
     "cancel_open_orders_on_exit": true,
     "ignore_roi_if_entry_signal": true,
     "use_exit_signal": true,
@@ -131,7 +130,9 @@
             "max_rank": 1000,
             "min_market_cap": 100000000,
             "refresh_period": 3600,
-            "fallback_max_age": 86400
+            "fallback_max_age": 86400,
+            "preserve_order": true,
+            "cache_file": "user_data/forensic/coingecko_marketcap_cache.json"
         },
         {
             "method": "DelistFilter"
@@ -203,7 +204,7 @@
     },
     "prop_risk_budget": {
         "model": "hyrotrader_one_step_validated_v2",
-        "max_slot_notional_usdt": 500.0,
+        "max_slot_notional_usdt": 400.0,
         "max_aggregate_notional_usdt": 950.0,
         "roundtrip_fee_bps": 12.0,
         "funding_bound_bps": 10.0,

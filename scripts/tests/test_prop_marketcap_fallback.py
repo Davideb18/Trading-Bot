@@ -51,3 +51,36 @@ def test_expired_evidence_is_not_refreshed_by_outage():
     obj._coingecko.get_coins_markets.side_effect = ConnectionError("offline")
     with pytest.raises(OperationalException):
         obj.filter_pairlist(obj.get_markets_exchange(), {})
+
+
+def test_disk_cache_survives_restart_and_preserves_incoming_volume_order(tmp_path):
+    cache_file = tmp_path / "mc_cache.json"
+    obj = provider()
+    obj._max_rank = 10
+    obj._number_assets = 10
+    obj._preserve_order = True
+    obj._cache_file = cache_file
+    obj.get_markets_exchange = lambda: ["SOL/USDT:USDT", "BTC/USDT:USDT", "SMALL/USDT:USDT"]
+    obj._coingecko.get_coins_markets.return_value = [
+        {"symbol": "btc", "market_cap": 900_000_000_000},
+        {"symbol": "sol", "market_cap": 200_000_000},
+        {"symbol": "small", "market_cap": 50_000_000},
+    ]
+    assert obj.filter_pairlist(["SOL/USDT:USDT", "BTC/USDT:USDT", "SMALL/USDT:USDT"], {}) == [
+        "SOL/USDT:USDT",
+        "BTC/USDT:USDT",
+    ]
+    assert cache_file.is_file()
+
+    # Simulate cold restart while CoinGecko is down
+    restarted = provider()
+    restarted._max_rank = 10
+    restarted._number_assets = 10
+    restarted._preserve_order = True
+    restarted._cache_file = cache_file
+    restarted.get_markets_exchange = obj.get_markets_exchange
+    restarted._coingecko.get_coins_markets.side_effect = ConnectionError("offline")
+    assert restarted.filter_pairlist(["SOL/USDT:USDT", "BTC/USDT:USDT", "SMALL/USDT:USDT"], {}) == [
+        "SOL/USDT:USDT",
+        "BTC/USDT:USDT",
+    ]

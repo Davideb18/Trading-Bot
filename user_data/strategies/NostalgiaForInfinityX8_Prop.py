@@ -2723,33 +2723,6 @@ class NostalgiaForInfinityX8_Prop(IStrategy):
   # Adjust Trade Position
   # ---------------------------------------------------------------------------------------------
   def adjust_trade_position(
-    self, trade: Trade, current_time: datetime, current_rate: float,
-    current_profit: float, min_stake: Optional[float], max_stake: float,
-    current_entry_rate: float, current_exit_rate: float,
-    current_entry_profit: float, current_exit_profit: float, **kwargs,
-  ):
-    result = self._native_adjust_trade_position(
-      trade, current_time, current_rate, current_profit, min_stake, max_stake,
-      current_entry_rate, current_exit_rate, current_entry_profit, current_exit_profit, **kwargs,
-    )
-    if not self.config.get("prop_guard_enabled"):
-      return result
-    from freqtrade.prop_dca import clamp_addition
-    stake = result[0] if isinstance(result, tuple) else result
-    if stake is None or stake <= 0:
-      return result
-    if trade.has_open_orders:
-      return None
-    entries = trade.select_filled_orders(trade.entry_side)
-    stakes = [float(o.safe_filled) * float(o.safe_price) / float(trade.leverage) for o in entries]
-    stake = clamp_addition(stake, stakes,
-                           max_additions=self.config.get("prop_max_dca_additions", 2),
-                           min_stake=min_stake)
-    if stake is None:
-      return None
-    return (stake, *result[1:]) if isinstance(result, tuple) else stake
-
-  def _native_adjust_trade_position(
     self,
     trade: Trade,
     current_time: datetime,

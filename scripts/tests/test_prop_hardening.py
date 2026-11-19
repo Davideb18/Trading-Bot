@@ -136,11 +136,7 @@ class StrategyTests(unittest.TestCase):
             "populate_entry_trend",
             "populate_exit_trend",
         ):
-            if name == "adjust_trade_position":
-                self.assertEqual(native[name], prop["_native_adjust_trade_position"].replace(
-                    "name='_native_adjust_trade_position'", "name='adjust_trade_position'", 1))
-            else:
-                self.assertEqual(native[name], prop[name], name)
+            self.assertEqual(native[name], prop[name], name)
         self.assertTrue(self.s.position_adjustment_enable)
         self.assertTrue(self.s.grinding_enable)
         self.assertEqual(self.s.stoploss, -0.99)

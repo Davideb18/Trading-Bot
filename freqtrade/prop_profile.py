@@ -39,29 +39,72 @@ def validate_profile(profile, environ=None):
     for key in IDENTITY_KEYS:
         if not isinstance(p.get(key), str) or not p[key].strip():
             raise ValueError(f"Explicit {key} required")
-    if (p["profile_id"] != "hyro_one_step" or p["phase_id"] != "evaluation"
-            or p.get("exchange") != "bybit" or p.get("environment") not in ("demo", "live")
+    if (p.get("exchange") != "bybit" or p.get("environment") not in ("demo", "live")
             or p.get("currency") != "USDT"):
-        raise ValueError("Unsupported One-Step account profile")
+        raise ValueError("Unsupported exchange/environment/currency profile")
     for key in ("initial_balance", *RISK_KEYS):
         if not number(p.get(key)) or p[key] <= 0:
             raise ValueError(f"Invalid {key}")
-    for key, expected in (("official_daily_limit_percent", 0.04),
-                          ("profit_target_percent", 0.10),
-                          ("daily_profit_cap_percent", 0.40)):
-        if p[key] != expected:
-            raise ValueError(f"Invalid One-Step {key}")
-    if p["official_max_loss_percent"] not in (0.06, 0.08):
-        raise ValueError("Invalid One-Step official_max_loss_percent")
-    if p["min_trading_days"] not in (3, 4, 5):
-        raise ValueError("Invalid One-Step min_trading_days")
+    for key in ("challenge_start_utc", "phase_start_utc"):
+        p[key] = utc_time(p[key]).isoformat()
+
+    pid = p["profile_id"]
+    phase = p["phase_id"]
+    if pid == "hyro_one_step":
+        if phase != "evaluation":
+            raise ValueError("Unsupported One-Step account profile")
+        for key, expected in (("official_daily_limit_percent", 0.04),
+                              ("profit_target_percent", 0.10),
+                              ("daily_profit_cap_percent", 0.40)):
+            if p[key] != expected:
+                raise ValueError(f"Invalid One-Step {key}")
+        if p["official_max_loss_percent"] not in (0.06, 0.08):
+            raise ValueError("Invalid One-Step official_max_loss_percent")
+        if p["min_trading_days"] not in (3, 4, 5):
+            raise ValueError("Invalid One-Step min_trading_days")
+        if p["challenge_start_utc"] != p["phase_start_utc"]:
+            raise ValueError("One-Step evaluation must start with the challenge")
+    elif pid == "hyro_two_step":
+        if phase not in ("phase_1", "phase_2", "funded"):
+            raise ValueError("Unsupported Two-Step phase_id")
+        if p["official_daily_limit_percent"] != 0.05 or p["official_max_loss_percent"] != 0.10:
+            raise ValueError("Invalid Two-Step official loss limits (must be 5% daily / 10% overall)")
+        if phase == "phase_1":
+            if (p["profit_target_percent"] != 0.10 or p["daily_profit_cap_percent"] != 0.40
+                    or p["min_trading_days"] not in (4, 5)):
+                raise ValueError("Invalid Two-Step Phase 1 target/consistency/min_days")
+            if p["challenge_start_utc"] != p["phase_start_utc"]:
+                raise ValueError("Two-Step Phase 1 must start with the challenge")
+        elif phase == "phase_2":
+            if (p["profit_target_percent"] != 0.05 or p["daily_profit_cap_percent"] != 0.40
+                    or p["min_trading_days"] not in (4, 5)):
+                raise ValueError("Invalid Two-Step Phase 2 target/consistency/min_days")
+            if utc_time(p["phase_start_utc"]) < utc_time(p["challenge_start_utc"]):
+                raise ValueError("Two-Step Phase 2 cannot start before challenge_start_utc")
+        else:
+            if (p["profit_target_percent"] not in (0.05, 0.10)
+                    or p["daily_profit_cap_percent"] not in (0.40, 1.0)
+                    or p["min_trading_days"] not in (1, 3, 4, 5)):
+                raise ValueError("Invalid Two-Step Funded parameters")
+            if utc_time(p["phase_start_utc"]) < utc_time(p["challenge_start_utc"]):
+                raise ValueError("Two-Step Funded cannot start before challenge_start_utc")
+    elif pid == "hyro_one_step_funded":
+        if phase != "funded":
+            raise ValueError("Unsupported One-Step Funded phase_id")
+        if (p["official_daily_limit_percent"] != 0.04
+                or p["official_max_loss_percent"] not in (0.06, 0.08)
+                or p["profit_target_percent"] not in (0.05, 0.10)
+                or p["daily_profit_cap_percent"] not in (0.40, 1.0)
+                or p["min_trading_days"] not in (1, 3, 4, 5)):
+            raise ValueError("Invalid One-Step Funded parameters")
+        if utc_time(p["phase_start_utc"]) < utc_time(p["challenge_start_utc"]):
+            raise ValueError("One-Step Funded cannot start before challenge_start_utc")
+    else:
+        raise ValueError("Unsupported account profile")
+
     if not (p["daily_limit_percent"] < p["official_daily_limit_percent"]
             and p["max_loss_percent"] < p["official_max_loss_percent"]):
         raise ValueError("Operating loss limits must be below official limits")
-    for key in ("challenge_start_utc", "phase_start_utc"):
-        p[key] = utc_time(p[key]).isoformat()
-    if p["challenge_start_utc"] != p["phase_start_utc"]:
-        raise ValueError("One-Step evaluation must start with the challenge")
     env = os.environ if environ is None else environ
     for name, key in ENV_KEYS.items():
         if name in env:
@@ -158,4 +201,88 @@ def floors(profile, midnight_equity):
         "official_overall_floor": float(initial * (1 - Decimal(str(profile["official_max_loss_percent"])))),
         "operating_daily_floor": float(midnight - initial * Decimal(str(profile["daily_limit_percent"]))),
         "operating_overall_floor": float(initial * (1 - Decimal(str(profile["max_loss_percent"])))),
+    }
+
+
+def build_program_profiles(
+    initial_balance: float = 5000.0,
+    start_utc: str = "2024-11-15T00:00:00+00:00",
+    *,
+    one_step_daily_guard: float = 0.036,
+    one_step_max_guard: float = 0.065,
+    two_step_daily_guard: float = 0.043,
+    two_step_max_guard: float = 0.080,
+) -> dict[str, dict]:
+    """Return validated One-Step, Two-Step (Phase 1 & 2) and Funded profiles."""
+    base = {
+        "account_id": "backtest_sim_acct",
+        "challenge_id": "backtest_sim_chal",
+        "initial_balance": float(initial_balance),
+        "exchange": "bybit",
+        "environment": "demo",
+        "currency": "USDT",
+        "challenge_start_utc": start_utc,
+        "phase_start_utc": start_utc,
+    }
+    return {
+        "one_step_eval": validate_profile({
+            **base,
+            "profile_id": "hyro_one_step",
+            "phase_id": "evaluation",
+            "official_daily_limit_percent": 0.04,
+            "official_max_loss_percent": 0.08,
+            "daily_limit_percent": float(one_step_daily_guard),
+            "max_loss_percent": float(one_step_max_guard),
+            "profit_target_percent": 0.10,
+            "daily_profit_cap_percent": 0.40,
+            "min_trading_days": 3,
+        }),
+        "one_step_funded": validate_profile({
+            **base,
+            "profile_id": "hyro_one_step_funded",
+            "phase_id": "funded",
+            "official_daily_limit_percent": 0.04,
+            "official_max_loss_percent": 0.08,
+            "daily_limit_percent": float(one_step_daily_guard),
+            "max_loss_percent": float(one_step_max_guard),
+            "profit_target_percent": 0.05,
+            "daily_profit_cap_percent": 1.0,
+            "min_trading_days": 1,
+        }),
+        "two_step_phase1": validate_profile({
+            **base,
+            "profile_id": "hyro_two_step",
+            "phase_id": "phase_1",
+            "official_daily_limit_percent": 0.05,
+            "official_max_loss_percent": 0.10,
+            "daily_limit_percent": float(two_step_daily_guard),
+            "max_loss_percent": float(two_step_max_guard),
+            "profit_target_percent": 0.10,
+            "daily_profit_cap_percent": 0.40,
+            "min_trading_days": 4,
+        }),
+        "two_step_phase2": validate_profile({
+            **base,
+            "profile_id": "hyro_two_step",
+            "phase_id": "phase_2",
+            "official_daily_limit_percent": 0.05,
+            "official_max_loss_percent": 0.10,
+            "daily_limit_percent": float(two_step_daily_guard),
+            "max_loss_percent": float(two_step_max_guard),
+            "profit_target_percent": 0.05,
+            "daily_profit_cap_percent": 0.40,
+            "min_trading_days": 4,
+        }),
+        "two_step_funded": validate_profile({
+            **base,
+            "profile_id": "hyro_two_step",
+            "phase_id": "funded",
+            "official_daily_limit_percent": 0.05,
+            "official_max_loss_percent": 0.10,
+            "daily_limit_percent": float(two_step_daily_guard),
+            "max_loss_percent": float(two_step_max_guard),
+            "profit_target_percent": 0.05,
+            "daily_profit_cap_percent": 1.0,
+            "min_trading_days": 1,
+        }),
     }

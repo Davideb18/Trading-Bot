@@ -4,9 +4,11 @@ Market Cap PairList provider
 Provides dynamic pair list based on Market Cap
 """
 
+import json
 import logging
 import math
 import time
+from pathlib import Path
 
 from freqtrade.constants import PairPrefixes
 from freqtrade.exceptions import OperationalException
@@ -41,6 +43,9 @@ class MarketCapPairList(IPairList):
         self._categories = self._pairlistconfig.get("categories", [])
         self._min_market_cap = float(self._pairlistconfig.get("min_market_cap", 0))
         self._fallback_max_age = float(self._pairlistconfig.get("fallback_max_age", 86400))
+        self._preserve_order = bool(self._pairlistconfig.get("preserve_order", False))
+        cache_file = self._pairlistconfig.get("cache_file")
+        self._cache_file = Path(cache_file) if cache_file else None
         self._last_good_data = None
         self._last_good_at = 0.0
         self._marketcap_cache: FtTTLCache = FtTTLCache(maxsize=2, ttl=self._refresh_period)
@@ -191,7 +196,8 @@ class MarketCapPairList(IPairList):
         """
         marketcap_list = self._marketcap_cache.get("marketcap")
         if (self._last_good_data is not None
-                and time.monotonic() - self._last_good_at > self._fallback_max_age):
+                and (self._last_good_at <= 0
+                     or time.monotonic() - self._last_good_at > self._fallback_max_age)):
             marketcap_list = None
         mode = self._mode
         is_whitelist_mode = mode == "whitelist"
@@ -230,12 +236,43 @@ class MarketCapPairList(IPairList):
                     raise ValueError("Invalid CoinGecko response")
                 self._last_good_data = data.copy()
                 self._last_good_at = time.monotonic()
+                cache_path = getattr(self, "_cache_file", None)
+                if cache_path is not None:
+                    try:
+                        cache_path.parent.mkdir(parents=True, exist_ok=True)
+                        tmp = cache_path.with_suffix(cache_path.suffix + ".tmp")
+                        tmp.write_text(
+                            json.dumps({"saved_epoch": time.time(), "data": self._last_good_data})
+                        )
+                        tmp.replace(cache_path)
+                    except OSError as io_err:
+                        logger.warning("Could not persist CoinGecko cache file %s: %s", cache_path, io_err)
             except Exception as exc:
                 if (self._last_good_data is None
+                        or self._last_good_at <= 0
                         or time.monotonic() - self._last_good_at > self._fallback_max_age):
-                    raise OperationalException(
-                        "Market-cap evidence unavailable: no unverified volume fallback allowed"
-                    ) from exc
+                    cache_path = getattr(self, "_cache_file", None)
+                    loaded_disk = False
+                    if cache_path is not None and cache_path.is_file():
+                        try:
+                            payload = json.loads(cache_path.read_text())
+                            saved_epoch = float(payload.get("saved_epoch", 0.0))
+                            disk_data = payload.get("data")
+                            age = time.time() - saved_epoch
+                            if (
+                                isinstance(disk_data, list)
+                                and disk_data
+                                and 0 <= age <= self._fallback_max_age
+                            ):
+                                self._last_good_data = disk_data
+                                self._last_good_at = max(1e-6, time.monotonic() - age)
+                                loaded_disk = True
+                        except Exception:
+                            loaded_disk = False
+                    if not loaded_disk:
+                        raise OperationalException(
+                            "Market-cap evidence unavailable: no unverified volume fallback allowed"
+                        ) from exc
                 logger.warning("CoinGecko unavailable; using bounded last-known market caps")
                 data = self._last_good_data.copy()
 
@@ -265,8 +302,12 @@ class MarketCapPairList(IPairList):
                         continue
 
                     filtered_pairlist.append(resolved)
-                    if len(filtered_pairlist) == self._number_assets:
+                    if not getattr(self, "_preserve_order", False) and len(filtered_pairlist) == self._number_assets:
                         break
+
+            if is_whitelist_mode and getattr(self, "_preserve_order", False):
+                allowed = set(filtered_pairlist)
+                filtered_pairlist = [p for p in pairlist if p in allowed][: self._number_assets]
 
         if not is_whitelist_mode:
             return pairlist

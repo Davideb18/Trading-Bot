@@ -65,7 +65,7 @@ from freqtrade.optimize.backtesting import (
     Backtesting,
 )
 from freqtrade.persistence import LocalTrade
-from freqtrade.prop_profile import floors, profile_from_config
+from freqtrade.prop_profile import build_program_profiles, floors, profile_from_config
 from freqtrade.prop_qualification import qualifying_close_day
 
 logger = logging.getLogger("prop_backtest_1to1")
@@ -677,6 +677,16 @@ class PropParityBacktesting(Backtesting):
         self.prop_official_breach_close: str | None = None
         self.prop_official_breach_wick: str | None = None
         self.prop_internal_wick_touch: str | None = None
+        self.prop_official_daily_breach_wick_bars: int = 0
+        self.prop_official_overall_breach_wick_bars: int = 0
+        self.prop_funded_margin_gt_25pct_bars: int = 0
+        self.prop_funded_notional_gt_2x_bars: int = 0
+        self.prop_max_aggregate_notional_observed: float = 0.0
+        self.prop_max_slot_notional_observed: float = 0.0
+        self.prop_shock_1coin_35_breach_bars: int = 0
+        self.prop_shock_1coin_50_breach_bars: int = 0
+        self.prop_shock_2coin_25_breach_bars: int = 0
+        self.prop_min_post_shock_50_headroom_usd: float = init_bal
         self.prop_daily_curve: list[dict[str, Any]] = []
         self._last_eval_det_ts: datetime | None = None
         self._cached_ledger: dict[str, Any] = compute_hyrotrader_ledger(
@@ -966,6 +976,51 @@ class PropParityBacktesting(Backtesting):
             elif eq_wick <= limits["official_daily_floor"]:
                 self.prop_official_breach_wick = f"official_daily_wick ({eq_wick:.2f} <= {limits['official_daily_floor']:.2f})"
 
+        if eq_wick <= limits["official_overall_floor"]:
+            self.prop_official_overall_breach_wick_bars += 1
+        if eq_wick <= limits["official_daily_floor"]:
+            self.prop_official_daily_breach_wick_bars += 1
+
+        if LocalTrade.bt_trades_open:
+            slot_vals: list[float] = []
+            agg_notional = 0.0
+            for tr in LocalTrade.bt_trades_open:
+                bar = self.prop_latest_bars.get(tr.pair)
+                px = bar[3] if bar is not None else float(tr.open_rate or 0.0)
+                t_val = (float(tr.amount) * float(px)) if (tr.amount and px > 0) else 0.0
+                for o in tr.open_orders:
+                    if o.ft_order_side == tr.entry_side:
+                        rem = max(0.0, float(o.amount or 0.0) - float(o.filled or 0.0))
+                        op = float(o.price or o.ft_price or px or 0.0)
+                        if rem > 0 and op > 0:
+                            t_val += rem * op
+                if t_val > 0:
+                    slot_vals.append(t_val)
+                    agg_notional += t_val
+            if slot_vals:
+                slot_vals.sort(reverse=True)
+                self.prop_max_slot_notional_observed = max(self.prop_max_slot_notional_observed, slot_vals[0])
+                self.prop_max_aggregate_notional_observed = max(self.prop_max_aggregate_notional_observed, agg_notional)
+                if agg_notional > init_bal * 0.25 + 1e-6:
+                    self.prop_funded_margin_gt_25pct_bars += 1
+                if agg_notional > init_bal * 2.0 + 1e-6:
+                    self.prop_funded_notional_gt_2x_bars += 1
+                off_floor = max(limits["official_daily_floor"], limits["official_overall_floor"])
+                friction = (28.0 + 11.0) / 10000.0
+                loss_35 = slot_vals[0] * (0.35 + friction)
+                loss_50 = slot_vals[0] * (0.50 + friction)
+                if eq_wick - loss_35 <= off_floor:
+                    self.prop_shock_1coin_35_breach_bars += 1
+                if eq_wick - loss_50 <= off_floor:
+                    self.prop_shock_1coin_50_breach_bars += 1
+                self.prop_min_post_shock_50_headroom_usd = min(
+                    self.prop_min_post_shock_50_headroom_usd, (eq_wick - loss_50) - off_floor
+                )
+                if len(slot_vals) >= 2:
+                    loss_2x25 = (slot_vals[0] + slot_vals[1]) * (0.25 + friction)
+                    if eq_wick - loss_2x25 <= off_floor:
+                        self.prop_shock_2coin_25_breach_bars += 1
+
         if self.prop_internal_wick_touch is None:
             if eq_wick <= limits["operating_overall_floor"]:
                 self.prop_internal_wick_touch = f"operating_overall_wick ({eq_wick:.2f} <= {limits['operating_overall_floor']:.2f})"
@@ -1047,6 +1102,9 @@ class PropParityBacktesting(Backtesting):
         self.prop_latest_bars[pair] = (row[OPEN_IDX], row[HIGH_IDX], row[LOW_IDX], row[CLOSE_IDX])
         prop_headroom = self._prop_remaining_headroom(pair)
         if stake_val > prop_headroom:
+            if trade is None and not self.config.get("amend_last_stake_amount", False):
+                self.prop_budget_denials["headroom_below_initial_stake"] += 1
+                return rate, 0.0, lev, min_stake
             stake_val = prop_headroom
         if min_stake and stake_val < min_stake:
             self.prop_budget_denials["headroom_below_min_stake"] += 1
@@ -1246,6 +1304,8 @@ class PropParityBacktesting(Backtesting):
             "cohort_start": self.prop_phase_start.strftime("%Y-%m-%d"),
             "outcome": outcome,
             "days_elapsed": round(days_elapsed, 2),
+            "pass_dt": str(self.prop_pass_dt) if self.prop_pass_dt else None,
+            "halt_dt": str(self.prop_halt_dt) if self.prop_halt_dt else None,
             "final_equity": round(final_eq, 2),
             "net_pnl": round(final_eq - float(self._prop_profile["initial_balance"]), 2),
             "counted_profit": round(self._cached_ledger["counted_profit"], 2),
@@ -1257,6 +1317,16 @@ class PropParityBacktesting(Backtesting):
             "max_overall_dd_wick": round(self.prop_max_overall_dd_wick, 2),
             "official_breach_close": self.prop_official_breach_close,
             "official_breach_wick": self.prop_official_breach_wick,
+            "official_daily_breach_wick_bars": self.prop_official_daily_breach_wick_bars,
+            "official_overall_breach_wick_bars": self.prop_official_overall_breach_wick_bars,
+            "funded_margin_gt_25pct_bars": self.prop_funded_margin_gt_25pct_bars,
+            "funded_notional_gt_2x_bars": self.prop_funded_notional_gt_2x_bars,
+            "max_slot_notional_observed": round(self.prop_max_slot_notional_observed, 2),
+            "max_aggregate_notional_observed": round(self.prop_max_aggregate_notional_observed, 2),
+            "shock_1coin_35_breach_bars": self.prop_shock_1coin_35_breach_bars,
+            "shock_1coin_50_breach_bars": self.prop_shock_1coin_50_breach_bars,
+            "shock_2coin_25_breach_bars": self.prop_shock_2coin_25_breach_bars,
+            "min_post_shock_50_headroom_usd": round(self.prop_min_post_shock_50_headroom_usd, 2),
             "internal_wick_touch": self.prop_internal_wick_touch,
             "halt_reason": self.prop_halt_reason,
             "keepalive_count": len(self.prop_keepalive_events),
@@ -1569,6 +1639,9 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
         time.time() - t0,
     )
 
+    if getattr(args, "grid_json", ""):
+        return run_grid_sweep(bt, cfg, profile, ohclv_lists, analyzed_dfs, min_date, max_date, args)
+
     if args.suite_json:
         scenarios = [
             {"name": "base_0bps", "slippage_bps": 0.0, "strict_wick_guard": False},
@@ -1798,16 +1871,233 @@ def _run_continuous_pass(
         },
         "official_breach_close": bt.prop_official_breach_close,
         "official_breach_wick": bt.prop_official_breach_wick,
+        "official_daily_breach_wick_bars": bt.prop_official_daily_breach_wick_bars,
+        "official_overall_breach_wick_bars": bt.prop_official_overall_breach_wick_bars,
+        "funded_margin_gt_25pct_bars": bt.prop_funded_margin_gt_25pct_bars,
+        "funded_notional_gt_2x_bars": bt.prop_funded_notional_gt_2x_bars,
+        "max_slot_notional_observed": round(bt.prop_max_slot_notional_observed, 2),
+        "max_aggregate_notional_observed": round(bt.prop_max_aggregate_notional_observed, 2),
+        "shock_1coin_35_breach_bars": bt.prop_shock_1coin_35_breach_bars,
+        "shock_1coin_50_breach_bars": bt.prop_shock_1coin_50_breach_bars,
+        "shock_2coin_25_breach_bars": bt.prop_shock_2coin_25_breach_bars,
+        "min_post_shock_50_headroom_usd": round(bt.prop_min_post_shock_50_headroom_usd, 2),
         "internal_wick_touch": bt.prop_internal_wick_touch,
         "keepalive_count": len(bt.prop_keepalive_events),
         "inactivity_30d_breach": bt.prop_inactivity_breach,
         "macro_pause_bars": bt.prop_macro_pause_bars,
         "rules_pause_bars": bt.prop_rules_pause_bars,
         "budget_denials": dict(bt.prop_budget_denials),
+        "funded_withdrawal_policies": (
+            simulate_funded_withdrawals(
+                bt.prop_daily_curve,
+                initial_balance=float(profile["initial_balance"]),
+                official_max_loss_pct=float(profile["official_max_loss_percent"]),
+            )
+            if ignore_target_pause
+            else None
+        ),
         "trade_analytics": _summarize_trades(LocalTrade.bt_trades),
         "daily_curve": bt.prop_daily_curve,
         "trades_head": trades_sample[:10],
         "trades_tail": trades_sample[-10:],
+    }
+
+
+def simulate_funded_withdrawals(
+    daily_curve: list[dict[str, Any]],
+    *,
+    initial_balance: float = 5000.0,
+    official_max_loss_pct: float = 0.08,
+    payout_amount: float = 250.0,
+    split_ratio: float = 0.80,
+) -> dict[str, Any]:
+    """Compare Funded continuous no-withdrawal vs Reset ($5,250->$5,000) vs Buffer ($5,450->$5,200)."""
+    static_floor = initial_balance * (1.0 - official_max_loss_pct)
+
+    def _run_policy(trigger_eq: float) -> dict[str, Any]:
+        withdrawn_gross = 0.0
+        payouts = 0
+        first_payout_day: int | None = None
+        min_eq = initial_balance
+        breached_floor = False
+        for idx, row in enumerate(daily_curve, start=1):
+            raw_eq = float(row["midnight_equity"])
+            adj_eq = raw_eq - withdrawn_gross
+            min_eq = min(min_eq, adj_eq)
+            if adj_eq <= static_floor:
+                breached_floor = True
+                break
+            while adj_eq >= trigger_eq:
+                withdrawn_gross += payout_amount
+                payouts += 1
+                if first_payout_day is None:
+                    first_payout_day = idx
+                adj_eq = raw_eq - withdrawn_gross
+                min_eq = min(min_eq, adj_eq)
+        final_adj = (float(daily_curve[-1]["midnight_equity"]) - withdrawn_gross) if daily_curve else initial_balance
+        return {
+            "trigger_equity_usdt": trigger_eq,
+            "post_withdrawal_base_usdt": round(trigger_eq - payout_amount, 2),
+            "payout_count": payouts,
+            "withdrawn_gross_usdt": round(withdrawn_gross, 2),
+            "withdrawn_net_trader_80pct_usdt": round(withdrawn_gross * split_ratio, 2),
+            "days_to_first_payout": first_payout_day,
+            "final_account_equity_usdt": round(final_adj, 2),
+            "min_account_equity_usdt": round(min_eq, 2),
+            "min_distance_to_static_floor_usdt": round(min_eq - static_floor, 2),
+            "survived_static_floor": not breached_floor,
+        }
+
+    return {
+        "static_overall_floor_usdt": round(static_floor, 2),
+        "reset_5250_to_5000": _run_policy(initial_balance + payout_amount),
+        "buffer_5450_to_5200": _run_policy(initial_balance + 200.0 + payout_amount),
+    }
+
+
+def _percentile(vals: list[float], pct: float) -> float | None:
+    if not vals:
+        return None
+    s = sorted(vals)
+    idx = min(len(s) - 1, max(0, int(math.ceil((pct / 100.0) * len(s)) - 1)))
+    return round(float(s[idx]), 1)
+
+
+def run_sequential_program_cohorts(
+    bt: PropParityBacktesting,
+    ohclv_lists: dict[str, list[tuple]],
+    analyzed_dfs: dict[str, pd.DataFrame],
+    start_dates: list[datetime],
+    max_date: datetime,
+    *,
+    initial_balance: float = 5000.0,
+    one_step_daily_guard: float = 0.036,
+    one_step_max_guard: float = 0.065,
+    two_step_daily_guard: float = 0.043,
+    two_step_max_guard: float = 0.080,
+) -> dict[str, Any]:
+    """Compare One-Step vs Two-Step sequential cohorts (Evaluation -> Funded -> 1st Payout +$250)."""
+    saved_profile = copy.deepcopy(bt._prop_profile)
+    saved_stop_halt = bt._stop_on_halt
+    saved_stop_pass = bt._stop_on_pass
+    saved_ignore = bt._ignore_target_pause
+    bt._stop_on_halt = True
+    bt._stop_on_pass = True
+    bt._ignore_target_pause = False
+
+    profs = build_program_profiles(
+        initial_balance=initial_balance,
+        one_step_daily_guard=one_step_daily_guard,
+        one_step_max_guard=one_step_max_guard,
+        two_step_daily_guard=two_step_daily_guard,
+        two_step_max_guard=two_step_max_guard,
+    )
+    one_step_cohorts: list[dict[str, Any]] = []
+    two_step_cohorts: list[dict[str, Any]] = []
+
+    try:
+        for s_dt in start_dates:
+            # --- A. ONE-STEP SEQUENTIAL: Eval (+10%, 3d) -> Funded (+5% 1st Payout) ---
+            bt._prop_profile = copy.deepcopy(profs["one_step_eval"])
+            os_eval = bt.run_cached_cohort(ohclv_lists, analyzed_dfs, s_dt, max_date)
+            os_funded = None
+            os_days_to_payout = None
+            if os_eval["outcome"] == "PASS" and bt.prop_pass_dt is not None:
+                f_start = _to_utc(bt.prop_pass_dt) + timedelta(minutes=5)
+                if f_start < _to_utc(max_date):
+                    bt._prop_profile = copy.deepcopy(profs["one_step_funded"])
+                    os_funded = bt.run_cached_cohort(ohclv_lists, analyzed_dfs, f_start, max_date)
+                    if os_funded["outcome"] == "PASS":
+                        os_days_to_payout = round(os_eval["days_elapsed"] + os_funded["days_elapsed"], 2)
+            one_step_cohorts.append({
+                "cohort_start": s_dt.strftime("%Y-%m-%d"),
+                "eval_outcome": os_eval["outcome"],
+                "days_to_qualify": os_eval["days_elapsed"] if os_eval["outcome"] == "PASS" else None,
+                "funded_1st_payout_outcome": os_funded["outcome"] if os_funded else None,
+                "days_to_first_payout": os_days_to_payout,
+                "max_daily_dd_wick": os_eval["max_daily_dd_wick"],
+                "max_overall_dd_wick": os_eval["max_overall_dd_wick"],
+                "official_daily_breach_wick_bars": os_eval["official_daily_breach_wick_bars"],
+                "official_overall_breach_wick_bars": os_eval["official_overall_breach_wick_bars"],
+                "shock_1coin_50_breach_bars": os_eval["shock_1coin_50_breach_bars"],
+            })
+
+            # --- B. TWO-STEP SEQUENTIAL: Phase 1 (+10%, 4d, $200/d) -> Phase 2 (+5%, 4d, $100/d) -> Funded (+5%) ---
+            bt._prop_profile = copy.deepcopy(profs["two_step_phase1"])
+            ts_p1 = bt.run_cached_cohort(ohclv_lists, analyzed_dfs, s_dt, max_date)
+            ts_p2 = None
+            ts_funded = None
+            ts_days_to_qualify = None
+            ts_days_to_payout = None
+            ts_outcome = ts_p1["outcome"]
+            if ts_p1["outcome"] == "PASS" and bt.prop_pass_dt is not None:
+                p2_start = _to_utc(bt.prop_pass_dt) + timedelta(minutes=5)
+                if p2_start < _to_utc(max_date):
+                    bt._prop_profile = copy.deepcopy(profs["two_step_phase2"])
+                    ts_p2 = bt.run_cached_cohort(ohclv_lists, analyzed_dfs, p2_start, max_date)
+                    ts_outcome = ts_p2["outcome"]
+                    if ts_p2["outcome"] == "PASS" and bt.prop_pass_dt is not None:
+                        ts_days_to_qualify = round(ts_p1["days_elapsed"] + ts_p2["days_elapsed"], 2)
+                        f_start = _to_utc(bt.prop_pass_dt) + timedelta(minutes=5)
+                        if f_start < _to_utc(max_date):
+                            bt._prop_profile = copy.deepcopy(profs["two_step_funded"])
+                            ts_funded = bt.run_cached_cohort(ohclv_lists, analyzed_dfs, f_start, max_date)
+                            if ts_funded["outcome"] == "PASS":
+                                ts_days_to_payout = round(ts_days_to_qualify + ts_funded["days_elapsed"], 2)
+                else:
+                    ts_outcome = "OPEN_END"
+            two_step_cohorts.append({
+                "cohort_start": s_dt.strftime("%Y-%m-%d"),
+                "p1_outcome": ts_p1["outcome"],
+                "p1_days": ts_p1["days_elapsed"] if ts_p1["outcome"] == "PASS" else None,
+                "p2_outcome": ts_p2["outcome"] if ts_p2 else None,
+                "p2_days": ts_p2["days_elapsed"] if (ts_p2 and ts_p2["outcome"] == "PASS") else None,
+                "eval_outcome": ts_outcome,
+                "days_to_qualify": ts_days_to_qualify,
+                "funded_1st_payout_outcome": ts_funded["outcome"] if ts_funded else None,
+                "days_to_first_payout": ts_days_to_payout,
+                "max_daily_dd_wick": max(ts_p1["max_daily_dd_wick"], ts_p2["max_daily_dd_wick"] if ts_p2 else 0.0),
+                "max_overall_dd_wick": max(ts_p1["max_overall_dd_wick"], ts_p2["max_overall_dd_wick"] if ts_p2 else 0.0),
+                "official_daily_breach_wick_bars": ts_p1["official_daily_breach_wick_bars"] + (ts_p2["official_daily_breach_wick_bars"] if ts_p2 else 0),
+                "official_overall_breach_wick_bars": ts_p1["official_overall_breach_wick_bars"] + (ts_p2["official_overall_breach_wick_bars"] if ts_p2 else 0),
+                "shock_1coin_50_breach_bars": ts_p1["shock_1coin_50_breach_bars"] + (ts_p2["shock_1coin_50_breach_bars"] if ts_p2 else 0),
+            })
+    finally:
+        bt._prop_profile = saved_profile
+        bt._stop_on_halt = saved_stop_halt
+        bt._stop_on_pass = saved_stop_pass
+        bt._ignore_target_pause = saved_ignore
+
+    def _summarize_seq(rows: list[dict[str, Any]]) -> dict[str, Any]:
+        n = len(rows)
+        q_days = [float(r["days_to_qualify"]) for r in rows if r["days_to_qualify"] is not None]
+        p_days = [float(r["days_to_first_payout"]) for r in rows if r["days_to_first_payout"] is not None]
+        return {
+            "total_cohorts": n,
+            "qualified_count": len(q_days),
+            "qualify_rate_pct": round(100.0 * len(q_days) / n, 1) if n else 0.0,
+            "first_payout_count": len(p_days),
+            "first_payout_rate_pct": round(100.0 * len(p_days) / n, 1) if n else 0.0,
+            "fail_official": sum(1 for r in rows if r["eval_outcome"] == "FAIL_OFFICIAL"),
+            "fail_inactivity_30d": sum(1 for r in rows if r["eval_outcome"] == "FAIL_INACTIVITY_30D"),
+            "halt_internal_guard": sum(1 for r in rows if r["eval_outcome"] == "HALT_INTERNAL_GUARD"),
+            "open_end": sum(1 for r in rows if r["eval_outcome"] == "OPEN_END"),
+            "median_days_to_qualify": round(statistics.median(q_days), 1) if q_days else None,
+            "p95_days_to_qualify": _percentile(q_days, 95.0),
+            "median_days_to_first_payout": round(statistics.median(p_days), 1) if p_days else None,
+            "p95_days_to_first_payout": _percentile(p_days, 95.0),
+            "worst_daily_dd_wick": round(max((r["max_daily_dd_wick"] for r in rows), default=0.0), 2),
+            "worst_overall_dd_wick": round(max((r["max_overall_dd_wick"] for r in rows), default=0.0), 2),
+            "total_official_daily_breach_wick_bars": sum(r["official_daily_breach_wick_bars"] for r in rows),
+            "total_official_overall_breach_wick_bars": sum(r["official_overall_breach_wick_bars"] for r in rows),
+            "total_shock_1coin_50_breach_bars": sum(r["shock_1coin_50_breach_bars"] for r in rows),
+        }
+
+    return {
+        "one_step_summary": _summarize_seq(one_step_cohorts),
+        "two_step_summary": _summarize_seq(two_step_cohorts),
+        "one_step_cohorts": one_step_cohorts,
+        "two_step_cohorts": two_step_cohorts,
     }
 
 
@@ -1867,15 +2157,17 @@ def _execute_scenario(
         flush=True,
     )
 
-    # 2. Rolling Independent One-Step Challenge Cohorts
+    # 2. Rolling Independent One-Step Challenge Cohorts + Sequential One-Step vs Two-Step Comparison
     bt._ignore_target_pause = False
     cohorts = []
+    cohort_starts: list[datetime] = []
     if cohort_step_days > 0:
         bt._stop_on_halt = True
         bt._stop_on_pass = True
         cur_start = _to_utc(min_date)
         last_cohort_start = _to_utc(max_date) - timedelta(days=30)
         while cur_start <= last_cohort_start:
+            cohort_starts.append(cur_start)
             c_res = bt.run_cached_cohort(ohclv_lists, analyzed_dfs, cur_start, max_date)
             cohorts.append(c_res)
             print(
@@ -1885,6 +2177,46 @@ def _execute_scenario(
                 flush=True,
             )
             cur_start += timedelta(days=cohort_step_days)
+
+    program_comparison = None
+    autumn_crash_sweep = None
+    if cohort_starts:
+        os_d_guard = float(profile.get("daily_limit_percent", 0.036))
+        os_m_guard = float(profile.get("max_loss_percent", 0.065))
+        ts_d_guard = float(bt._prop_policy.get("_two_step_daily_guard", 0.043))
+        ts_m_guard = float(bt._prop_policy.get("_two_step_max_guard", 0.080))
+        program_comparison = run_sequential_program_cohorts(
+            bt, ohclv_lists, analyzed_dfs, cohort_starts, max_date,
+            initial_balance=float(profile["initial_balance"]),
+            one_step_daily_guard=os_d_guard,
+            one_step_max_guard=os_m_guard,
+            two_step_daily_guard=ts_d_guard,
+            two_step_max_guard=ts_m_guard,
+        )
+        os_s = program_comparison["one_step_summary"]
+        ts_s = program_comparison["two_step_summary"]
+        print(
+            f"  [{name}] 1-Step vs 2-Step: "
+            f"1-Step Qual={os_s['qualify_rate_pct']}% (Med {os_s['median_days_to_qualify']}d, 1stPay Med {os_s['median_days_to_first_payout']}d) | "
+            f"2-Step Qual={ts_s['qualify_rate_pct']}% (Med {ts_s['median_days_to_qualify']}d, 1stPay Med {ts_s['median_days_to_first_payout']}d)",
+            flush=True,
+        )
+        crash_w_start = datetime(2026, 9, 15, tzinfo=UTC)
+        crash_w_end = datetime(2026, 11, 10, tzinfo=UTC)
+        if _to_utc(min_date) <= crash_w_start and _to_utc(max_date) >= crash_w_end:
+            daily_starts: list[datetime] = []
+            d_cur = crash_w_start
+            while d_cur <= crash_w_end:
+                daily_starts.append(d_cur)
+                d_cur += timedelta(days=1)
+            autumn_crash_sweep = run_sequential_program_cohorts(
+                bt, ohclv_lists, analyzed_dfs, daily_starts, max_date,
+                initial_balance=float(profile["initial_balance"]),
+                one_step_daily_guard=os_d_guard,
+                one_step_max_guard=os_m_guard,
+                two_step_daily_guard=ts_d_guard,
+                two_step_max_guard=ts_m_guard,
+            )
 
     pass_days = [c["days_elapsed"] for c in cohorts if c["outcome"] == "PASS"]
     n_tot = len(cohorts)
@@ -1898,6 +2230,7 @@ def _execute_scenario(
         "halt_internal_guard": sum(1 for c in cohorts if c["outcome"] == "HALT_INTERNAL_GUARD"),
         "open_end": sum(1 for c in cohorts if c["outcome"] == "OPEN_END"),
         "median_days_to_pass": round(statistics.median(pass_days), 1) if pass_days else None,
+        "p95_days_to_pass": _percentile(pass_days, 95.0),
         "min_days_to_pass": round(min(pass_days), 1) if pass_days else None,
         "max_days_to_pass": round(max(pass_days), 1) if pass_days else None,
         "worst_daily_dd_close": round(max((c["max_daily_dd_close"] for c in cohorts), default=0.0), 2),
@@ -1910,8 +2243,150 @@ def _execute_scenario(
         "continuous_funded": continuous_funded_summary,
         "cohorts": cohorts,
         "cohorts_summary": cohorts_summary,
+        "program_comparison": program_comparison,
+        "autumn_2026_daily_crash_sweep": autumn_crash_sweep,
         "runtime_sec": round(time.time() - t_sc, 1),
     }
+
+
+DEFAULT_MONEY_GRID: list[dict[str, Any]] = [
+    # --- 2 CRYPTO SIMULTANEE (da prudente 850$ fino a 1.200$ vicino al limite 1.250$ Funded) ---
+    {"id": "S2_E275_SLOT400_AGG850", "max_open_trades": 2, "stake_amount": 275.0, "max_slot_notional_usdt": 400.0, "max_aggregate_notional_usdt": 850.0, "guard": "standard"},
+    {"id": "S2_E275_SLOT475_AGG950", "max_open_trades": 2, "stake_amount": 275.0, "max_slot_notional_usdt": 475.0, "max_aggregate_notional_usdt": 950.0, "guard": "standard"},
+    {"id": "S2_E300_SLOT550_AGG1100", "max_open_trades": 2, "stake_amount": 300.0, "max_slot_notional_usdt": 550.0, "max_aggregate_notional_usdt": 1100.0, "guard": "standard"},
+    {"id": "S2_E350_SLOT600_AGG1200", "max_open_trades": 2, "stake_amount": 350.0, "max_slot_notional_usdt": 600.0, "max_aggregate_notional_usdt": 1200.0, "guard": "standard"},
+    {"id": "S2_E350_SLOT600_AGG1200_NEARGUARD", "max_open_trades": 2, "stake_amount": 350.0, "max_slot_notional_usdt": 600.0, "max_aggregate_notional_usdt": 1200.0, "guard": "near_official"},
+    # --- 3 CRYPTO SIMULTANEE (da prudente 850$ fino a 1.200$ vicino al limite 1.250$ Funded) ---
+    {"id": "S3_E200_SLOT350_AGG850", "max_open_trades": 3, "stake_amount": 200.0, "max_slot_notional_usdt": 350.0, "max_aggregate_notional_usdt": 850.0, "guard": "standard"},
+    {"id": "S3_E200_SLOT400_AGG950", "max_open_trades": 3, "stake_amount": 200.0, "max_slot_notional_usdt": 400.0, "max_aggregate_notional_usdt": 950.0, "guard": "standard"},
+    {"id": "S3_E255_SLOT350_AGG950", "max_open_trades": 3, "stake_amount": 255.0, "max_slot_notional_usdt": 350.0, "max_aggregate_notional_usdt": 950.0, "guard": "standard"},
+    {"id": "S3_E255_SLOT400_AGG950", "max_open_trades": 3, "stake_amount": 255.0, "max_slot_notional_usdt": 400.0, "max_aggregate_notional_usdt": 950.0, "guard": "standard"},
+    {"id": "S3_E255_SLOT400_AGG950_NEARGUARD", "max_open_trades": 3, "stake_amount": 255.0, "max_slot_notional_usdt": 400.0, "max_aggregate_notional_usdt": 950.0, "guard": "near_official"},
+    {"id": "S3_E255_SLOT450_AGG1100", "max_open_trades": 3, "stake_amount": 255.0, "max_slot_notional_usdt": 450.0, "max_aggregate_notional_usdt": 1100.0, "guard": "standard"},
+    {"id": "S3_E275_SLOT500_AGG1200", "max_open_trades": 3, "stake_amount": 275.0, "max_slot_notional_usdt": 500.0, "max_aggregate_notional_usdt": 1200.0, "guard": "standard"},
+    {"id": "S3_E275_SLOT500_AGG1200_NEARGUARD", "max_open_trades": 3, "stake_amount": 275.0, "max_slot_notional_usdt": 500.0, "max_aggregate_notional_usdt": 1200.0, "guard": "near_official"},
+    # --- BASELINE PRECEDENTE ("unlimited" senza riserva DCA separata) ---
+    {"id": "S3_UNLIM_SLOT500_AGG950", "max_open_trades": 3, "stake_amount": "unlimited", "max_slot_notional_usdt": 500.0, "max_aggregate_notional_usdt": 950.0, "guard": "standard"},
+]
+
+
+def _apply_candidate_money_params(
+    bt: PropParityBacktesting,
+    cfg: dict[str, Any],
+    profile: dict[str, Any],
+    cand: dict[str, Any],
+) -> None:
+    init_bal = float(bt._prop_profile["initial_balance"])
+    max_open = int(cand["max_open_trades"])
+    stake_amt = cand["stake_amount"]
+    max_slot = float(cand["max_slot_notional_usdt"])
+    max_agg = float(cand["max_aggregate_notional_usdt"])
+    ratio = round(max_agg / init_bal, 4)
+    guard_mode = cand.get("guard", "standard")
+    if guard_mode == "near_official":
+        # Stop interno vicinissimo ai limiti ufficiali (solo $10 daily / $25 overall di margine tecnico)
+        os_d, os_m = 0.038, 0.075
+        ts_d, ts_m = 0.048, 0.095
+    else:
+        os_d, os_m = 0.036, 0.065
+        ts_d, ts_m = 0.043, 0.080
+
+    profile["daily_limit_percent"] = os_d
+    profile["max_loss_percent"] = os_m
+    bt._prop_profile["daily_limit_percent"] = os_d
+    bt._prop_profile["max_loss_percent"] = os_m
+    bt._prop_policy["_two_step_daily_guard"] = ts_d
+    bt._prop_policy["_two_step_max_guard"] = ts_m
+
+    cfg["max_open_trades"] = max_open
+    cfg["stake_amount"] = stake_amt
+    cfg["tradable_balance_ratio"] = ratio
+    cfg["amend_last_stake_amount"] = False
+    bt.config["max_open_trades"] = max_open
+    bt.config["stake_amount"] = stake_amt
+    bt.config["tradable_balance_ratio"] = ratio
+    bt.config["amend_last_stake_amount"] = False
+    bt.strategy.max_open_trades = max_open
+    bt.strategy.stake_amount = stake_amt
+    bt.wallets._config["max_open_trades"] = max_open
+    bt.wallets._config["stake_amount"] = stake_amt
+    bt.wallets._config["tradable_balance_ratio"] = ratio
+    bt.wallets._config["amend_last_stake_amount"] = False
+    bt._prop_policy["max_slot_notional_usdt"] = max_slot
+    bt._prop_policy["max_aggregate_notional_usdt"] = max_agg
+
+
+def run_grid_sweep(
+    bt: PropParityBacktesting,
+    cfg: dict[str, Any],
+    profile: dict[str, Any],
+    ohclv_lists: dict[str, list[tuple]],
+    analyzed_dfs: dict[str, pd.DataFrame],
+    min_date: datetime,
+    max_date: datetime,
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    """Evaluate money-management candidates on Train (Year 1), Out-of-Sample (Year 2) and Full Window."""
+    t0 = time.time()
+    mid_date = _to_utc(min_date) + (_to_utc(max_date) - _to_utc(min_date)) / 2
+    mid_date = mid_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    results: list[dict[str, Any]] = []
+
+    for cand in DEFAULT_MONEY_GRID:
+        c_id = cand["id"]
+        print(f"\n=== GRID CANDIDATE {c_id}: {cand} ===", flush=True)
+        _apply_candidate_money_params(bt, cfg, profile, cand)
+        full_res = _execute_scenario(
+            bt, cfg, profile, ohclv_lists, analyzed_dfs, min_date, max_date,
+            universe_size=len(ohclv_lists), name=f"{c_id}_full",
+            slippage_bps=args.slippage_bps or 10.0,
+            strict_wick_guard=args.strict_wick_guard,
+            cohort_step_days=args.cohort_step_days,
+        )
+        train_funded = _run_continuous_pass(
+            bt, cfg, profile, ohclv_lists, analyzed_dfs, _to_utc(min_date), mid_date,
+            universe_size=len(ohclv_lists), name=f"{c_id}_train",
+            slippage_bps=args.slippage_bps or 10.0,
+            strict_wick_guard=args.strict_wick_guard,
+            ignore_target_pause=True,
+        )
+        oos_funded = _run_continuous_pass(
+            bt, cfg, profile, ohclv_lists, analyzed_dfs, mid_date, _to_utc(max_date),
+            universe_size=len(ohclv_lists), name=f"{c_id}_oos",
+            slippage_bps=args.slippage_bps or 10.0,
+            strict_wick_guard=args.strict_wick_guard,
+            ignore_target_pause=True,
+        )
+        results.append({
+            "candidate": cand,
+            "train_1y_funded": {
+                k: v for k, v in train_funded.items() if k not in ("daily_curve", "trades_head", "trades_tail")
+            },
+            "oos_1y_funded": {
+                k: v for k, v in oos_funded.items() if k not in ("daily_curve", "trades_head", "trades_tail")
+            },
+            "full_2y_continuous_funded": {
+                k: v for k, v in full_res["continuous_funded"].items() if k not in ("daily_curve", "trades_head", "trades_tail")
+            },
+            "program_comparison": full_res["program_comparison"],
+            "autumn_2026_daily_crash_sweep": full_res["autumn_2026_daily_crash_sweep"],
+        })
+
+    out = {
+        "schema_version": 3,
+        "train_window": [str(_to_utc(min_date)), str(mid_date)],
+        "oos_window": [str(mid_date), str(_to_utc(max_date))],
+        "slippage_bps_roundtrip": args.slippage_bps or 10.0,
+        "strict_wick_guard": args.strict_wick_guard,
+        "cohort_step_days": args.cohort_step_days,
+        "runtime_sec": round(time.time() - t0, 1),
+        "candidates": results,
+    }
+    if args.grid_json:
+        out_path = Path(args.grid_json)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(out, indent=2))
+    return out
 
 
 def main():
@@ -1932,6 +2407,7 @@ def main():
     parser.add_argument("--strict-wick-guard", action="store_true", default=False)
     parser.add_argument("--output-json", default="")
     parser.add_argument("--suite-json", default="")
+    parser.add_argument("--grid-json", default="")
     parser.add_argument("--overwrite-suite", action="store_true", default=False)
     parser.add_argument("--cache-dir", default="")
     parser.add_argument("--chunk-size", type=int, default=8)
@@ -1942,6 +2418,22 @@ def main():
         _orig_sw_deepcopy = _sw.deepcopy
         _sw.deepcopy = lambda obj, *a, **kw: obj if isinstance(obj, LocalTrade) else _orig_sw_deepcopy(obj, *a, **kw)
     res = run_suite(args)
+    if args.grid_json:
+        for row in res.get("candidates", []):
+            c = row["candidate"]
+            tr = row["train_1y_funded"]
+            oos = row["oos_1y_funded"]
+            f2 = row["full_2y_continuous_funded"]
+            pc = row.get("program_comparison") or {}
+            os_s = pc.get("one_step_summary") or {}
+            ts_s = pc.get("two_step_summary") or {}
+            print(
+                f"CANDIDATE {c['id']}: TrainNet=${tr['net_pnl']:+} OOSNet=${oos['net_pnl']:+} "
+                f"2YNet=${f2['net_pnl']:+} (MaxDayWick=${f2['max_daily_dd_wick']}) | "
+                f"1-Step Qual={os_s.get('qualify_rate_pct')}% (1stPay Med={os_s.get('median_days_to_first_payout')}d) | "
+                f"2-Step Qual={ts_s.get('qualify_rate_pct')}% (1stPay Med={ts_s.get('median_days_to_first_payout')}d)"
+            )
+        return
     if args.suite_json:
         for sc_name, sc_res in res["scenarios"].items():
             c_s = sc_res["cohorts_summary"]
