@@ -13,6 +13,9 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import statistics
+import time
+from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -25,8 +28,53 @@ REPO = Path(__file__).resolve().parents[1]
 FORENSIC_DIR = REPO / "user_data" / "forensic" / "strict_validation"
 FUTURES_DIR = REPO / "user_data" / "data" / "bybit" / "futures"
 
+STRUCTURAL_BLACKLIST_PATTERNS = (
+    r"(USDC|USDE|USDD|DAI|TUSD|FDUSD|BUSD|USDP|USDT|EUR|GBP|AUD|BRL|TRY|USD|XUSD|USD1|RLUSD|EURI)/.*",
+    r".*(_PREMIUM|BEAR|BULL|HALF|HEDGE|[1235][SL])/.*",
+    r".*(UP|DOWN|3L|3S)/.*",
+)
 
-def fetch_or_load_bybit_instruments() -> dict[str, dict[str, Any]]:
+PAIRLIST_PRESETS: dict[str, dict[str, Any]] = {
+    "base": {
+        "number_assets": 40,
+        "min_value_usdt": 20_000_000.0,
+        "min_days_listed": 60,
+        "min_market_cap_usdt": 100_000_000.0,
+        "max_volatility": 0.50,
+        "max_rate_of_change": 0.85,
+    },
+    "strict": {
+        "number_assets": 25,
+        "min_value_usdt": 50_000_000.0,
+        "min_days_listed": 90,
+        "min_market_cap_usdt": 250_000_000.0,
+        "max_volatility": 0.40,
+        "max_rate_of_change": 0.70,
+    },
+    "bluechip": {
+        "number_assets": 15,
+        "min_value_usdt": 100_000_000.0,
+        "min_days_listed": 120,
+        "min_market_cap_usdt": 500_000_000.0,
+        "max_volatility": 0.35,
+        "max_rate_of_change": 0.60,
+    },
+}
+
+
+def discover_archived_delisted_bases() -> set[str]:
+    """Return base symbols that have converted 1m trade archives in FORENSIC_DIR/archive."""
+    arch_root = FORENSIC_DIR / "archive"
+    if not arch_root.is_dir():
+        return set()
+    out: set[str] = set()
+    for sym_dir in arch_root.iterdir():
+        if sym_dir.is_dir() and sym_dir.name.endswith("USDT") and any(sym_dir.glob("*-1m.feather")):
+            out.add(sym_dir.name[:-4].upper())
+    return out
+
+
+def fetch_or_load_bybit_instruments(*, allow_offline_empty: bool = False) -> dict[str, dict[str, Any]]:
     """Return mapping of BASE (e.g. 'BTC') -> Bybit V5 linear instrument info."""
     FORENSIC_DIR.mkdir(parents=True, exist_ok=True)
     inst_path = FORENSIC_DIR / "instruments.json"
@@ -38,28 +86,33 @@ def fetch_or_load_bybit_instruments() -> dict[str, dict[str, Any]]:
         except Exception:
             rows = []
     if not rows:
-        cursor = ""
-        while True:
-            params: dict[str, Any] = {"category": "linear", "limit": 1000}
-            if cursor:
-                params["cursor"] = cursor
-            resp = requests.get(
-                "https://api.bybit.com/v5/market/instruments-info",
-                params=params,
-                timeout=30,
+        try:
+            cursor = ""
+            while True:
+                params: dict[str, Any] = {"category": "linear", "limit": 1000}
+                if cursor:
+                    params["cursor"] = cursor
+                resp = requests.get(
+                    "https://api.bybit.com/v5/market/instruments-info",
+                    params=params,
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                data = resp.json().get("result", {})
+                rows.extend(data.get("list", []))
+                cursor = data.get("nextPageCursor") or ""
+                if not cursor:
+                    break
+            inst_path.write_text(
+                json.dumps(
+                    {"observed_at": datetime.now(UTC).isoformat(), "count": len(rows), "list": rows},
+                    indent=2,
+                )
             )
-            resp.raise_for_status()
-            data = resp.json().get("result", {})
-            rows.extend(data.get("list", []))
-            cursor = data.get("nextPageCursor") or ""
-            if not cursor:
-                break
-        inst_path.write_text(
-            json.dumps(
-                {"observed_at": datetime.now(UTC).isoformat(), "count": len(rows), "list": rows},
-                indent=2,
-            )
-        )
+        except Exception:
+            if not allow_offline_empty:
+                raise
+            rows = []
     out: dict[str, dict[str, Any]] = {}
     for r in rows:
         sym = str(r.get("symbol", ""))
@@ -67,6 +120,125 @@ def fetch_or_load_bybit_instruments() -> dict[str, dict[str, Any]]:
             base = sym[:-4]
             out[base] = r
     return out
+
+
+def load_or_fetch_coingecko_mcap_map(*, fetch_online: bool = False) -> dict[str, float]:
+    """Load current CoinGecko market-cap snapshot (USD) from cache, optionally fetching top 1,000 coins."""
+    FORENSIC_DIR.mkdir(parents=True, exist_ok=True)
+    snap_path = FORENSIC_DIR / "coingecko_mcap_snapshot.json"
+    alt_cache = REPO / "user_data" / "forensic" / "coingecko_marketcap_cache.json"
+    caps: dict[str, float] = {}
+
+    for candidate in (snap_path, alt_cache):
+        if not candidate.is_file():
+            continue
+        try:
+            raw = json.loads(candidate.read_text())
+            if isinstance(raw, dict) and isinstance(raw.get("caps"), dict):
+                for k, v in raw["caps"].items():
+                    if isinstance(v, (int, float)) and np.isfinite(v) and v > 0:
+                        caps[str(k).upper()] = max(caps.get(str(k).upper(), 0.0), float(v))
+            elif isinstance(raw, dict) and isinstance(raw.get("data"), list):
+                for item in raw["data"]:
+                    if isinstance(item, dict) and item.get("symbol") and item.get("market_cap"):
+                        sym = str(item["symbol"]).upper()
+                        mc = float(item["market_cap"])
+                        if np.isfinite(mc) and mc > 0:
+                            caps[sym] = max(caps.get(sym, 0.0), mc)
+        except Exception:
+            continue
+        if caps:
+            return caps
+
+    if not fetch_online:
+        return caps
+
+    fetched: dict[str, float] = {}
+    for page in range(1, 5):
+        try:
+            resp = requests.get(
+                "https://api.coingecko.com/api/v3/coins/markets",
+                params={
+                    "vs_currency": "usd",
+                    "order": "market_cap_desc",
+                    "per_page": 250,
+                    "page": page,
+                    "sparkline": "false",
+                },
+                timeout=30,
+            )
+            if resp.status_code == 429:
+                time.sleep(15)
+                resp = requests.get(
+                    "https://api.coingecko.com/api/v3/coins/markets",
+                    params={
+                        "vs_currency": "usd",
+                        "order": "market_cap_desc",
+                        "per_page": 250,
+                        "page": page,
+                        "sparkline": "false",
+                    },
+                    timeout=30,
+                )
+            resp.raise_for_status()
+            rows = resp.json()
+            if not isinstance(rows, list) or not rows:
+                break
+            for item in rows:
+                sym = str(item.get("symbol", "")).upper()
+                mc = item.get("market_cap")
+                if sym and isinstance(mc, (int, float)) and np.isfinite(mc) and mc > 0:
+                    # Keep highest market cap when tickers collide (canonical top asset)
+                    fetched[sym] = max(fetched.get(sym, 0.0), float(mc))
+            if page < 4:
+                time.sleep(2.5)
+        except Exception as exc:
+            print(f"WARNING: CoinGecko page {page} fetch failed ({exc}); continuing with {len(fetched)} caps.", flush=True)
+            break
+
+    if fetched:
+        snap_path.write_text(
+            json.dumps(
+                {
+                    "observed_at": datetime.now(UTC).isoformat(),
+                    "source": "https://api.coingecko.com/api/v3/coins/markets",
+                    "count": len(fetched),
+                    "caps": fetched,
+                },
+                indent=2,
+            )
+        )
+    return fetched
+
+
+def export_eligible_download_pairs(
+    config_path: Path,
+    output_path: Path,
+    *,
+    anti_survivorship: bool = True,
+) -> list[str]:
+    """Write a Freqtrade `--pairs-file` JSON list containing ONLY eligible Bybit USDT crypto perpetuals."""
+    cfg = json.loads(config_path.read_text())
+    patterns = (
+        STRUCTURAL_BLACKLIST_PATTERNS
+        if anti_survivorship
+        else cfg.get("exchange", {}).get("pair_blacklist", [])
+    )
+    blacklist_patterns = [re.compile(pat) for pat in patterns]
+    instruments = fetch_or_load_bybit_instruments()
+    pairs: list[str] = []
+    for base, info in sorted(instruments.items()):
+        if not is_eligible_bybit_crypto(info):
+            continue
+        pair = f"{base}/USDT:USDT"
+        if any(r.fullmatch(pair) or r.match(pair) for r in blacklist_patterns):
+            continue
+        pairs.append(pair)
+    if "BTC/USDT:USDT" not in pairs:
+        pairs.insert(0, "BTC/USDT:USDT")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(pairs, indent=2))
+    return pairs
 
 
 def is_eligible_bybit_crypto(info: dict[str, Any] | None) -> bool:
@@ -118,7 +290,7 @@ def convert_archived_1m_to_freqtrade_feathers() -> list[str]:
         df_1m[cols].to_feather(target_1m)
 
         indexed = df_1m.set_index("date")
-        for tf, rule in (("5m", "5min"), ("15m", "15min"), ("1h", "1h"), ("4h", "4h"), ("1d", "1d")):
+        for tf, rule in (("5m", "5min"), ("15m", "15min"), ("1h", "1h"), ("4h", "4h"), ("1d", "1D")):
             res = (
                 indexed.resample(rule, label="left", closed="left")
                 .agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"})
@@ -138,21 +310,26 @@ def load_coinmetrics_marketcap_map(min_market_cap: float) -> dict[str, pd.Series
     out: dict[str, pd.Series] = {}
     if not cm_dir.is_dir():
         return out
-    for f in sorted(cm_dir.glob("*-CapMrktCurUSD.feather")):
-        asset = f.name.removesuffix("-CapMrktCurUSD.feather").upper()
-        try:
-            df = pd.read_feather(f)
-            if "earliest_usable_at" in df and "market_cap_usd" in df:
-                s = (
-                    df.set_index(pd.to_datetime(df["earliest_usable_at"], utc=True).dt.floor("D"))[
-                        "market_cap_usd"
-                    ]
-                    .astype(float)
-                    .sort_index()
-                )
-                out[asset] = s
-        except Exception:
-            continue
+    # Load CapMrktCurUSD first (authoritative), then fill gaps/missing assets from CapMrktEstUSD.
+    for suffix in ("-CapMrktCurUSD.feather", "-CapMrktEstUSD.feather"):
+        for f in sorted(cm_dir.glob(f"*{suffix}")):
+            asset = f.name.removesuffix(suffix).upper()
+            try:
+                df = pd.read_feather(f)
+                if "earliest_usable_at" in df and "market_cap_usd" in df:
+                    s = (
+                        df.set_index(pd.to_datetime(df["earliest_usable_at"], utc=True).dt.floor("D"))[
+                            "market_cap_usd"
+                        ]
+                        .astype(float)
+                        .sort_index()
+                    )
+                    if asset not in out:
+                        out[asset] = s
+                    else:
+                        out[asset] = out[asset].combine_first(s).sort_index()
+            except Exception:
+                continue
     return out
 
 
@@ -169,25 +346,54 @@ def build_point_in_time_schedule(
     max_rate_of_change: float = 0.85,
     lookback_days: int = 10,
     anti_survivorship: bool = False,
+    include_archived_delisted: bool = False,
+    mcap_mode: str = "strict",
+    coingecko_mcap_map: dict[str, float] | None = None,
+    fetch_coingecko: bool = False,
+    offline_instruments_fallback: bool = False,
 ) -> dict[str, Any]:
+    if mcap_mode not in ("strict", "hybrid", "none"):
+        raise ValueError(f"Unsupported mcap_mode: {mcap_mode}")
     cfg = json.loads(config_path.read_text())
     # In anti-survivorship mode, never apply today's discretionary altcoin blacklist.
-    patterns = (r"(USDC|USDE|USDD|DAI|TUSD|FDUSD|EUR|GBP|AUD|BRL)/.*",
-                r".*(UP|DOWN|3L|3S)/.*") if anti_survivorship else cfg.get("exchange", {}).get("pair_blacklist", [])
+    patterns = (
+        STRUCTURAL_BLACKLIST_PATTERNS
+        if anti_survivorship
+        else cfg.get("exchange", {}).get("pair_blacklist", [])
+    )
     blacklist_patterns = [re.compile(pat) for pat in patterns]
-    instruments = fetch_or_load_bybit_instruments()
-    mcap_map = load_coinmetrics_marketcap_map(min_market_cap_usdt)
+    if offline_instruments_fallback:
+        instruments = fetch_or_load_bybit_instruments(allow_offline_empty=True)
+    else:
+        instruments = fetch_or_load_bybit_instruments()
+    archived_delisted_bases = discover_archived_delisted_bases() if include_archived_delisted else set()
+    mcap_map = {} if mcap_mode == "none" else load_coinmetrics_marketcap_map(min_market_cap_usdt)
+    if coingecko_mcap_map is not None:
+        cg_map = {str(k).upper(): float(v) for k, v in coingecko_mcap_map.items()}
+    elif mcap_mode == "hybrid":
+        cg_map = load_or_fetch_coingecko_mcap_map(fetch_online=fetch_coingecko)
+    else:
+        cg_map = {}
 
     daily_files = sorted(FUTURES_DIR.glob("*-1d-futures.feather"))
     pair_daily: dict[str, pd.DataFrame] = {}
+    archived_included: set[str] = set()
+    used_offline_inst_fallback = bool(offline_instruments_fallback and not instruments)
 
     for f in daily_files:
-        base = f.name.split("_USDT_USDT-")[0]
+        base = f.name.split("_USDT_USDT-")[0].upper()
         pair = f"{base}/USDT:USDT"
         if any(r.fullmatch(pair) or r.match(pair) for r in blacklist_patterns):
             continue
-        if not is_eligible_bybit_crypto(instruments.get(base)):
-            continue
+        inst_info = instruments.get(base)
+        if not is_eligible_bybit_crypto(inst_info):
+            if include_archived_delisted and base in archived_delisted_bases and inst_info is None:
+                archived_included.add(pair)
+            elif used_offline_inst_fallback:
+                # Local offline smoke-test fallback only when explicitly requested and instruments.json is absent.
+                pass
+            else:
+                continue
         # Require 5m data present as well
         if not (FUTURES_DIR / f"{base}_USDT_USDT-5m-futures.feather").is_file():
             continue
@@ -223,6 +429,10 @@ def build_point_in_time_schedule(
     schedule: dict[str, list[str]] = {}
     ever_2y: set[str] = set()
     ever_all: set[str] = set()
+    mcap_provenance: dict[str, int] = defaultdict(int)
+    delisted_without_mcap: set[str] = set()
+    daily_counts: list[int] = []
+    empty_days_post_2026_05 = 0
 
     for d in all_days:
         candidates: list[tuple[float, str]] = []
@@ -241,32 +451,115 @@ def build_point_in_time_schedule(
             if vol > max_volatility or roc > max_rate_of_change:
                 continue
             base = pair.split("/")[0]
-            if base not in mcap_map:
-                continue
-            mc_series = mcap_map[base]
-            prior = mc_series.loc[(mc_series.index <= d) & (mc_series.index >= d - pd.Timedelta(days=1))]
-            if prior.empty or not np.isfinite(prior.iloc[-1]) or float(prior.iloc[-1]) < min_market_cap_usdt:
-                continue
+            if mcap_mode == "none":
+                mcap_provenance["mcap_gate_disabled"] += 1
+            elif mcap_mode == "strict":
+                if base not in mcap_map:
+                    continue
+                mc_series = mcap_map[base]
+                prior = mc_series.loc[(mc_series.index <= d) & (mc_series.index >= d - pd.Timedelta(days=1))]
+                if prior.empty or not np.isfinite(prior.iloc[-1]) or float(prior.iloc[-1]) < min_market_cap_usdt:
+                    continue
+                mcap_provenance["coinmetrics_fresh"] += 1
+            else:
+                # hybrid mode: Coin Metrics point-in-time first; post-cutoff carry / CoinGecko fallback;
+                # archived delisted stress admission when neither Coin Metrics nor CoinGecko covers it.
+                admitted = False
+                if base in mcap_map and not mcap_map[base].empty:
+                    mc_series = mcap_map[base]
+                    prior = mc_series.loc[
+                        (mc_series.index <= d) & (mc_series.index >= d - pd.Timedelta(days=1))
+                    ]
+                    if not prior.empty:
+                        val = float(prior.iloc[-1])
+                        if np.isfinite(val) and val >= min_market_cap_usdt:
+                            mcap_provenance["coinmetrics_fresh"] += 1
+                            admitted = True
+                        else:
+                            # Authoritative Coin Metrics says < min_market_cap (or NaN) on day d -> reject!
+                            continue
+                    elif d > mc_series.index.max():
+                        # Coin Metrics free community CSV stopped updating before day d (e.g. post-May 2026).
+                        cg_val = cg_map.get(base)
+                        if cg_val is not None and np.isfinite(cg_val):
+                            if cg_val >= min_market_cap_usdt:
+                                mcap_provenance["coingecko_post_cutoff"] += 1
+                                admitted = True
+                            else:
+                                continue
+                        else:
+                            finite_vals = mc_series.dropna()
+                            if not finite_vals.empty and float(finite_vals.iloc[-1]) >= min_market_cap_usdt:
+                                mcap_provenance["coinmetrics_carried_post_cutoff"] += 1
+                                admitted = True
+                            else:
+                                continue
+                if not admitted and base in cg_map:
+                    cg_val = cg_map[base]
+                    if np.isfinite(cg_val) and cg_val >= min_market_cap_usdt:
+                        mcap_provenance["coingecko_proxy"] += 1
+                        admitted = True
+                if not admitted and include_archived_delisted and base in archived_delisted_bases:
+                    mcap_provenance["archived_delisted_no_mcap_evidence"] += 1
+                    delisted_without_mcap.add(pair)
+                    admitted = True
+                if not admitted:
+                    continue
             candidates.append((qv, pair))
 
         candidates.sort(key=lambda x: x[0], reverse=True)
         top_pairs = [p for _, p in candidates[:number_assets]]
-        # Always keep BTC/USDT:USDT in universe if eligible for macro reference
         ts_key = str(int(d.timestamp()))
         schedule[ts_key] = top_pairs
+        daily_counts.append(len(top_pairs))
+        if len(top_pairs) == 0 and d >= pd.Timestamp("2026-06-01", tz="UTC"):
+            empty_days_post_2026_05 += 1
         ever_all.update(top_pairs)
         if d >= pd.Timestamp("2024-11-15", tz="UTC"):
             ever_2y.update(top_pairs)
 
     ever_2y.add("BTC/USDT:USDT")
     ever_all.add("BTC/USDT:USDT")
+    limitations = [
+        "Current instrument metadata is not historical classification evidence.",
+        "Coin Metrics ticker mappings and observation vintages require verification.",
+    ]
+    if mcap_mode == "hybrid":
+        limitations.append(
+            "Hybrid market-cap mode uses CoinGecko/carried Coin Metrics after Coin Metrics free CSV cutoff (~May 2026) and for assets absent from Coin Metrics."
+        )
+    elif mcap_mode == "none":
+        limitations.append("Market-cap gate disabled (volume/age/volatility/ROC only).")
+    if archived_included:
+        limitations.append(
+            f"Archived delisted symbols admitted for anti-survivorship stress testing: {sorted(archived_included)}."
+        )
+    if used_offline_inst_fallback:
+        limitations.append("Offline mode: Bybit instruments.json unavailable; instrument-tag gate bypassed.")
+
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "zero_lookahead": False,
-        "validation_status": "unverified_historical_classification_and_ticker_mapping",
-        "limitations": ["Current instrument metadata is not historical classification evidence.",
-                       "Coin Metrics ticker mappings and observation vintages require verification."],
+        "validation_status": (
+            f"research_schedule_mcap_{mcap_mode}"
+            if mcap_mode != "strict"
+            else "unverified_historical_classification_and_ticker_mapping"
+        ),
+        "limitations": limitations,
         "anti_survivorship": anti_survivorship,
+        "include_archived_delisted": include_archived_delisted,
+        "mcap_mode": mcap_mode,
+        "mcap_provenance_counts": dict(sorted(mcap_provenance.items())),
+        "archived_delisted_included": sorted(archived_included),
+        "archived_delisted_without_mcap": sorted(delisted_without_mcap),
+        "coverage_diagnostics": {
+            "total_days": len(daily_counts),
+            "empty_days": sum(1 for c in daily_counts if c == 0),
+            "empty_days_post_2026_05": empty_days_post_2026_05,
+            "min_daily_pairs": min(daily_counts, default=0),
+            "median_daily_pairs": round(statistics.median(daily_counts), 1) if daily_counts else 0.0,
+            "max_daily_pairs": max(daily_counts, default=0),
+        },
         "filters": {
             "number_assets": number_assets,
             "min_value_usdt": min_value_usdt,
@@ -295,15 +588,69 @@ def main() -> None:
     parser.add_argument("--max-volatility", type=float, default=0.50)
     parser.add_argument("--max-roc", type=float, default=0.85)
     parser.add_argument("--anti-survivorship", action="store_true")
+    parser.add_argument("--include-archived-delisted", action="store_true")
+    parser.add_argument("--mcap-mode", choices=("strict", "hybrid", "none"), default="strict")
+    parser.add_argument("--fetch-coingecko", action="store_true")
+    parser.add_argument("--offline-instruments-fallback", action="store_true")
+    parser.add_argument(
+        "--export-download-pairs",
+        default="",
+        help="Write eligible Bybit USDT crypto perpetual pairs JSON list for `freqtrade download-data --pairs-file` and exit.",
+    )
+    parser.add_argument(
+        "--build-presets-dir",
+        default="",
+        help="Build all 3 pairlist preset schedules (base, strict, bluechip) into this directory.",
+    )
     parser.add_argument(
         "--output",
         default=str(FORENSIC_DIR / "pairlist_schedule_2y.json"),
     )
     args = parser.parse_args()
 
+    if args.export_download_pairs:
+        pairs = export_eligible_download_pairs(
+            Path(args.config),
+            Path(args.export_download_pairs),
+            anti_survivorship=args.anti_survivorship,
+        )
+        print(f"Exported {len(pairs)} eligible Bybit USDT crypto pairs -> {args.export_download_pairs}")
+        return
+
     converted = convert_archived_1m_to_freqtrade_feathers()
     if converted:
         print(f"Converted archived delisted symbols to Freqtrade feathers: {converted}")
+
+    if args.build_presets_dir:
+        presets_dir = Path(args.build_presets_dir)
+        presets_dir.mkdir(parents=True, exist_ok=True)
+        cg_map = load_or_fetch_coingecko_mcap_map(fetch_online=args.fetch_coingecko) if args.mcap_mode == "hybrid" else {}
+        for preset_name, pcfg in PAIRLIST_PRESETS.items():
+            payload = build_point_in_time_schedule(
+                config_path=Path(args.config),
+                start_iso=args.start,
+                end_iso=args.end,
+                number_assets=pcfg["number_assets"],
+                min_value_usdt=pcfg["min_value_usdt"],
+                min_days_listed=pcfg["min_days_listed"],
+                min_market_cap_usdt=pcfg["min_market_cap_usdt"],
+                max_volatility=pcfg["max_volatility"],
+                max_rate_of_change=pcfg["max_rate_of_change"],
+                anti_survivorship=args.anti_survivorship,
+                include_archived_delisted=args.include_archived_delisted,
+                mcap_mode=args.mcap_mode,
+                coingecko_mcap_map=cg_map,
+                offline_instruments_fallback=args.offline_instruments_fallback,
+            )
+            out_path = presets_dir / f"pairlist_schedule_{preset_name}_2y.json"
+            out_path.write_text(json.dumps(payload, indent=2))
+            diag = payload["coverage_diagnostics"]
+            print(
+                f"Preset [{preset_name}]: {len(payload['ever_whitelisted_2y'])} unique pairs | "
+                f"median {diag['median_daily_pairs']}/day | empty={diag['empty_days']} "
+                f"(post-May26 empty={diag['empty_days_post_2026_05']}) -> {out_path}"
+            )
+        return
 
     payload = build_point_in_time_schedule(
         config_path=Path(args.config),
@@ -316,15 +663,24 @@ def main() -> None:
         max_volatility=args.max_volatility,
         max_rate_of_change=args.max_roc,
         anti_survivorship=args.anti_survivorship,
+        include_archived_delisted=args.include_archived_delisted,
+        mcap_mode=args.mcap_mode,
+        fetch_coingecko=args.fetch_coingecko,
+        offline_instruments_fallback=args.offline_instruments_fallback,
     )
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(payload, indent=2))
+    diag = payload["coverage_diagnostics"]
     print(
         f"Saved point-in-time schedule ({len(payload['schedule'])} daily buckets, "
-        f"{len(payload['ever_whitelisted_2y'])} unique 2Y eligible pairs) -> {out_path}"
+        f"{len(payload['ever_whitelisted_2y'])} unique 2Y eligible pairs, "
+        f"median={diag['median_daily_pairs']}/day, empty={diag['empty_days']}, "
+        f"post-May26 empty={diag['empty_days_post_2026_05']}) -> {out_path}"
     )
 
 
 if __name__ == "__main__":
+    import warnings
+    warnings.filterwarnings("ignore", category=FutureWarning)
     main()

@@ -40,14 +40,20 @@ def inventory(symbol):
                 observed_at=datetime.now(UTC).isoformat())
 
 
-def download(job):
+def download(job, *, delete_raw: bool = False):
     symbol, filename = job
     directory = ROOT / "archive" / symbol
     directory.mkdir(parents=True, exist_ok=True)
     raw = directory / filename
     result_path = directory / (filename + ".manifest.json")
     if result_path.exists():
-        return json.loads(result_path.read_text())
+        existing = json.loads(result_path.read_text())
+        if delete_raw and raw.exists() and Path(existing.get("output", "")).exists():
+            raw.unlink(missing_ok=True)
+            if not existing.get("raw_deleted"):
+                existing["raw_deleted"] = True
+                result_path.write_text(json.dumps(existing, indent=2))
+        return existing
     url = BASE + symbol + "/" + filename
     if not raw.exists():
         with session() as client, client.get(url, timeout=120, stream=True) as response:
@@ -81,15 +87,18 @@ def download(job):
     bars.reset_index().to_feather(target)
     with raw.open("rb") as source:
         digest = hashlib.file_digest(source, "sha256").hexdigest()
-    result = dict(symbol=symbol, source=url, raw=str(raw), output=str(target),
-                  sha256=digest, bytes=raw.stat().st_size, trades=trade_count, bars=len(bars),
-                  start=str(bars.index.min()), end=str(bars.index.max()),
+    raw_bytes = raw.stat().st_size
+    if delete_raw:
+        raw.unlink(missing_ok=True)
+    result = dict(symbol=symbol, source=url, raw=str(raw), raw_deleted=bool(delete_raw),
+                  output=str(target), sha256=digest, bytes=raw_bytes, trades=trade_count,
+                  bars=len(bars), start=str(bars.index.min()), end=str(bars.index.max()),
                   missing_internal_minutes=int((bars.index.max()-bars.index.min()).total_seconds()/60)
                       + 1 - len(bars),
                   downloaded_at=datetime.now(UTC).isoformat(),
                   caveat="Observed trade bars only; no mark, funding or classification evidence")
     result_path.write_text(json.dumps(result, indent=2))
-    print(f"{symbol} {filename}: {len(bars)} minute bars", flush=True)
+    print(f"{symbol} {filename}: {len(bars)} minute bars (raw_deleted={bool(delete_raw)})", flush=True)
     return result
 
 
@@ -100,7 +109,12 @@ def main():
     parser.add_argument("--end", default="2026-11-18", help="Exclusive UTC date")
     parser.add_argument("--sample", action="store_true", help="First and last archive day plus OM crash; not a complete dataset")
     parser.add_argument("--inventory-only", action="store_true")
+    parser.add_argument("--delete-raw", action="store_true",
+                        help="Delete raw .csv.gz immediately after converting to -1m.feather (default unless --keep-raw is set)")
+    parser.add_argument("--keep-raw", action="store_true",
+                        help="Retain raw .csv.gz trade files (~220 GB for 8 symbols/2y); omitted by default to keep total <150 MB")
     args = parser.parse_args()
+    delete_raw = not args.keep_raw
     ROOT.mkdir(parents=True, exist_ok=True)
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
         inventories = list(pool.map(inventory, args.symbols))
@@ -117,9 +131,9 @@ def main():
             jobs.extend((symbol, f) for f in files)
             print(symbol, "available files", len(item["files"]), "selected", len(files), flush=True)
         if not args.inventory_only:
-            results = list(pool.map(download, jobs))
+            results = list(pool.map(lambda j: download(j, delete_raw=delete_raw), jobs))
             (ROOT / "archive_download_manifest.json").write_text(json.dumps(
-                dict(sample_only=args.sample, start=args.start, end=args.end, results=results), indent=2))
+                dict(sample_only=args.sample, delete_raw=delete_raw, start=args.start, end=args.end, results=results), indent=2))
 
 
 if __name__ == "__main__":
