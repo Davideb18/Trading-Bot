@@ -638,6 +638,7 @@ class PropParityBacktesting(Backtesting):
         init_bal = float(self._prop_profile["initial_balance"])
         self.prop_phase_start: datetime = start_utc
         self.prop_midnight_equity: float = init_bal
+        self.prop_min_day_equity_wick: float = init_bal
         self.prop_current_day: str = start_utc.strftime("%Y-%m-%d")
         self.prop_halted: bool = False
         self.prop_halt_reason: str | None = None
@@ -915,12 +916,14 @@ class PropParityBacktesting(Backtesting):
                 {
                     "date": self.prop_current_day,
                     "midnight_equity": round(end_prev_eq, 2),
+                    "min_day_equity_wick": self.prop_min_day_equity_wick,
                     "counted_profit": round(self._cached_ledger["counted_profit"], 2),
                     "qualifying_days": len(self._cached_ledger["qualifying_days"]),
                     "open_trades": len(LocalTrade.bt_trades_open),
                 }
             )
             self.prop_midnight_equity = end_prev_eq
+            self.prop_min_day_equity_wick = end_prev_eq
             self.prop_current_day = day_str
             month_str = day_str[:7]
             if month_str != self.prop_current_month:
@@ -937,6 +940,7 @@ class PropParityBacktesting(Backtesting):
         # 2. Evaluate RiskGuard on real floating equity (close AND conservative intrabar low)
         eq_close = self._current_floating_equity(use_low=False)
         eq_wick = self._current_floating_equity(use_low=True)
+        self.prop_min_day_equity_wick = min(self.prop_min_day_equity_wick, eq_wick)
         limits = floors(self._prop_profile, self.prop_midnight_equity)
         init_bal = float(self._prop_profile["initial_balance"])
 
@@ -1585,6 +1589,11 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
     schedule = None
     if args.pairlist_schedule:
         meta = json.loads(Path(args.pairlist_schedule).read_text())
+        if meta.get("zero_lookahead") is False:
+            raise OperationalException(
+                "Historical schedule is unverified: resolve instrument classification, "
+                "market-cap identity and observation-vintage evidence before benchmarking."
+            )
         schedule = meta["schedule"]
         if args.start >= "2024-11-15" and "ever_whitelisted_2y" in meta:
             universe = list(meta["ever_whitelisted_2y"])
@@ -1743,10 +1752,15 @@ def _summarize_trades(trades: list[LocalTrade]) -> dict[str, Any]:
     durations_h: list[float] = []
     trades_with_dca = 0
     total_dca_fills = 0
+    dca_counts: list[int] = []
+    dca_sizes: list[float] = []
     for t in trades:
         pnl = float(t.close_profit_abs or 0.0)
         win = 1 if pnl > 0 else 0
         entries = int(getattr(t, "nr_of_successful_entries", 1) or 1)
+        dca_counts.append(max(0, entries - 1))
+        filled_entries = t.select_filled_orders(t.entry_side)
+        dca_sizes.extend(float(o.safe_filled) * float(o.safe_price) for o in filled_entries[1:])
         if entries > 1:
             trades_with_dca += 1
             total_dca_fills += entries - 1
@@ -1773,6 +1787,11 @@ def _summarize_trades(trades: list[LocalTrade]) -> dict[str, Any]:
         "max_duration_hours": round(max(durations_h), 2) if durations_h else 0.0,
         "trades_with_dca": trades_with_dca,
         "total_dca_fills": total_dca_fills,
+        "max_dca_per_trade": max(dca_counts, default=0),
+        "mean_dca_per_trade": statistics.mean(dca_counts) if dca_counts else 0.0,
+        "dca_count_distribution": {str(n): dca_counts.count(n) for n in sorted(set(dca_counts))},
+        "dca_notional_sizes_usdt": sorted(dca_sizes),
+        "max_single_dca_notional_usdt": max(dca_sizes, default=0.0),
         "by_month": dict(sorted(by_month.items())),
         "by_enter_tag": dict(sorted(by_tag.items(), key=lambda kv: kv[1]["pnl"], reverse=True)),
         "by_exit_reason": dict(sorted(by_exit.items(), key=lambda kv: kv[1]["trades"], reverse=True)),
@@ -1798,11 +1817,13 @@ def _run_continuous_pass(
     ignore_target_pause: bool,
 ) -> dict[str, Any]:
     """Run full-window continuous parity simulation (Evaluation or Non-Compounding Funded)."""
+    bt._prop_profile = copy.deepcopy(profile)
     bt._stop_on_halt = False
     bt._stop_on_pass = False
     bt._ignore_target_pause = bool(ignore_target_pause)
     bt.reset_backtest(bt.enable_protections)
     bt._reset_prop_state(min_date)
+    bt._hist_pairlists._last_bucket = None
     bt.wallets.update()
     for p, df_an in analyzed_dfs.items():
         bt.dataprovider._set_cached_df(p, bt.timeframe, df_an, bt.config["candle_type_def"])
@@ -1818,6 +1839,15 @@ def _run_continuous_pass(
         bt._recompute_ledger(max_date)
 
     cont_eq = float(bt.wallets.get_total(cfg["stake_currency"]))
+    # Include the final (possibly halted or partial) UTC day in withdrawal risk analysis.
+    if not bt.prop_daily_curve or bt.prop_daily_curve[-1]["date"] != bt.prop_current_day:
+        bt.prop_daily_curve.append({
+            "date": bt.prop_current_day,
+            "midnight_equity": cont_eq,
+            "min_day_equity_wick": min(bt.prop_min_day_equity_wick, cont_eq),
+            "partial_day": True,
+            "open_trades": len(LocalTrade.bt_trades_open),
+        })
     trades_sample = [
         {
             "pair": t.pair,
@@ -1875,6 +1905,8 @@ def _run_continuous_pass(
         "official_overall_breach_wick_bars": bt.prop_official_overall_breach_wick_bars,
         "funded_margin_gt_25pct_bars": bt.prop_funded_margin_gt_25pct_bars,
         "funded_notional_gt_2x_bars": bt.prop_funded_notional_gt_2x_bars,
+        "lowcap_combined_gt_250_bars": None,
+        "lowcap_evidence_status": "unverified_historical_classification_and_ticker_mapping",
         "max_slot_notional_observed": round(bt.prop_max_slot_notional_observed, 2),
         "max_aggregate_notional_observed": round(bt.prop_max_aggregate_notional_observed, 2),
         "shock_1coin_35_breach_bars": bt.prop_shock_1coin_35_breach_bars,
@@ -1920,21 +1952,24 @@ def simulate_funded_withdrawals(
         first_payout_day: int | None = None
         min_eq = initial_balance
         breached_floor = False
+        final_adj = initial_balance
         for idx, row in enumerate(daily_curve, start=1):
             raw_eq = float(row["midnight_equity"])
             adj_eq = raw_eq - withdrawn_gross
-            min_eq = min(min_eq, adj_eq)
-            if adj_eq <= static_floor:
+            wick_eq = float(row.get("min_day_equity_wick", raw_eq)) - withdrawn_gross
+            min_eq = min(min_eq, adj_eq, wick_eq)
+            final_adj = adj_eq
+            if min(adj_eq, wick_eq) <= static_floor:
                 breached_floor = True
                 break
-            while adj_eq >= trigger_eq:
+            while adj_eq >= trigger_eq and not row.get("partial_day", False):
                 withdrawn_gross += payout_amount
                 payouts += 1
                 if first_payout_day is None:
                     first_payout_day = idx
                 adj_eq = raw_eq - withdrawn_gross
                 min_eq = min(min_eq, adj_eq)
-        final_adj = (float(daily_curve[-1]["midnight_equity"]) - withdrawn_gross) if daily_curve else initial_balance
+                final_adj = adj_eq
         return {
             "trigger_equity_usdt": trigger_eq,
             "post_withdrawal_base_usdt": round(trigger_eq - payout_amount, 2),
@@ -1949,6 +1984,8 @@ def simulate_funded_withdrawals(
         }
 
     return {
+        "method": "counterfactual_daily_equity_offset_not_execution_replay",
+        "wick_coverage_complete": all("min_day_equity_wick" in r for r in daily_curve) and bool(daily_curve),
         "static_overall_floor_usdt": round(static_floor, 2),
         "reset_5250_to_5000": _run_policy(initial_balance + payout_amount),
         "buffer_5450_to_5200": _run_policy(initial_balance + 200.0 + payout_amount),
@@ -2121,6 +2158,15 @@ def _execute_scenario(
     bt._strict_wick_guard = bool(strict_wick_guard)
     bt.set_fee()
 
+    funded_profiles = build_program_profiles(
+        initial_balance=float(profile["initial_balance"]),
+        start_utc=_to_utc(min_date).isoformat(),
+        one_step_daily_guard=float(profile["daily_limit_percent"]),
+        one_step_max_guard=float(profile["max_loss_percent"]),
+        two_step_daily_guard=float(bt._prop_policy.get("_two_step_daily_guard", 0.043)),
+        two_step_max_guard=float(bt._prop_policy.get("_two_step_max_guard", 0.080)),
+    )
+
     # 1. Continuous runs: (a) strict Evaluation pause at +10%, (b) 24-month Non-Compounding Funded projection
     continuous_summary = _run_continuous_pass(
         bt,
@@ -2139,7 +2185,7 @@ def _execute_scenario(
     continuous_funded_summary = _run_continuous_pass(
         bt,
         cfg,
-        profile,
+        funded_profiles["one_step_funded"],
         ohclv_lists,
         analyzed_dfs,
         min_date,
@@ -2150,6 +2196,13 @@ def _execute_scenario(
         strict_wick_guard=strict_wick_guard,
         ignore_target_pause=True,
     )
+    continuous_funded_two_step_summary = _run_continuous_pass(
+        bt, cfg, funded_profiles["two_step_funded"], ohclv_lists, analyzed_dfs,
+        min_date, max_date, universe_size=universe_size, name=name,
+        slippage_bps=slippage_bps, strict_wick_guard=strict_wick_guard,
+        ignore_target_pause=True,
+    )
+    bt._prop_profile = copy.deepcopy(profile)
     print(
         f"  [{name}] Funded 2y Continuous: Eq=${continuous_funded_summary['final_equity']} "
         f"(Net ${continuous_funded_summary['net_pnl']:+}) | Trades={continuous_funded_summary['total_trades']} "
@@ -2241,6 +2294,7 @@ def _execute_scenario(
     return {
         "continuous": continuous_summary,
         "continuous_funded": continuous_funded_summary,
+        "continuous_funded_two_step": continuous_funded_two_step_summary,
         "cohorts": cohorts,
         "cohorts_summary": cohorts_summary,
         "program_comparison": program_comparison,
@@ -2301,17 +2355,17 @@ def _apply_candidate_money_params(
     cfg["max_open_trades"] = max_open
     cfg["stake_amount"] = stake_amt
     cfg["tradable_balance_ratio"] = ratio
-    cfg["amend_last_stake_amount"] = False
+    cfg["amend_last_stake_amount"] = stake_amt == "unlimited"
     bt.config["max_open_trades"] = max_open
     bt.config["stake_amount"] = stake_amt
     bt.config["tradable_balance_ratio"] = ratio
-    bt.config["amend_last_stake_amount"] = False
+    bt.config["amend_last_stake_amount"] = stake_amt == "unlimited"
     bt.strategy.max_open_trades = max_open
     bt.strategy.stake_amount = stake_amt
     bt.wallets._config["max_open_trades"] = max_open
     bt.wallets._config["stake_amount"] = stake_amt
     bt.wallets._config["tradable_balance_ratio"] = ratio
-    bt.wallets._config["amend_last_stake_amount"] = False
+    bt.wallets._config["amend_last_stake_amount"] = stake_amt == "unlimited"
     bt._prop_policy["max_slot_notional_usdt"] = max_slot
     bt._prop_policy["max_aggregate_notional_usdt"] = max_agg
 
@@ -2339,26 +2393,51 @@ def run_grid_sweep(
         full_res = _execute_scenario(
             bt, cfg, profile, ohclv_lists, analyzed_dfs, min_date, max_date,
             universe_size=len(ohclv_lists), name=f"{c_id}_full",
-            slippage_bps=args.slippage_bps or 10.0,
+            slippage_bps=args.slippage_bps,
             strict_wick_guard=args.strict_wick_guard,
             cohort_step_days=args.cohort_step_days,
         )
         train_funded = _run_continuous_pass(
             bt, cfg, profile, ohclv_lists, analyzed_dfs, _to_utc(min_date), mid_date,
             universe_size=len(ohclv_lists), name=f"{c_id}_train",
-            slippage_bps=args.slippage_bps or 10.0,
+            slippage_bps=args.slippage_bps,
             strict_wick_guard=args.strict_wick_guard,
             ignore_target_pause=True,
         )
         oos_funded = _run_continuous_pass(
             bt, cfg, profile, ohclv_lists, analyzed_dfs, mid_date, _to_utc(max_date),
             universe_size=len(ohclv_lists), name=f"{c_id}_oos",
-            slippage_bps=args.slippage_bps or 10.0,
+            slippage_bps=args.slippage_bps,
             strict_wick_guard=args.strict_wick_guard,
             ignore_target_pause=True,
         )
+        two_step_profile = build_program_profiles(
+            initial_balance=float(profile["initial_balance"]),
+            start_utc=_to_utc(min_date).isoformat(),
+            two_step_daily_guard=bt._prop_policy["_two_step_daily_guard"],
+            two_step_max_guard=bt._prop_policy["_two_step_max_guard"],
+        )["two_step_funded"]
+        two_step_windows = {}
+        for window_name, window_start, window_end in (
+            ("train_1y_funded_two_step", _to_utc(min_date), mid_date),
+            ("oos_1y_funded_two_step", mid_date, _to_utc(max_date)),
+        ):
+            result = _run_continuous_pass(
+                bt, cfg, two_step_profile, ohclv_lists, analyzed_dfs, window_start, window_end,
+                universe_size=len(ohclv_lists), name=f"{c_id}_{window_name}",
+                slippage_bps=args.slippage_bps, strict_wick_guard=args.strict_wick_guard,
+                ignore_target_pause=True,
+            )
+            two_step_windows[window_name] = {k: v for k, v in result.items()
+                                           if k not in ("daily_curve", "trades_head", "trades_tail")}
+        bt._prop_profile = copy.deepcopy(profile)
         results.append({
             "candidate": cand,
+            **two_step_windows,
+            "full_2y_continuous_funded_two_step": {
+                k: v for k, v in full_res["continuous_funded_two_step"].items()
+                if k not in ("daily_curve", "trades_head", "trades_tail")
+            },
             "train_1y_funded": {
                 k: v for k, v in train_funded.items() if k not in ("daily_curve", "trades_head", "trades_tail")
             },
@@ -2376,7 +2455,7 @@ def run_grid_sweep(
         "schema_version": 3,
         "train_window": [str(_to_utc(min_date)), str(mid_date)],
         "oos_window": [str(mid_date), str(_to_utc(max_date))],
-        "slippage_bps_roundtrip": args.slippage_bps or 10.0,
+        "slippage_bps_roundtrip": args.slippage_bps,
         "strict_wick_guard": args.strict_wick_guard,
         "cohort_step_days": args.cohort_step_days,
         "runtime_sec": round(time.time() - t0, 1),

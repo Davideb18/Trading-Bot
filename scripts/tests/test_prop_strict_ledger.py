@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from freqtrade.prop_profile import build_program_profiles, floors
 from scripts.prop_backtest_1to1 import compute_hyrotrader_ledger, simulate_funded_withdrawals
@@ -67,3 +68,41 @@ def test_funded_withdrawal_policies_reset_vs_buffer():
     assert buf["payout_count"] == 2
     assert buf["days_to_first_payout"] == 4
     assert buf["min_account_equity_usdt"] >= reset["min_account_equity_usdt"]
+
+
+def test_withdrawal_detects_intraday_breach_before_recovery_and_stops():
+    curve = [
+        {"date": "2026-01-01", "midnight_equity": 5260, "min_day_equity_wick": 5000},
+        {"date": "2026-01-02", "midnight_equity": 5250, "min_day_equity_wick": 4840},
+        {"date": "2026-01-03", "midnight_equity": 6000, "min_day_equity_wick": 5250},
+    ]
+    result = simulate_funded_withdrawals(curve)
+    reset = result["reset_5250_to_5000"]
+    assert result["wick_coverage_complete"]
+    assert reset["payout_count"] == 1
+    assert not reset["survived_static_floor"]
+    assert reset["min_account_equity_usdt"] == 4590
+    assert reset["final_account_equity_usdt"] == 5000
+    two_step = simulate_funded_withdrawals(curve, official_max_loss_pct=0.10)
+    assert two_step["reset_5250_to_5000"]["survived_static_floor"]
+
+
+def test_continuous_funded_programs_use_distinct_official_floors(monkeypatch):
+    from scripts import prop_backtest_1to1 as engine
+
+    observed = []
+    def run(bt, cfg, profile, *args, **kwargs):
+        observed.append((profile.copy(), kwargs["ignore_target_pause"]))
+        return dict(final_equity=5000, net_pnl=0, total_trades=0, halted=False,
+                    max_month_dd_close=0, max_month_dd_wick=0)
+
+    monkeypatch.setattr(engine, "_run_continuous_pass", run)
+    bt = SimpleNamespace(_prop_policy={}, set_fee=lambda: None)
+    profile = build_program_profiles()["one_step_eval"]
+    engine._execute_scenario(bt, {}, profile, {}, {}, datetime(2025, 1, 1, tzinfo=UTC),
+        datetime(2025, 2, 1, tzinfo=UTC), universe_size=0, name="test", slippage_bps=0,
+        strict_wick_guard=True, cohort_step_days=0)
+    assert [p["phase_id"] for p, _ in observed] == ["evaluation", "funded", "funded"]
+    assert [p["official_daily_limit_percent"] for p, _ in observed] == [0.04, 0.04, 0.05]
+    assert [floors(p, 5000)["official_overall_floor"] for p, _ in observed] == [4600, 4600, 4500]
+    assert bt._prop_profile == profile

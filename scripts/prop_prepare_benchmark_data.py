@@ -72,7 +72,9 @@ def fetch_or_load_bybit_instruments() -> dict[str, dict[str, Any]]:
 def is_eligible_bybit_crypto(info: dict[str, Any] | None) -> bool:
     """Exclude Innovation Zone, ST tag, pre-listing, and TradFi (stocks/ETFs/commodities/forex)."""
     if not isinstance(info, dict):
-        return True  # Delisted historical coin not in live instruments; checked via archive/blacklist
+        return False  # Missing classification is not evidence of ordinary crypto eligibility.
+    if "symbolType" not in info or "tags" not in info:
+        return False
     symbol_type = str(info.get("symbolType", "")).lower()
     tags = info.get("tags") or []
     return (
@@ -102,9 +104,9 @@ def convert_archived_1m_to_freqtrade_feathers() -> list[str]:
         base = sym_dir.name[:-4]
         pair_prefix = f"{base}_USDT_USDT"
         target_1m = FUTURES_DIR / f"{pair_prefix}-1m-futures.feather"
-        if target_1m.is_file():
-            continue
         parts = [pd.read_feather(f) for f in feathers]
+        if target_1m.is_file():
+            parts.insert(0, pd.read_feather(target_1m))
         df_1m = pd.concat(parts, ignore_index=True)
         df_1m["date"] = pd.to_datetime(df_1m["date"], utc=True)
         df_1m = (
@@ -124,17 +126,8 @@ def convert_archived_1m_to_freqtrade_feathers() -> list[str]:
                 .reset_index()
             )
             res[cols].to_feather(FUTURES_DIR / f"{pair_prefix}-{tf}-futures.feather")
-            if tf == "1h":
-                mark = res[cols].copy()
-                mark["volume"] = 0.0
-                mark.to_feather(FUTURES_DIR / f"{pair_prefix}-1h-mark.feather")
-                fund = mark.copy()
-                fund["open"] = 0.0001
-                fund["high"] = 0.0001
-                fund["low"] = 0.0001
-                fund["close"] = 0.0001
-                fund.loc[fund["date"].dt.hour % 8 != 0, ["open", "high", "low", "close"]] = 0.0
-                fund.to_feather(FUTURES_DIR / f"{pair_prefix}-1h-funding_rate.feather")
+            # Trade prices cannot prove mark prices or historical funding rates.
+            # Those series must be downloaded independently from an official source.
         converted.append(f"{base}/USDT:USDT")
     return converted
 
@@ -175,9 +168,13 @@ def build_point_in_time_schedule(
     max_volatility: float = 0.50,
     max_rate_of_change: float = 0.85,
     lookback_days: int = 10,
+    anti_survivorship: bool = False,
 ) -> dict[str, Any]:
     cfg = json.loads(config_path.read_text())
-    blacklist_patterns = [re.compile(pat) for pat in cfg.get("exchange", {}).get("pair_blacklist", [])]
+    # In anti-survivorship mode, never apply today's discretionary altcoin blacklist.
+    patterns = (r"(USDC|USDE|USDD|DAI|TUSD|FDUSD|EUR|GBP|AUD|BRL)/.*",
+                r".*(UP|DOWN|3L|3S)/.*") if anti_survivorship else cfg.get("exchange", {}).get("pair_blacklist", [])
+    blacklist_patterns = [re.compile(pat) for pat in patterns]
     instruments = fetch_or_load_bybit_instruments()
     mcap_map = load_coinmetrics_marketcap_map(min_market_cap_usdt)
 
@@ -189,7 +186,7 @@ def build_point_in_time_schedule(
         pair = f"{base}/USDT:USDT"
         if any(r.fullmatch(pair) or r.match(pair) for r in blacklist_patterns):
             continue
-        if base in instruments and not is_eligible_bybit_crypto(instruments[base]):
+        if not is_eligible_bybit_crypto(instruments.get(base)):
             continue
         # Require 5m data present as well
         if not (FUTURES_DIR / f"{base}_USDT_USDT-5m-futures.feather").is_file():
@@ -205,8 +202,12 @@ def build_point_in_time_schedule(
         # A 1d candle opening at day D closes at D + 1 day (00:00 UTC): only usable from D + 1 day!
         df["usable_day"] = df["day"] + pd.Timedelta(days=1)
         df["quote_vol"] = df["close"].astype(float) * df["volume"].astype(float)
-        log_ret = np.log(df["close"].astype(float) / df["close"].astype(float).shift(1))
-        df["volatility_10d"] = log_ret.rolling(lookback_days).std(ddof=0) * np.sqrt(lookback_days)
+        # Match VolatilityFilter on the last N closed daily candles: first return
+        # is zero inside each window, and pandas uses sample standard deviation.
+        def window_volatility(closes):
+            returns = np.log(closes.shift(1) / closes).fillna(0)
+            return returns.std(ddof=1) * np.sqrt(lookback_days)
+        df["volatility_10d"] = df["close"].astype(float).rolling(lookback_days).apply(window_volatility)
         roll_max = df["high"].astype(float).rolling(lookback_days).max()
         roll_min = df["low"].astype(float).rolling(lookback_days).min()
         df["roc_10d"] = np.where(roll_min > 0, (roll_max - roll_min) / roll_min, 999.0)
@@ -240,11 +241,12 @@ def build_point_in_time_schedule(
             if vol > max_volatility or roc > max_rate_of_change:
                 continue
             base = pair.split("/")[0]
-            if base in mcap_map:
-                mc_series = mcap_map[base]
-                prior = mc_series.loc[mc_series.index <= d]
-                if not prior.empty and float(prior.iloc[-1]) < min_market_cap_usdt:
-                    continue
+            if base not in mcap_map:
+                continue
+            mc_series = mcap_map[base]
+            prior = mc_series.loc[(mc_series.index <= d) & (mc_series.index >= d - pd.Timedelta(days=1))]
+            if prior.empty or not np.isfinite(prior.iloc[-1]) or float(prior.iloc[-1]) < min_market_cap_usdt:
+                continue
             candidates.append((qv, pair))
 
         candidates.sort(key=lambda x: x[0], reverse=True)
@@ -260,7 +262,11 @@ def build_point_in_time_schedule(
     ever_all.add("BTC/USDT:USDT")
     return {
         "generated_at": datetime.now(UTC).isoformat(),
-        "zero_lookahead": True,
+        "zero_lookahead": False,
+        "validation_status": "unverified_historical_classification_and_ticker_mapping",
+        "limitations": ["Current instrument metadata is not historical classification evidence.",
+                       "Coin Metrics ticker mappings and observation vintages require verification."],
+        "anti_survivorship": anti_survivorship,
         "filters": {
             "number_assets": number_assets,
             "min_value_usdt": min_value_usdt,
@@ -288,6 +294,7 @@ def main() -> None:
     parser.add_argument("--min-market-cap", type=float, default=100_000_000.0)
     parser.add_argument("--max-volatility", type=float, default=0.50)
     parser.add_argument("--max-roc", type=float, default=0.85)
+    parser.add_argument("--anti-survivorship", action="store_true")
     parser.add_argument(
         "--output",
         default=str(FORENSIC_DIR / "pairlist_schedule_2y.json"),
@@ -308,6 +315,7 @@ def main() -> None:
         min_market_cap_usdt=args.min_market_cap,
         max_volatility=args.max_volatility,
         max_rate_of_change=args.max_roc,
+        anti_survivorship=args.anti_survivorship,
     )
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)

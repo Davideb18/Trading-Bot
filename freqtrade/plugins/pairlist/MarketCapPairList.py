@@ -196,7 +196,7 @@ class MarketCapPairList(IPairList):
         """
         marketcap_list = self._marketcap_cache.get("marketcap")
         if (self._last_good_data is not None
-                and (self._last_good_at <= 0
+                and (self._last_good_at == 0
                      or time.monotonic() - self._last_good_at > self._fallback_max_age)):
             marketcap_list = None
         mode = self._mode
@@ -249,7 +249,7 @@ class MarketCapPairList(IPairList):
                         logger.warning("Could not persist CoinGecko cache file %s: %s", cache_path, io_err)
             except Exception as exc:
                 if (self._last_good_data is None
-                        or self._last_good_at <= 0
+                        or self._last_good_at == 0
                         or time.monotonic() - self._last_good_at > self._fallback_max_age):
                     cache_path = getattr(self, "_cache_file", None)
                     loaded_disk = False
@@ -262,10 +262,19 @@ class MarketCapPairList(IPairList):
                             if (
                                 isinstance(disk_data, list)
                                 and disk_data
+                                and all(isinstance(row, dict)
+                                        and isinstance(row.get("symbol"), str)
+                                        and row["symbol"].strip()
+                                        and isinstance(row.get("market_cap"), (int, float))
+                                        and not isinstance(row["market_cap"], bool)
+                                        and math.isfinite(row["market_cap"])
+                                        and row["market_cap"] >= 0
+                                        for row in disk_data)
                                 and 0 <= age <= self._fallback_max_age
                             ):
                                 self._last_good_data = disk_data
-                                self._last_good_at = max(1e-6, time.monotonic() - age)
+                                # A cache can predate the current system boot. Preserve its age.
+                                self._last_good_at = time.monotonic() - age
                                 loaded_disk = True
                         except Exception:
                             loaded_disk = False

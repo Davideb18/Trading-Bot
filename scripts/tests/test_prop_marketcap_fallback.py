@@ -1,5 +1,7 @@
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
+
+import json
 
 import pytest
 
@@ -84,3 +86,28 @@ def test_disk_cache_survives_restart_and_preserves_incoming_volume_order(tmp_pat
         "SOL/USDT:USDT",
         "BTC/USDT:USDT",
     ]
+
+
+def test_disk_cache_age_survives_short_system_uptime(tmp_path):
+    obj = provider()
+    obj._cache_file = tmp_path / "cache.json"
+    obj._cache_file.write_text(json.dumps({"saved_epoch": 6500, "data": [
+        {"symbol": "btc", "market_cap": 100_000_000}]}))
+    obj._coingecko.get_coins_markets.side_effect = ConnectionError("offline")
+    with patch("time.time", return_value=10000), patch("time.monotonic", return_value=100):
+        assert obj.filter_pairlist(obj.get_markets_exchange(), {}) == ["BTC/USDT:USDT"]
+    with patch("time.time", return_value=10101), patch("time.monotonic", return_value=201):
+        with pytest.raises(OperationalException):
+            obj.filter_pairlist(obj.get_markets_exchange(), {})
+
+
+@pytest.mark.parametrize("data,epoch", [([], 9900), ([{}], 9900),
+    ([{"symbol": "btc", "market_cap": float("inf")}], 9900),
+    ([{"symbol": "btc", "market_cap": 100_000_000}], 10001)])
+def test_invalid_disk_evidence_fails_closed(tmp_path, data, epoch):
+    obj = provider()
+    obj._cache_file = tmp_path / "cache.json"
+    obj._cache_file.write_text(json.dumps({"saved_epoch": epoch, "data": data}))
+    obj._coingecko.get_coins_markets.side_effect = ConnectionError("offline")
+    with patch("time.time", return_value=10000), pytest.raises(OperationalException):
+        obj.filter_pairlist(obj.get_markets_exchange(), {})

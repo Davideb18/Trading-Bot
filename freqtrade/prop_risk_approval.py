@@ -12,6 +12,7 @@ OPERATING_KEYS = (
     "trading_mode", "margin_mode", "dry_run", "prop_non_compounding",
     "strategy", "nfi_parameters", "can_short", "position_adjustment_enable",
     "max_open_trades", "stake_amount", "tradable_balance_ratio", "max_stake_amount",
+    "amend_last_stake_amount",
     "order_types", "order_time_in_force", "unfilledtimeout", "timeframe",
 )
 
