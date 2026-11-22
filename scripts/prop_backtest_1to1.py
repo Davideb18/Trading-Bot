@@ -67,6 +67,8 @@ from freqtrade.optimize.backtesting import (
 from freqtrade.persistence import LocalTrade
 from freqtrade.prop_profile import build_program_profiles, floors, profile_from_config
 from freqtrade.prop_qualification import qualifying_close_day
+from scripts.prop_phase_checkpoint import configure_checkpoints, phase_checkpoint
+from scripts.prop_detail_array_cache import DetailArrayCache
 
 logger = logging.getLogger("prop_backtest_1to1")
 
@@ -789,6 +791,21 @@ class PropParityBacktesting(Backtesting):
         if pair in self._detail_cache:
             self._detail_cache.move_to_end(pair)
             return self._detail_cache[pair]
+        disk_cache = getattr(self, "_detail_array_cache", None)
+        if disk_cache is not None:
+            source = self._detail_handler._pair_data_filename(
+                self.config["datadir"], pair, self.timeframe_detail, self._detail_candle_type
+            )
+            stat = source.stat() if source.exists() else None
+            cache_key = [str(source.resolve()), stat.st_size if stat else None,
+                         stat.st_mtime_ns if stat else None, self.timerange.startts,
+                         self.timerange.stopts, self.timerange.starttype, self.timerange.stoptype]
+            entry = disk_cache.load(cache_key)
+            if entry is not None:
+                self._detail_cache[pair] = entry
+                while len(self._detail_cache) > self._detail_max_cached:
+                    self._detail_cache.popitem(last=False)
+                return entry
         df = history.load_pair_history(
             pair=pair,
             timeframe=self.timeframe_detail,
@@ -805,6 +822,8 @@ class PropParityBacktesting(Backtesting):
             ts_s = df["date"].dt.as_unit("s").to_numpy(dtype=np.int64)
             ohlc = df[["open", "high", "low", "close"]].to_numpy(dtype=np.float64)
             entry = (ts_s, ohlc)
+            if disk_cache is not None:
+                entry = disk_cache.save(cache_key, entry)
         self._detail_cache[pair] = entry
         while len(self._detail_cache) > self._detail_max_cached:
             self._detail_cache.popitem(last=False)
@@ -1483,6 +1502,7 @@ class PropParityBacktesting(Backtesting):
             self.prop_latest_bars[pair] = (row[OPEN_IDX], row[HIGH_IDX], row[LOW_IDX], row[CLOSE_IDX])
         return res
 
+    @phase_checkpoint
     def run_cached_cohort(
         self,
         ohclv_lists: dict[str, list[tuple]],
@@ -1644,6 +1664,7 @@ def _prepare_universe_cached(
     universe: list[str],
     cache_dir: Path,
     chunk_size: int = 8,
+    cache_callback_rows: bool = False,
 ) -> tuple[dict[str, CompactOhlcvArray], dict[str, pd.DataFrame], datetime, datetime]:
     """Chunked 8GB-RAM-safe indicator preprocessing with SSD feather+npz cache and 6-pair LRU."""
     candle_def = bt.config["candle_type_def"]
@@ -1787,6 +1808,7 @@ def _prepare_universe_cached(
     # Install 6-pair LRU wrapper on dataprovider.get_analyzed_dataframe (~<=2GB max RAM)
     analyzed_lru: OrderedDict[str, tuple[pd.DataFrame, datetime]] = OrderedDict()
     orig_get_analyzed = bt.dataprovider.get_analyzed_dataframe
+    callback_snapshots: OrderedDict[tuple, tuple[pd.DataFrame, datetime]] = OrderedDict()
 
     def _lazy_get_analyzed_dataframe(pair: str, timeframe: str):
         if timeframe == bt.timeframe and pair in analyzed_paths:
@@ -1809,7 +1831,27 @@ def _prepare_universe_cached(
                 while len(analyzed_lru) > 6:
                     old_p, _ = analyzed_lru.popitem(last=False)
                     cur_map.pop((old_p, timeframe, candle_def), None)
-        return orig_get_analyzed(pair, timeframe)
+                    for snapshot_key in list(callback_snapshots):
+                        if snapshot_key[0] == old_p:
+                            del callback_snapshots[snapshot_key]
+        result = orig_get_analyzed(pair, timeframe)
+        if not cache_callback_rows or timeframe != bt.timeframe or result[0].empty:
+            return result
+        # Offline indicator frames are immutable. Scope snapshots to the source
+        # identity and visible candle boundary, including rewinds between cohorts.
+        from scripts.prop_callback_snapshot import CallbackSnapshot
+        source = getattr(bt.dataprovider, "_DataProvider__cached_pairs", {}).get(
+            (pair, timeframe, candle_def)
+        )
+        boundary = getattr(bt.dataprovider, "_DataProvider__slice_index", {}).get(pair)
+        snapshot_key = (pair, timeframe, id(source[0]) if source else None, boundary)
+        if snapshot_key not in callback_snapshots:
+            callback_snapshots[snapshot_key] = (CallbackSnapshot(result[0]), result[1])
+            while len(callback_snapshots) > 6:
+                callback_snapshots.popitem(last=False)
+        else:
+            callback_snapshots.move_to_end(snapshot_key)
+        return callback_snapshots[snapshot_key]
 
     bt.dataprovider.get_analyzed_dataframe = _lazy_get_analyzed_dataframe
     return ohclv_lists, {}, min_date, max_date
@@ -1885,6 +1927,13 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
         strict_wick_guard=args.strict_wick_guard,
     )
 
+    if getattr(args, "detail_array_cache", ""):
+        revision_files = [Path(__file__), REPO / "scripts" / "prop_detail_array_cache.py"]
+        revision_files += sorted((REPO / "freqtrade" / "data").rglob("*.py"))
+        revision = hashlib.sha256(b"".join(p.read_bytes() for p in revision_files)
+                                  + f"{pd.__version__}:{np.__version__}".encode()).hexdigest()
+        bt._detail_array_cache = DetailArrayCache(args.detail_array_cache, revision)
+    configure_checkpoints(bt, args, REPO, cfg["datadir"])
     cache_dir = _resolve_cache_dir(args, universe)
     ohclv_lists, analyzed_dfs, min_date, max_date = _prepare_universe_cached(
         bt,
@@ -1892,6 +1941,7 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
         universe,
         cache_dir,
         chunk_size=args.chunk_size,
+        cache_callback_rows=getattr(args, "cache_callback_rows", False),
     )
     logger.info(
         "Ready %d pairs (%s -> %s, %d days) in %.1fs",
@@ -2083,12 +2133,14 @@ def _summarize_trades(trades: list[LocalTrade]) -> dict[str, Any]:
         "by_month": dict(sorted(by_month.items())),
         "by_enter_tag": dict(sorted(by_tag.items(), key=lambda kv: kv[1]["pnl"], reverse=True)),
         "by_exit_reason": dict(sorted(by_exit.items(), key=lambda kv: kv[1]["trades"], reverse=True)),
+        "by_pair": dict(sorted(by_pair.items())),
         "top_15_pairs": top_pairs,
         "worst_15_pairs": worst_pairs,
         "unique_pairs_traded": len(by_pair),
     }
 
 
+@phase_checkpoint
 def _run_continuous_pass(
     bt: PropParityBacktesting,
     cfg: dict[str, Any],
@@ -2323,7 +2375,9 @@ def run_sequential_program_cohorts(
     two_step_cohorts: list[dict[str, Any]] = []
 
     try:
-        for s_dt in start_dates:
+        for cohort_index, s_dt in enumerate(start_dates, 1):
+            cohort_started = time.monotonic()
+            logger.info("Sequential cohort %d/%d starting %s", cohort_index, len(start_dates), s_dt)
             # --- A. ONE-STEP SEQUENTIAL: Eval (+10%, 3d) -> Funded (+5% 1st Payout) ---
             bt._prop_profile = copy.deepcopy(profs["one_step_eval"])
             os_eval = bt.run_cached_cohort(ohclv_lists, analyzed_dfs, s_dt, max_date)
@@ -2389,6 +2443,11 @@ def run_sequential_program_cohorts(
                 "official_overall_breach_wick_bars": ts_p1["official_overall_breach_wick_bars"] + (ts_p2["official_overall_breach_wick_bars"] if ts_p2 else 0),
                 "shock_1coin_50_breach_bars": ts_p1["shock_1coin_50_breach_bars"] + (ts_p2["shock_1coin_50_breach_bars"] if ts_p2 else 0),
             })
+            logger.info(
+                "Sequential cohort %d/%d completed in %.1fs: one-step=%s two-step=%s",
+                cohort_index, len(start_dates), time.monotonic() - cohort_started,
+                os_eval["outcome"], ts_outcome,
+            )
     finally:
         bt._prop_profile = saved_profile
         bt._stop_on_halt = saved_stop_halt
@@ -2637,6 +2696,7 @@ def _apply_candidate_money_params(
     cand: dict[str, Any],
 ) -> None:
     init_bal = float(bt._prop_profile["initial_balance"])
+    bt._checkpoint_candidate = copy.deepcopy(cand)
     max_open = int(cand["max_open_trades"])
     stake_amt = cand["stake_amount"]
     max_slot = float(cand["max_slot_notional_usdt"])
@@ -2900,6 +2960,12 @@ def main():
     parser.add_argument("--cache-dir", default="")
     parser.add_argument("--chunk-size", type=int, default=8)
     parser.add_argument("--keep-deepcopy", action="store_true", default=False)
+    parser.add_argument("--cache-callback-rows", action="store_true", default=False,
+                        help="Cache rows of immutable offline callback snapshots (opt-in).")
+    parser.add_argument("--phase-checkpoint-dir", default="",
+                        help="Opt-in atomic resume checkpoints for completed phases and cohorts.")
+    parser.add_argument("--detail-array-cache", default="",
+                        help="Opt-in disk cache of normalized minute arrays, read through memory maps.")
     args = parser.parse_args()
     if not args.keep_deepcopy:
         import freqtrade.strategy.strategy_wrapper as _sw
