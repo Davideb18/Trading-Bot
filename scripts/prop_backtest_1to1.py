@@ -162,9 +162,12 @@ class _FastCandleRow:
         val = self._cache.get(key)
         if val is None and key not in self._cache:
             arr = self._cols.get(key)
-            if arr is None and not self._table._full_loaded:
-                self._table._ensure_full_loaded()
-                arr = self._cols.get(key)
+            if arr is None:
+                if not self._table._full_loaded:
+                    self._table._ensure_full_loaded()
+                    arr = self._cols.get(key)
+                if arr is None:
+                    arr = self._table._load_single_col(key)
             val = self._cols[key][self._idx] if arr is None else arr[self._idx]
             self._cache[key] = val
         return val
@@ -173,9 +176,12 @@ class _FastCandleRow:
         val = self._cache.get(key)
         if val is None and key not in self._cache:
             arr = self._cols.get(key)
-            if arr is None and not self._table._full_loaded:
-                self._table._ensure_full_loaded()
-                arr = self._cols.get(key)
+            if arr is None:
+                if not self._table._full_loaded:
+                    self._table._ensure_full_loaded()
+                    arr = self._cols.get(key)
+                if arr is None:
+                    arr = self._table._load_single_col(key)
             if arr is None:
                 return default
             val = arr[self._idx]
@@ -297,6 +303,21 @@ class _FastAnalyzedTable:
         self._deferred_cols = []
         self._full_loaded = True
 
+    def _load_single_col(self, key: str) -> np.ndarray | None:
+        if self._path is None:
+            return None
+        try:
+            table = _pa_feather.read_table(self._path, columns=[key])
+            col = table.column(0)
+            try:
+                arr = col.to_numpy(zero_copy_only=False)
+            except Exception:
+                arr = col.to_pandas().to_numpy()
+            self.cols[key] = arr
+            return arr
+        except Exception:
+            return None
+
     @classmethod
     def load_feather(cls, path: Path, needed_cols: set[str] | None = None) -> "_FastAnalyzedTable":
         cols_to_read: list[str] | None = None
@@ -356,8 +377,8 @@ def _discover_callback_columns() -> set[str]:
             src,
         )
     )
-    cols.update({"open", "high", "low", "close"})
-    cols -= {"date", "enter_tag", "exit_tag", "enter_long", "exit_long", "enter_short", "exit_short"}
+    cols.update({"open", "high", "low", "close", "volume", "enter_long", "exit_long", "enter_short", "exit_short"})
+    cols -= {"date", "enter_tag", "exit_tag"}
     _CALLBACK_COLS_CACHE = cols
     return cols
 
