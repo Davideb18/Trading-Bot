@@ -26,7 +26,9 @@ import hashlib
 import json
 import logging
 import math
+import os
 import pickle
+import re
 import statistics
 import sys
 import time
@@ -38,6 +40,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import pyarrow.feather as _pa_feather
 
 REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
@@ -71,6 +74,206 @@ from scripts.prop_phase_checkpoint import configure_checkpoints, phase_checkpoin
 from scripts.prop_detail_array_cache import DetailArrayCache
 
 logger = logging.getLogger("prop_backtest_1to1")
+
+_ORIG_LOAD_PAIR_HISTORY = history.load_pair_history
+
+
+def _detect_total_ram_gb() -> float:
+    try:
+        pages = os.sysconf("SC_PHYS_PAGES")
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        if pages > 0 and page_size > 0:
+            return (pages * page_size) / (1024.0 ** 3)
+    except Exception:
+        pass
+    return 8.0
+
+
+def _install_fast_custom_data_index() -> None:
+    """Replace O(N) linear scan in CustomDataWrapper.get_custom_data with O(1) dict index."""
+    from freqtrade.persistence.custom_data import CustomDataWrapper
+
+    if getattr(CustomDataWrapper, "_fast_indexed", False):
+        return
+
+    _by_trade_key: dict[tuple[int, str], list[Any]] = {}
+    _by_trade: dict[int, list[Any]] = defaultdict(list)
+    _seen_count: list[int] = [0]
+
+    def _sync_index() -> None:
+        data = CustomDataWrapper.custom_data
+        n = len(data)
+        if n < _seen_count[0]:
+            _by_trade_key.clear()
+            _by_trade.clear()
+            _seen_count[0] = 0
+        if n > _seen_count[0]:
+            for item in data[_seen_count[0] : n]:
+                tid = int(item.ft_trade_id)
+                k = item.cd_key
+                tk = (tid, k)
+                if tk not in _by_trade_key:
+                    _by_trade_key[tk] = [item]
+                    _by_trade[tid].append(item)
+                else:
+                    _by_trade_key[tk][0] = item
+            _seen_count[0] = n
+
+    @staticmethod
+    def _fast_get_custom_data(*, trade_id: int, key: str | None = None) -> list[Any]:
+        if not CustomDataWrapper.use_db:
+            _sync_index()
+            if key is not None:
+                return _by_trade_key.get((int(trade_id), key), [])
+            return _by_trade.get(int(trade_id), [])
+        if key is None:
+            return CustomDataWrapper._get_custom_data(trade_id=trade_id)
+        return CustomDataWrapper._get_custom_data(trade_id=trade_id, key=key)
+
+    orig_reset = CustomDataWrapper.reset_custom_data
+
+    @staticmethod
+    def _fast_reset_custom_data() -> None:
+        orig_reset()
+        _by_trade_key.clear()
+        _by_trade.clear()
+        _seen_count[0] = 0
+
+    CustomDataWrapper.get_custom_data = _fast_get_custom_data
+    CustomDataWrapper.reset_custom_data = _fast_reset_custom_data
+    CustomDataWrapper._fast_indexed = True
+
+
+class _FastCandleRow:
+    """Zero-copy scalar row accessor replacing pandas Series indf.iloc[-1]/df.iloc[-2]."""
+
+    __slots__ = ("_cols", "_idx")
+
+    def __init__(self, cols: dict[str, np.ndarray], idx: int) -> None:
+        self._cols = cols
+        self._idx = idx
+
+    def squeeze(self) -> "_FastCandleRow":
+        return self
+
+    def __getitem__(self, key: str) -> Any:
+        return self._cols[key][self._idx]
+
+    def get(self, key: str, default: Any = None) -> Any:
+        arr = self._cols.get(key)
+        if arr is None:
+            return default
+        return arr[self._idx]
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._cols
+
+
+class _FastAnalyzedIloc:
+    __slots__ = ("_table", "_len")
+
+    def __init__(self, table: "_FastAnalyzedTable", length: int) -> None:
+        self._table = table
+        self._len = length
+
+    def __getitem__(self, idx: int) -> _FastCandleRow:
+        if idx < 0:
+            real_idx = self._len + idx
+        else:
+            real_idx = idx
+        if real_idx < 0 or real_idx >= self._len:
+            raise IndexError(idx)
+        return _FastCandleRow(self._table.cols, real_idx)
+
+
+class _FastAnalyzedFrame:
+    """O(1) zero-allocation view over _FastAnalyzedTable up to length."""
+
+    __slots__ = ("_table", "_len")
+
+    def __init__(self, table: "_FastAnalyzedTable", length: int) -> None:
+        self._table = table
+        self._len = length
+
+    def __len__(self) -> int:
+        return self._len
+
+    def __bool__(self) -> bool:
+        return self._len > 0
+
+    @property
+    def empty(self) -> bool:
+        return self._len == 0
+
+    @property
+    def columns(self):
+        return self._table.cols.keys()
+
+    @property
+    def iloc(self) -> _FastAnalyzedIloc:
+        return _FastAnalyzedIloc(self._table, self._len)
+
+
+class _FastAnalyzedTable:
+    """Compact column-dict representation of an analyzed feather file (loads only callback cols)."""
+
+    __slots__ = ("cols", "n_rows", "last_date")
+
+    def __init__(self, cols: dict[str, np.ndarray], n_rows: int, last_date: datetime) -> None:
+        self.cols = cols
+        self.n_rows = n_rows
+        self.last_date = last_date
+
+    @classmethod
+    def load_feather(cls, path: Path, needed_cols: set[str] | None = None) -> "_FastAnalyzedTable":
+        table = _pa_feather.read_table(path, columns=list(needed_cols) if needed_cols else None)
+        n_rows = table.num_rows
+        cols: dict[str, np.ndarray] = {}
+        last_date = datetime.fromtimestamp(0, tz=UTC)
+        for name in table.column_names:
+            col = table.column(name)
+            if name == "date":
+                s = col.to_pandas()
+                if n_rows > 0:
+                    last_date = s.iloc[-1].to_pydatetime()
+                cols[name] = s.to_numpy()
+            else:
+                try:
+                    cols[name] = col.to_numpy(zero_copy_only=False)
+                except Exception:
+                    cols[name] = col.to_pandas().to_numpy()
+        return cls(cols, n_rows, last_date)
+
+
+_CALLBACK_COLS_CACHE: set[str] | None = None
+
+
+def _discover_callback_columns() -> set[str]:
+    """Static scan of NostalgiaForInfinityX8_Prop.py to find all columns accessed outside populate_*."""
+    global _CALLBACK_COLS_CACHE
+    if _CALLBACK_COLS_CACHE is not None:
+        return _CALLBACK_COLS_CACHE
+    strat_path = REPO / "user_data" / "strategies" / "NostalgiaForInfinityX8_Prop.py"
+    src = strat_path.read_text()
+    cols = set(re.findall(r'candle(?:_\d+)?\[\s*["\']([A-Za-z0-9_.-]+)["\']\s*\]', src))
+    cols.update(
+        {
+            "date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "enter_long",
+            "enter_tag",
+            "exit_long",
+            "exit_tag",
+            "enter_short",
+            "exit_short",
+        }
+    )
+    _CALLBACK_COLS_CACHE = cols
+    return cols
 
 
 def compute_hyrotrader_ledger(
@@ -792,10 +995,15 @@ class PropParityBacktesting(Backtesting):
             self._detail_cache.move_to_end(pair)
             return self._detail_cache[pair]
         disk_cache = getattr(self, "_detail_array_cache", None)
-        if disk_cache is not None:
-            source = self._detail_handler._pair_data_filename(
+        source = (
+            self._detail_handler._pair_data_filename(
                 self.config["datadir"], pair, self.timeframe_detail, self._detail_candle_type
             )
+            if self._detail_handler is not None
+            else None
+        )
+        cache_key = None
+        if disk_cache is not None and source is not None:
             stat = source.stat() if source.exists() else None
             cache_key = [str(source.resolve()), stat.st_size if stat else None,
                          stat.st_mtime_ns if stat else None, self.timerange.startts,
@@ -806,24 +1014,65 @@ class PropParityBacktesting(Backtesting):
                 while len(self._detail_cache) > self._detail_max_cached:
                     self._detail_cache.popitem(last=False)
                 return entry
-        df = history.load_pair_history(
-            pair=pair,
-            timeframe=self.timeframe_detail,
-            datadir=self.config["datadir"],
-            timerange=self.timerange,
-            fill_up_missing=True,
-            startup_candles=0,
-            data_handler=self._detail_handler,
-            candle_type=self._detail_candle_type,
-        )
-        if df.empty:
-            entry = None
-        else:
-            ts_s = df["date"].dt.as_unit("s").to_numpy(dtype=np.int64)
-            ohlc = df[["open", "high", "low", "close"]].to_numpy(dtype=np.float64)
-            entry = (ts_s, ohlc)
-            if disk_cache is not None:
-                entry = disk_cache.save(cache_key, entry)
+
+        # Fast path: load 1m feather directly with PyArrow if contiguous (no missing 1m bars)
+        entry = None
+        loaded_fast = False
+        if (
+            history.load_pair_history is _ORIG_LOAD_PAIR_HISTORY
+            and self.timeframe_detail == "1m"
+            and source is not None
+            and source.exists()
+        ):
+            try:
+                tbl = _pa_feather.read_table(source, columns=["date", "open", "high", "low", "close"])
+                if tbl.num_rows == 0:
+                    entry = None
+                    loaded_fast = True
+                else:
+                    ts_raw = tbl.column("date").cast("timestamp[s, tz=UTC]").to_numpy(zero_copy_only=False).view(np.int64)
+                    i0 = 0
+                    i1 = len(ts_raw)
+                    if self.timerange:
+                        if self.timerange.starttype == "date" and self.timerange.startts:
+                            i0 = int(np.searchsorted(ts_raw, int(self.timerange.startts), side="left"))
+                        if self.timerange.stoptype == "date" and self.timerange.stopts:
+                            i1 = int(np.searchsorted(ts_raw, int(self.timerange.stopts), side="right"))
+                    ts_slice = ts_raw[i0:i1]
+                    if len(ts_slice) == 0:
+                        entry = None
+                        loaded_fast = True
+                    elif len(ts_slice) == 1 or (ts_slice[-1] - ts_slice[0] == (len(ts_slice) - 1) * 60):
+                        ts_s = np.ascontiguousarray(ts_slice, dtype=np.int64)
+                        ohlc = np.empty((len(ts_s), 4), dtype=np.float64)
+                        ohlc[:, 0] = tbl.column("open").to_numpy(zero_copy_only=False)[i0:i1]
+                        ohlc[:, 1] = tbl.column("high").to_numpy(zero_copy_only=False)[i0:i1]
+                        ohlc[:, 2] = tbl.column("low").to_numpy(zero_copy_only=False)[i0:i1]
+                        ohlc[:, 3] = tbl.column("close").to_numpy(zero_copy_only=False)[i0:i1]
+                        entry = (ts_s, ohlc)
+                        loaded_fast = True
+            except Exception:
+                loaded_fast = False
+
+        if not loaded_fast:
+            df = history.load_pair_history(
+                pair=pair,
+                timeframe=self.timeframe_detail,
+                datadir=self.config["datadir"],
+                timerange=self.timerange,
+                fill_up_missing=True,
+                startup_candles=0,
+                data_handler=self._detail_handler,
+                candle_type=self._detail_candle_type,
+            )
+            if df.empty:
+                entry = None
+            else:
+                ts_s = df["date"].dt.as_unit("s").to_numpy(dtype=np.int64)
+                ohlc = df[["open", "high", "low", "close"]].to_numpy(dtype=np.float64)
+                entry = (ts_s, ohlc)
+        if entry is not None and disk_cache is not None and cache_key is not None:
+            entry = disk_cache.save(cache_key, entry)
         self._detail_cache[pair] = entry
         while len(self._detail_cache) > self._detail_max_cached:
             self._detail_cache.popitem(last=False)
@@ -869,6 +1118,10 @@ class PropParityBacktesting(Backtesting):
         self.prop_midnight_equity: float = init_bal
         self.prop_min_day_equity_wick: float = init_bal
         self.prop_current_day: str = start_utc.strftime("%Y-%m-%d")
+        self._prop_current_day_int: int = int(start_utc.timestamp()) // 86400
+        self._prop_limits_cache: dict[str, float] = floors(self._prop_profile, init_bal)
+        self.prop_first_enter_attempt_ts: datetime | None = None
+        self.prop_flat_unpaused_midnights: set[str] = {self.prop_current_day}
         self.prop_halted: bool = False
         self.prop_halt_reason: str | None = None
         self.prop_halt_dt: datetime | None = None
@@ -995,7 +1248,7 @@ class PropParityBacktesting(Backtesting):
             return False, "slot_notional_cap_exceeded"
         if agg_after > max_agg:
             return False, "aggregate_notional_cap_exceeded"
-        limits = floors(self._prop_profile, self.prop_midnight_equity)
+        limits = self._prop_limits_cache
         op_floor = max(limits["operating_daily_floor"], limits["operating_overall_floor"])
         eq = self._current_floating_equity(use_low=False)
         headroom = max(0.0, eq - op_floor)
@@ -1132,10 +1385,13 @@ class PropParityBacktesting(Backtesting):
 
     def _on_tick_rollover_and_guard(self, current_time: datetime, eval_drawdown: bool) -> None:
         dt_utc = _to_utc(current_time)
-        day_str = dt_utc.strftime("%Y-%m-%d")
+        ts_sec = int(dt_utc.timestamp())
+        day_int = ts_sec // 86400
 
         # 1. Midnight UTC baseline rollover (must settle funding up to 00:00 UTC)
-        if day_str != self.prop_current_day:
+        if day_int != self._prop_current_day_int:
+            day_str = dt_utc.strftime("%Y-%m-%d")
+            self._prop_current_day_int = day_int
             for tr in LocalTrade.bt_trades_open:
                 self._run_funding_fees(tr, current_time, force=True)
             # Use synchronized closing mark at end of previous day (23:55/23:59 close = 00:00 UTC mark)
@@ -1160,6 +1416,7 @@ class PropParityBacktesting(Backtesting):
             self.prop_midnight_equity = end_prev_eq
             self.prop_min_day_equity_wick = end_prev_eq
             self.prop_current_day = day_str
+            self._prop_limits_cache = floors(self._prop_profile, end_prev_eq)
             month_str = day_str[:7]
             if month_str != self.prop_current_month:
                 self.prop_current_month = month_str
@@ -1168,15 +1425,31 @@ class PropParityBacktesting(Backtesting):
                 self.prop_rules_paused = False
                 self.prop_rules_pause_reason = None
                 self._recompute_ledger(current_time)
+            if (
+                self.prop_first_enter_attempt_ts is None
+                and not self.prop_macro_paused
+                and not self.prop_inactivity_breach
+            ):
+                self.prop_flat_unpaused_midnights.add(day_str)
 
         if not eval_drawdown or self.prop_halted:
             return
 
+        if not LocalTrade.bt_trades_open and not self.prop_closed_records and not self._dynamic_shield_enabled:
+            inact_days = (dt_utc - self.prop_latest_activity_dt).total_seconds() / 86400.0
+            if inact_days >= 30.0:
+                self.prop_inactivity_breach = True
+            return
+
         # 2. Evaluate RiskGuard on real floating equity (close AND conservative intrabar low)
-        eq_close = self._current_floating_equity(use_low=False)
-        eq_wick = self._current_floating_equity(use_low=True)
+        if not LocalTrade.bt_trades_open:
+            eq_close = float(self.wallets.get_total(self.config["stake_currency"]))
+            eq_wick = eq_close
+        else:
+            eq_close = self._current_floating_equity(use_low=False)
+            eq_wick = self._current_floating_equity(use_low=True)
         self.prop_min_day_equity_wick = min(self.prop_min_day_equity_wick, eq_wick)
-        limits = floors(self._prop_profile, self.prop_midnight_equity)
+        limits = self._prop_limits_cache
         init_bal = float(self._prop_profile["initial_balance"])
 
         self.prop_min_equity_close = min(self.prop_min_equity_close, eq_close)
@@ -1310,14 +1583,127 @@ class PropParityBacktesting(Backtesting):
             if self.prop_dynamic_shield_active:
                 self.prop_dynamic_shield_bars += 1
             yield ct
-            # End of main 5m tick (if no detail candles evaluated at final step, evaluate close guard)
-            if self._last_eval_det_ts != ct:
-                self._on_tick_rollover_and_guard(ct, eval_drawdown=True)
-                self._last_eval_det_ts = ct
+            # End of main 5m tick: evaluate guard once on the latest detail/main tick timestamp
+            eval_ts = self._last_eval_det_ts if self._last_eval_det_ts is not None else ct
+            self._on_tick_rollover_and_guard(eval_ts, eval_drawdown=True)
+            self._last_eval_det_ts = None
             if (self._stop_on_halt and self.prop_halted) or (
                 self._stop_on_pass and self.prop_passed
             ):
                 return
+
+    def time_pair_generator(
+        self,
+        start_date: datetime,
+        end_date: datetime,
+        pairs: list[str],
+        data: dict[str, list],
+    ):
+        """Sparse 1:1 replacement for Backtesting.time_pair_generator skipping flat no-signal rows."""
+        self.dataprovider._set_dataframe_max_date(start_date)
+        self.pairlists.refresh_pairlist( only_first=True, pairs=self.available_pairs)
+        pair_list = list(self.pairlists.whitelist)
+        indexes: dict[str, int] = defaultdict(int)
+        can_long = self.strategy.can_long
+        can_short = self.strategy.can_short
+
+        for current_time in self._time_generator(start_date, end_date):
+            if self._last_eval_det_ts is not None and current_time != self._last_eval_det_ts:
+                self._on_tick_rollover_and_guard(self._last_eval_det_ts, eval_drawdown=True)
+            self._last_eval_det_ts = current_time
+            self._on_tick_rollover_and_guard(current_time, eval_drawdown=False)
+
+            self.check_abort()
+            if self.dynamic_pairlist:
+                self.pairlists.refresh_pairlist(pairs=self.available_pairs)
+                pair_list = list(self.pairlists.whitelist)
+
+            self.strategy.bot_loop_start(current_time=current_time)
+            is_last_main_row = current_time == end_date
+            open_trade_pairs = [p for p in LocalTrade.bt_trades_open_pp if p not in pair_list]
+            active_pairs = pair_list + open_trade_pairs
+            cur_s = int(current_time.timestamp())
+
+            for pair in active_pairs:
+                pair_rows = data.get(pair)
+                if pair_rows is None:
+                    continue
+                row_index = indexes[pair]
+                is_open_pair = pair in LocalTrade.bt_trades_open_pp
+
+                if isinstance(pair_rows, CompactOhlcvArray):
+                    ts_s = pair_rows._ts_s
+                    n = len(ts_s)
+                    if row_index >= n:
+                        continue
+                    if ts_s[row_index] < cur_s:
+                        row_index += int(np.searchsorted(ts_s[row_index:], cur_s, side="left"))
+                        indexes[pair] = row_index
+                        if row_index >= n:
+                            continue
+                    if ts_s[row_index] > cur_s:
+                        continue
+                    indexes[pair] = row_index + 1
+                    self.dataprovider._set_dataframe_max_index(pair, row_index)
+                    if not is_open_pair:
+                        sigs = pair_rows._sigs
+                        long_sig = can_long and sigs[row_index, 0] == 1
+                        short_sig = can_short and sigs[row_index, 2] == 1
+                        if not long_sig and not short_sig:
+                            continue
+                    row = pair_rows[row_index]
+                else:
+                    row_index = self._sync_pair_index(data, pair, row_index, current_time)
+                    indexes[pair] = row_index
+                    row = self.validate_row(data, pair, row_index, current_time)
+                    if not row:
+                        continue
+                    row_index += 1
+                    indexes[pair] = row_index
+                    self.dataprovider._set_dataframe_max_index(pair, row_index)
+                    if not is_open_pair:
+                        long_sig = can_long and row[LONG_IDX] == 1
+                        short_sig = can_short and row[SHORT_IDX] == 1
+                        if not long_sig and not short_sig:
+                            continue
+
+                trade_dir: str | None = None
+                if can_long and can_short:
+                    if row[LONG_IDX] == 1 and row[SHORT_IDX] != 1:
+                        trade_dir = "long"
+                    elif row[SHORT_IDX] == 1 and row[LONG_IDX] != 1:
+                        trade_dir = "short"
+                elif can_long:
+                    trade_dir = "long" if row[LONG_IDX] == 1 else None
+                elif can_short:
+                    trade_dir = "short" if row[SHORT_IDX] == 1 else None
+
+                if (
+                    self.timeframe_detail
+                    and pair in self.detail_data
+                    and (trade_dir is not None or is_open_pair)
+                ):
+                    exit_candle_end = current_time + self.timeframe_td
+                    is_last_detail_base = is_last_main_row or row_index == len(pair_rows)
+                    subrows = self.get_detail_data(pair, row)
+                    if subrows is not None:
+                        for subrow in subrows:
+                            self.dataprovider._set_dataframe_max_date(subrow[DATE_IDX])
+                            is_last_row = is_last_detail_base and subrow[DATE_IDX] == exit_candle_end
+                            yield subrow[DATE_IDX], pair, subrow, is_last_row, trade_dir
+                    else:
+                        self.dataprovider._set_dataframe_max_date(current_time)
+                        is_last_row = is_last_main_row or row_index == len(pair_rows)
+                        yield current_time, pair, row, is_last_row, trade_dir
+                else:
+                    self.dataprovider._set_dataframe_max_date(current_time)
+                    is_last_row = is_last_main_row or row_index == len(pair_rows)
+                    yield current_time, pair, row, is_last_row, trade_dir
+
+    def _enter_trade(self, pair: str, row: list, direction: str, *args, **kwargs):
+        if self.prop_first_enter_attempt_ts is None:
+            self.prop_first_enter_attempt_ts = _to_utc(row[DATE_IDX])
+        return super()._enter_trade(pair, row, direction, *args, **kwargs)
 
     def get_valid_entry_price_and_stake(
         self,
@@ -1548,7 +1934,10 @@ class PropParityBacktesting(Backtesting):
                 if self.prop_inactivity_breach
                 else (
                     "FAIL_OFFICIAL"
-                    if self.prop_official_breach_close
+                    if (
+                        self.prop_official_breach_close
+                        or (self._strict_wick_guard and self.prop_official_breach_wick)
+                    )
                     else ("HALT_INTERNAL_GUARD" if self.prop_halted else "OPEN_END")
                 )
             )
@@ -1561,6 +1950,12 @@ class PropParityBacktesting(Backtesting):
             "days_elapsed": round(days_elapsed, 2),
             "pass_dt": str(self.prop_pass_dt) if self.prop_pass_dt else None,
             "halt_dt": str(self.prop_halt_dt) if self.prop_halt_dt else None,
+            "first_enter_attempt_ts": (
+                self.prop_first_enter_attempt_ts.isoformat()
+                if self.prop_first_enter_attempt_ts
+                else None
+            ),
+            "flat_unpaused_midnights": sorted(self.prop_flat_unpaused_midnights),
             "final_equity": round(final_eq, 2),
             "net_pnl": round(final_eq - float(self._prop_profile["initial_balance"]), 2),
             "counted_profit": round(self._cached_ledger["counted_profit"], 2),
@@ -1665,8 +2060,10 @@ def _prepare_universe_cached(
     cache_dir: Path,
     chunk_size: int = 8,
     cache_callback_rows: bool = False,
+    analyzed_lru_max: int = 12,
 ) -> tuple[dict[str, CompactOhlcvArray], dict[str, pd.DataFrame], datetime, datetime]:
-    """Chunked 8GB-RAM-safe indicator preprocessing with SSD feather+npz cache and 6-pair LRU."""
+    """Chunked 8GB-RAM-safe indicator preprocessing with SSD feather+npz cache and adaptive LRU."""
+    _install_fast_custom_data_index()
     candle_def = bt.config["candle_type_def"]
     strat = bt.strategylist[0]
     bt._set_strategy(strat)
@@ -1805,13 +2202,31 @@ def _prepare_universe_cached(
             )
         )
 
-    # Install 6-pair LRU wrapper on dataprovider.get_analyzed_dataframe (~<=2GB max RAM)
-    analyzed_lru: OrderedDict[str, tuple[pd.DataFrame, datetime]] = OrderedDict()
+    # Install fast column-pruned LRU wrapper on dataprovider.get_analyzed_dataframe
     orig_get_analyzed = bt.dataprovider.get_analyzed_dataframe
+    needed_callback_cols = _discover_callback_columns()
+    fast_table_lru: OrderedDict[str, _FastAnalyzedTable] = OrderedDict()
+    analyzed_lru: OrderedDict[str, tuple[pd.DataFrame, datetime]] = OrderedDict()
     callback_snapshots: OrderedDict[tuple, tuple[pd.DataFrame, datetime]] = OrderedDict()
 
     def _lazy_get_analyzed_dataframe(pair: str, timeframe: str):
         if timeframe == bt.timeframe and pair in analyzed_paths:
+            if not cache_callback_rows:
+                if pair in fast_table_lru:
+                    fast_table_lru.move_to_end(pair)
+                    tbl = fast_table_lru[pair]
+                else:
+                    tbl = _FastAnalyzedTable.load_feather(
+                        analyzed_paths[pair], needed_cols=needed_callback_cols
+                    )
+                    fast_table_lru[pair] = tbl
+                    while len(fast_table_lru) > analyzed_lru_max:
+                        fast_table_lru.popitem(last=False)
+                slice_map = getattr(bt.dataprovider, "_DataProvider__slice_index", {})
+                max_idx = slice_map.get(pair)
+                length = tbl.n_rows if max_idx is None else min(int(max_idx), tbl.n_rows)
+                return _FastAnalyzedFrame(tbl, max(0, length)), tbl.last_date
+
             cur_map = getattr(bt.dataprovider, "_DataProvider__cached_pairs", {})
             key = (pair, timeframe, candle_def)
             if pair in analyzed_lru:
@@ -1828,7 +2243,7 @@ def _prepare_universe_cached(
                 )
                 analyzed_lru[pair] = (df_full, la)
                 cur_map[key] = (df_full, la)
-                while len(analyzed_lru) > 6:
+                while len(analyzed_lru) > analyzed_lru_max:
                     old_p, _ = analyzed_lru.popitem(last=False)
                     cur_map.pop((old_p, timeframe, candle_def), None)
                     for snapshot_key in list(callback_snapshots):
@@ -1837,8 +2252,6 @@ def _prepare_universe_cached(
         result = orig_get_analyzed(pair, timeframe)
         if not cache_callback_rows or timeframe != bt.timeframe or result[0].empty:
             return result
-        # Offline indicator frames are immutable. Scope snapshots to the source
-        # identity and visible candle boundary, including rewinds between cohorts.
         from scripts.prop_callback_snapshot import CallbackSnapshot
         source = getattr(bt.dataprovider, "_DataProvider__cached_pairs", {}).get(
             (pair, timeframe, candle_def)
@@ -1847,7 +2260,7 @@ def _prepare_universe_cached(
         snapshot_key = (pair, timeframe, id(source[0]) if source else None, boundary)
         if snapshot_key not in callback_snapshots:
             callback_snapshots[snapshot_key] = (CallbackSnapshot(result[0]), result[1])
-            while len(callback_snapshots) > 6:
+            while len(callback_snapshots) > analyzed_lru_max:
                 callback_snapshots.popitem(last=False)
         else:
             callback_snapshots.move_to_end(snapshot_key)
@@ -1927,6 +2340,19 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
         strict_wick_guard=args.strict_wick_guard,
     )
 
+    ram_mode = getattr(args, "ram_profile", "auto")
+    total_ram_gb = _detect_total_ram_gb()
+    high_ram = ram_mode == "high" or (ram_mode == "auto" and total_ram_gb >= 15.0)
+    analyzed_lru_max = 256 if high_ram else 12
+    bt._detail_max_cached = 256 if high_ram else 36
+    logger.info(
+        "RAM profile=%s (detected %.1f GB): analyzed_lru=%d detail_lru=%d",
+        "high" if high_ram else "normal",
+        total_ram_gb,
+        analyzed_lru_max,
+        bt._detail_max_cached,
+    )
+
     if getattr(args, "detail_array_cache", ""):
         revision_files = [Path(__file__), REPO / "scripts" / "prop_detail_array_cache.py"]
         revision_files += sorted((REPO / "freqtrade" / "data").rglob("*.py"))
@@ -1942,6 +2368,7 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
         cache_dir,
         chunk_size=args.chunk_size,
         cache_callback_rows=getattr(args, "cache_callback_rows", False),
+        analyzed_lru_max=analyzed_lru_max,
     )
     logger.info(
         "Ready %d pairs (%s -> %s, %d days) in %.1fs",
@@ -2375,78 +2802,191 @@ def run_sequential_program_cohorts(
     two_step_cohorts: list[dict[str, Any]] = []
 
     try:
+        prev_os_anchor_dt: datetime | None = None
+        prev_os_first_enter_dt: datetime | None = None
+        prev_os_unpaused_days: set[str] = set()
+        prev_os_eval: dict[str, Any] | None = None
+        prev_os_funded: dict[str, Any] | None = None
+        prev_os_row: dict[str, Any] | None = None
+
+        prev_ts_anchor_dt: datetime | None = None
+        prev_ts_first_enter_dt: datetime | None = None
+        prev_ts_unpaused_days: set[str] = set()
+        prev_ts_p1: dict[str, Any] | None = None
+        prev_ts_row: dict[str, Any] | None = None
+
         for cohort_index, s_dt in enumerate(start_dates, 1):
             cohort_started = time.monotonic()
+            s_utc = _to_utc(s_dt)
+            s_day_str = s_utc.strftime("%Y-%m-%d")
+            os_eval: dict[str, Any] | None = None
             logger.info("Sequential cohort %d/%d starting %s", cohort_index, len(start_dates), s_dt)
             # --- A. ONE-STEP SEQUENTIAL: Eval (+10%, 3d) -> Funded (+5% 1st Payout) ---
-            bt._prop_profile = copy.deepcopy(profs["one_step_eval"])
-            os_eval = bt.run_cached_cohort(ohclv_lists, analyzed_dfs, s_dt, max_date)
-            os_funded = None
-            os_days_to_payout = None
-            if os_eval["outcome"] == "PASS" and bt.prop_pass_dt is not None:
-                f_start = _to_utc(bt.prop_pass_dt) + timedelta(minutes=5)
-                if f_start < _to_utc(max_date):
-                    bt._prop_profile = copy.deepcopy(profs["one_step_funded"])
-                    os_funded = bt.run_cached_cohort(ohclv_lists, analyzed_dfs, f_start, max_date)
-                    if os_funded["outcome"] == "PASS":
-                        os_days_to_payout = round(os_eval["days_elapsed"] + os_funded["days_elapsed"], 2)
-            one_step_cohorts.append({
-                "cohort_start": s_dt.strftime("%Y-%m-%d"),
-                "eval_outcome": os_eval["outcome"],
-                "days_to_qualify": os_eval["days_elapsed"] if os_eval["outcome"] == "PASS" else None,
-                "funded_1st_payout_outcome": os_funded["outcome"] if os_funded else None,
-                "days_to_first_payout": os_days_to_payout,
-                "max_daily_dd_wick": os_eval["max_daily_dd_wick"],
-                "max_overall_dd_wick": os_eval["max_overall_dd_wick"],
-                "official_daily_breach_wick_bars": os_eval["official_daily_breach_wick_bars"],
-                "official_overall_breach_wick_bars": os_eval["official_overall_breach_wick_bars"],
-                "shock_1coin_50_breach_bars": os_eval["shock_1coin_50_breach_bars"],
-            })
+            if (
+                prev_os_row is not None
+                and prev_os_eval is not None
+                and prev_os_anchor_dt is not None
+                and prev_os_first_enter_dt is not None
+                and s_utc <= prev_os_first_enter_dt
+                and (prev_os_first_enter_dt - prev_os_anchor_dt) < timedelta(days=30)
+                and s_day_str in prev_os_unpaused_days
+                and prev_os_eval["outcome"] in ("PASS", "HALT_INTERNAL_GUARD", "FAIL_OFFICIAL")
+            ):
+                delta_days = (s_utc - prev_os_anchor_dt).total_seconds() / 86400.0
+                os_q_days = (
+                    round(max(0.0, float(prev_os_row["days_to_qualify"]) - delta_days), 2)
+                    if prev_os_row["days_to_qualify"] is not None
+                    else None
+                )
+                os_p_days = (
+                    round(
+                        os_q_days + float(prev_os_funded["days_elapsed"]),
+                        2,
+                    )
+                    if (os_q_days is not None and prev_os_funded and prev_os_funded["outcome"] == "PASS")
+                    else None
+                )
+                os_row = dict(prev_os_row)
+                os_row["cohort_start"] = s_day_str
+                os_row["days_to_qualify"] = os_q_days
+                os_row["days_to_first_payout"] = os_p_days
+                one_step_cohorts.append(os_row)
+                os_eval_outcome = os_row["eval_outcome"]
+            else:
+                bt._prop_profile = copy.deepcopy(profs["one_step_eval"])
+                os_eval = bt.run_cached_cohort(ohclv_lists, analyzed_dfs, s_dt, max_date)
+                os_funded = None
+                os_days_to_payout = None
+                if os_eval["outcome"] == "PASS" and bt.prop_pass_dt is not None:
+                    f_start = _to_utc(bt.prop_pass_dt) + timedelta(minutes=5)
+                    if f_start < _to_utc(max_date):
+                        bt._prop_profile = copy.deepcopy(profs["one_step_funded"])
+                        os_funded = bt.run_cached_cohort(ohclv_lists, analyzed_dfs, f_start, max_date)
+                        if os_funded["outcome"] == "PASS":
+                            os_days_to_payout = round(os_eval["days_elapsed"] + os_funded["days_elapsed"], 2)
+                os_row = {
+                    "cohort_start": s_day_str,
+                    "eval_outcome": os_eval["outcome"],
+                    "days_to_qualify": os_eval["days_elapsed"] if os_eval["outcome"] == "PASS" else None,
+                    "funded_1st_payout_outcome": os_funded["outcome"] if os_funded else None,
+                    "days_to_first_payout": os_days_to_payout,
+                    "max_daily_dd_wick": os_eval["max_daily_dd_wick"],
+                    "max_overall_dd_wick": os_eval["max_overall_dd_wick"],
+                    "official_daily_breach_wick_bars": os_eval["official_daily_breach_wick_bars"],
+                    "official_overall_breach_wick_bars": os_eval["official_overall_breach_wick_bars"],
+                    "shock_1coin_50_breach_bars": os_eval["shock_1coin_50_breach_bars"],
+                }
+                one_step_cohorts.append(os_row)
+                os_eval_outcome = os_eval["outcome"]
+                fe_iso = os_eval.get("first_enter_attempt_ts")
+                prev_os_anchor_dt = s_utc
+                prev_os_first_enter_dt = datetime.fromisoformat(fe_iso) if fe_iso else None
+                prev_os_unpaused_days = set(os_eval.get("flat_unpaused_midnights") or [])
+                prev_os_eval = os_eval
+                prev_os_funded = os_funded
+                prev_os_row = os_row
 
             # --- B. TWO-STEP SEQUENTIAL: Phase 1 (+10%, 4d, $200/d) -> Phase 2 (+5%, 4d, $100/d) -> Funded (+5%) ---
-            bt._prop_profile = copy.deepcopy(profs["two_step_phase1"])
-            ts_p1 = bt.run_cached_cohort(ohclv_lists, analyzed_dfs, s_dt, max_date)
-            ts_p2 = None
-            ts_funded = None
-            ts_days_to_qualify = None
-            ts_days_to_payout = None
-            ts_outcome = ts_p1["outcome"]
-            if ts_p1["outcome"] == "PASS" and bt.prop_pass_dt is not None:
-                p2_start = _to_utc(bt.prop_pass_dt) + timedelta(minutes=5)
-                if p2_start < _to_utc(max_date):
-                    bt._prop_profile = copy.deepcopy(profs["two_step_phase2"])
-                    ts_p2 = bt.run_cached_cohort(ohclv_lists, analyzed_dfs, p2_start, max_date)
-                    ts_outcome = ts_p2["outcome"]
-                    if ts_p2["outcome"] == "PASS" and bt.prop_pass_dt is not None:
-                        ts_days_to_qualify = round(ts_p1["days_elapsed"] + ts_p2["days_elapsed"], 2)
-                        f_start = _to_utc(bt.prop_pass_dt) + timedelta(minutes=5)
-                        if f_start < _to_utc(max_date):
-                            bt._prop_profile = copy.deepcopy(profs["two_step_funded"])
-                            ts_funded = bt.run_cached_cohort(ohclv_lists, analyzed_dfs, f_start, max_date)
-                            if ts_funded["outcome"] == "PASS":
-                                ts_days_to_payout = round(ts_days_to_qualify + ts_funded["days_elapsed"], 2)
+            if (
+                prev_ts_row is not None
+                and prev_ts_p1 is not None
+                and prev_ts_anchor_dt is not None
+                and prev_ts_first_enter_dt is not None
+                and s_utc <= prev_ts_first_enter_dt
+                and (prev_ts_first_enter_dt - prev_ts_anchor_dt) < timedelta(days=30)
+                and s_day_str in prev_ts_unpaused_days
+                and prev_ts_p1["outcome"] in ("PASS", "HALT_INTERNAL_GUARD", "FAIL_OFFICIAL")
+            ):
+                delta_days = (s_utc - prev_ts_anchor_dt).total_seconds() / 86400.0
+                ts_row = dict(prev_ts_row)
+                ts_row["cohort_start"] = s_day_str
+                if ts_row["p1_days"] is not None:
+                    ts_row["p1_days"] = round(max(0.0, float(prev_ts_row["p1_days"]) - delta_days), 2)
+                if ts_row["days_to_qualify"] is not None and ts_row["p2_days"] is not None:
+                    ts_row["days_to_qualify"] = round(float(ts_row["p1_days"]) + float(ts_row["p2_days"]), 2)
+                if ts_row["days_to_first_payout"] is not None and prev_ts_row["days_to_qualify"] is not None:
+                    funded_d = float(prev_ts_row["days_to_first_payout"]) - float(prev_ts_row["days_to_qualify"])
+                    ts_row["days_to_first_payout"] = round(float(ts_row["days_to_qualify"]) + funded_d, 2)
+                two_step_cohorts.append(ts_row)
+                ts_outcome = ts_row["eval_outcome"]
+            else:
+                os_denials = (os_eval.get("budget_denials") or {}) if os_eval is not None else {}
+                has_headroom_denial = any(
+                    k.endswith(("operating_headroom_exhausted", "insufficient_operating_headroom_for_stress_bound"))
+                    and v > 0
+                    for k, v in os_denials.items()
+                )
+                can_reuse_os_as_p1 = (
+                    os_eval is not None
+                    and not has_headroom_denial
+                    and os_eval["official_daily_breach_wick_bars"] == 0
+                    and os_eval["official_overall_breach_wick_bars"] == 0
+                    and os_eval["shock_1coin_50_breach_bars"] == 0
+                    and (
+                        os_eval["outcome"] in ("OPEN_END", "FAIL_INACTIVITY_30D")
+                        or (
+                            os_eval["outcome"] == "PASS"
+                            and int(os_eval.get("qualifying_days", 0))
+                            >= int(profs["two_step_phase1"]["min_trading_days"])
+                        )
+                    )
+                )
+                if can_reuse_os_as_p1:
+                    ts_p1 = dict(os_eval)
+                    bt.prop_pass_dt = (
+                        datetime.fromisoformat(ts_p1["pass_dt"]) if ts_p1.get("pass_dt") else None
+                    )
                 else:
-                    ts_outcome = "OPEN_END"
-            two_step_cohorts.append({
-                "cohort_start": s_dt.strftime("%Y-%m-%d"),
-                "p1_outcome": ts_p1["outcome"],
-                "p1_days": ts_p1["days_elapsed"] if ts_p1["outcome"] == "PASS" else None,
-                "p2_outcome": ts_p2["outcome"] if ts_p2 else None,
-                "p2_days": ts_p2["days_elapsed"] if (ts_p2 and ts_p2["outcome"] == "PASS") else None,
-                "eval_outcome": ts_outcome,
-                "days_to_qualify": ts_days_to_qualify,
-                "funded_1st_payout_outcome": ts_funded["outcome"] if ts_funded else None,
-                "days_to_first_payout": ts_days_to_payout,
-                "max_daily_dd_wick": max(ts_p1["max_daily_dd_wick"], ts_p2["max_daily_dd_wick"] if ts_p2 else 0.0),
-                "max_overall_dd_wick": max(ts_p1["max_overall_dd_wick"], ts_p2["max_overall_dd_wick"] if ts_p2 else 0.0),
-                "official_daily_breach_wick_bars": ts_p1["official_daily_breach_wick_bars"] + (ts_p2["official_daily_breach_wick_bars"] if ts_p2 else 0),
-                "official_overall_breach_wick_bars": ts_p1["official_overall_breach_wick_bars"] + (ts_p2["official_overall_breach_wick_bars"] if ts_p2 else 0),
-                "shock_1coin_50_breach_bars": ts_p1["shock_1coin_50_breach_bars"] + (ts_p2["shock_1coin_50_breach_bars"] if ts_p2 else 0),
-            })
+                    bt._prop_profile = copy.deepcopy(profs["two_step_phase1"])
+                    ts_p1 = bt.run_cached_cohort(ohclv_lists, analyzed_dfs, s_dt, max_date)
+                ts_p2 = None
+                ts_funded = None
+                ts_days_to_qualify = None
+                ts_days_to_payout = None
+                ts_outcome = ts_p1["outcome"]
+                if ts_p1["outcome"] == "PASS" and bt.prop_pass_dt is not None:
+                    p2_start = _to_utc(bt.prop_pass_dt) + timedelta(minutes=5)
+                    if p2_start < _to_utc(max_date):
+                        bt._prop_profile = copy.deepcopy(profs["two_step_phase2"])
+                        ts_p2 = bt.run_cached_cohort(ohclv_lists, analyzed_dfs, p2_start, max_date)
+                        ts_outcome = ts_p2["outcome"]
+                        if ts_p2["outcome"] == "PASS" and bt.prop_pass_dt is not None:
+                            ts_days_to_qualify = round(ts_p1["days_elapsed"] + ts_p2["days_elapsed"], 2)
+                            f_start = _to_utc(bt.prop_pass_dt) + timedelta(minutes=5)
+                            if f_start < _to_utc(max_date):
+                                bt._prop_profile = copy.deepcopy(profs["two_step_funded"])
+                                ts_funded = bt.run_cached_cohort(ohclv_lists, analyzed_dfs, f_start, max_date)
+                                if ts_funded["outcome"] == "PASS":
+                                    ts_days_to_payout = round(ts_days_to_qualify + ts_funded["days_elapsed"], 2)
+                    else:
+                        ts_outcome = "OPEN_END"
+                ts_row = {
+                    "cohort_start": s_day_str,
+                    "p1_outcome": ts_p1["outcome"],
+                    "p1_days": ts_p1["days_elapsed"] if ts_p1["outcome"] == "PASS" else None,
+                    "p2_outcome": ts_p2["outcome"] if ts_p2 else None,
+                    "p2_days": ts_p2["days_elapsed"] if (ts_p2 and ts_p2["outcome"] == "PASS") else None,
+                    "eval_outcome": ts_outcome,
+                    "days_to_qualify": ts_days_to_qualify,
+                    "funded_1st_payout_outcome": ts_funded["outcome"] if ts_funded else None,
+                    "days_to_first_payout": ts_days_to_payout,
+                    "max_daily_dd_wick": max(ts_p1["max_daily_dd_wick"], ts_p2["max_daily_dd_wick"] if ts_p2 else 0.0),
+                    "max_overall_dd_wick": max(ts_p1["max_overall_dd_wick"], ts_p2["max_overall_dd_wick"] if ts_p2 else 0.0),
+                    "official_daily_breach_wick_bars": ts_p1["official_daily_breach_wick_bars"] + (ts_p2["official_daily_breach_wick_bars"] if ts_p2 else 0),
+                    "official_overall_breach_wick_bars": ts_p1["official_overall_breach_wick_bars"] + (ts_p2["official_overall_breach_wick_bars"] if ts_p2 else 0),
+                    "shock_1coin_50_breach_bars": ts_p1["shock_1coin_50_breach_bars"] + (ts_p2["shock_1coin_50_breach_bars"] if ts_p2 else 0),
+                }
+                two_step_cohorts.append(ts_row)
+                fe_ts_iso = ts_p1.get("first_enter_attempt_ts")
+                prev_ts_anchor_dt = s_utc
+                prev_ts_first_enter_dt = datetime.fromisoformat(fe_ts_iso) if fe_ts_iso else None
+                prev_ts_unpaused_days = set(ts_p1.get("flat_unpaused_midnights") or [])
+                prev_ts_p1 = ts_p1
+                prev_ts_row = ts_row
             logger.info(
                 "Sequential cohort %d/%d completed in %.1fs: one-step=%s two-step=%s",
                 cohort_index, len(start_dates), time.monotonic() - cohort_started,
-                os_eval["outcome"], ts_outcome,
+                os_eval_outcome, ts_outcome,
             )
     finally:
         bt._prop_profile = saved_profile
@@ -2966,6 +3506,8 @@ def main():
                         help="Opt-in atomic resume checkpoints for completed phases and cohorts.")
     parser.add_argument("--detail-array-cache", default="",
                         help="Opt-in disk cache of normalized minute arrays, read through memory maps.")
+    parser.add_argument("--ram-profile", choices=["auto", "normal", "high"], default="auto",
+                        help="Memory profile for analyzed and 1m detail LRU caches (auto detects >=15GB RAM for high).")
     args = parser.parse_args()
     if not args.keep_deepcopy:
         import freqtrade.strategy.strategy_wrapper as _sw

@@ -76,7 +76,7 @@ def phase_checkpoint(function):
                 bt._stop_on_halt = False
                 bt._stop_on_pass = False
                 bt._ignore_target_pause = values["ignore_target_pause"]
-            for field in ("pass_dt", "halt_dt"):
+            for field in ("pass_dt", "halt_dt", "first_enter_attempt_ts"):
                 value = result.get(field)
                 setattr(bt, "prop_" + field, datetime.fromisoformat(value) if value else None)
             logging.getLogger("prop_backtest_1to1").info("Resumed completed phase %s", path.name)

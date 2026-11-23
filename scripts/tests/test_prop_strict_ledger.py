@@ -243,3 +243,68 @@ def test_funded_ledger_has_no_daily_consistency_cap_or_pause():
     )
     assert ledger["counted_profit"] == 300.0
     assert math.isinf(ledger["daily_pause_threshold"])
+
+
+def test_sequential_cohorts_flat_start_dedup_and_p1_equivalence():
+    from scripts.prop_backtest_1to1 import run_sequential_program_cohorts
+
+    calls = []
+
+    def fake_run_cached_cohort(ohclv_lists, analyzed_dfs, start_date, end_date):
+        calls.append((bt._prop_profile["profile_id"], bt._prop_profile["phase_id"], start_date))
+        if bt._prop_profile["phase_id"] in ("evaluation", "phase_1"):
+            bt.prop_pass_dt = datetime(2026, 1, 20, tzinfo=UTC)
+            days = (bt.prop_pass_dt - start_date).total_seconds() / 86400.0
+            return {
+                "cohort_start": start_date.strftime("%Y-%m-%d"),
+                "outcome": "PASS",
+                "days_elapsed": round(days, 2),
+                "pass_dt": bt.prop_pass_dt.isoformat(),
+                "halt_dt": None,
+                "first_enter_attempt_ts": "2026-01-05T12:00:00+00:00",
+                "flat_unpaused_midnights": ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04", "2026-01-05"],
+                "qualifying_days": 4,
+                "max_daily_dd_wick": 50.0,
+                "max_overall_dd_wick": 80.0,
+                "official_daily_breach_wick_bars": 0,
+                "official_overall_breach_wick_bars": 0,
+                "shock_1coin_50_breach_bars": 0,
+                "budget_denials": {},
+            }
+        bt.prop_pass_dt = datetime(2026, 1, 30, tzinfo=UTC)
+        return {
+            "cohort_start": start_date.strftime("%Y-%m-%d"),
+            "outcome": "PASS",
+            "days_elapsed": 10.0,
+            "pass_dt": bt.prop_pass_dt.isoformat(),
+            "halt_dt": None,
+            "qualifying_days": 4,
+            "max_daily_dd_wick": 40.0,
+            "max_overall_dd_wick": 60.0,
+            "official_daily_breach_wick_bars": 0,
+            "official_overall_breach_wick_bars": 0,
+            "shock_1coin_50_breach_bars": 0,
+            "budget_denials": {},
+        }
+
+    bt = SimpleNamespace(
+        _prop_profile=build_program_profiles()["one_step_eval"],
+        _stop_on_halt=True,
+        _stop_on_pass=True,
+        _ignore_target_pause=False,
+        prop_pass_dt=None,
+    )
+    bt.run_cached_cohort = fake_run_cached_cohort
+    starts = [
+        datetime(2026, 1, 1, tzinfo=UTC),
+        datetime(2026, 1, 2, tzinfo=UTC),
+        datetime(2026, 1, 3, tzinfo=UTC),
+    ]
+    res = run_sequential_program_cohorts(bt, {}, {}, starts, datetime(2026, 3, 1, tzinfo=UTC))
+    # Day 1 runs One-Step Eval + Funded, reuses Eval for Two-Step P1 (since qualifying_days=4), then runs P2 + Funded (4 calls).
+    # Days 2 and 3 start before first_enter_attempt_ts (2026-01-05) on unpaused midnights -> 0 extra calls!
+    assert len(calls) == 4
+    assert [r["days_to_qualify"] for r in res["one_step_cohorts"]] == [19.0, 18.0, 17.0]
+    assert [r["days_to_first_payout"] for r in res["one_step_cohorts"]] == [29.0, 28.0, 27.0]
+    assert [r["days_to_qualify"] for r in res["two_step_cohorts"]] == [29.0, 28.0, 27.0]
+    assert [r["days_to_first_payout"] for r in res["two_step_cohorts"]] == [39.0, 38.0, 37.0]
