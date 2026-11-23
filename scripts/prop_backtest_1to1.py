@@ -147,10 +147,11 @@ def _install_fast_custom_data_index() -> None:
 class _FastCandleRow:
     """Zero-copy scalar row accessor replacing pandas Series in df.iloc[-1]/df.iloc[-2]."""
 
-    __slots__ = ("_cols", "_idx", "_cache")
+    __slots__ = ("_table", "_cols", "_idx", "_cache")
 
-    def __init__(self, cols: dict[str, np.ndarray], idx: int) -> None:
-        self._cols = cols
+    def __init__(self, table: "_FastAnalyzedTable", idx: int) -> None:
+        self._table = table
+        self._cols = table.cols
         self._idx = idx
         self._cache: dict[str, Any] = {}
 
@@ -160,7 +161,11 @@ class _FastCandleRow:
     def __getitem__(self, key: str) -> Any:
         val = self._cache.get(key)
         if val is None and key not in self._cache:
-            val = self._cols[key][self._idx]
+            arr = self._cols.get(key)
+            if arr is None and not self._table._full_loaded:
+                self._table._ensure_full_loaded()
+                arr = self._cols.get(key)
+            val = self._cols[key][self._idx] if arr is None else arr[self._idx]
             self._cache[key] = val
         return val
 
@@ -168,6 +173,9 @@ class _FastCandleRow:
         val = self._cache.get(key)
         if val is None and key not in self._cache:
             arr = self._cols.get(key)
+            if arr is None and not self._table._full_loaded:
+                self._table._ensure_full_loaded()
+                arr = self._cols.get(key)
             if arr is None:
                 return default
             val = arr[self._idx]
@@ -175,7 +183,12 @@ class _FastCandleRow:
         return val
 
     def __contains__(self, key: str) -> bool:
-        return key in self._cols
+        if key in self._cols:
+            return True
+        if not self._table._full_loaded:
+            self._table._ensure_full_loaded()
+            return key in self._cols
+        return False
 
 
 class _FastAnalyzedIloc:
@@ -194,7 +207,7 @@ class _FastAnalyzedIloc:
             return tbl._row_a
         if real_idx == tbl._row_b_idx and tbl._row_b is not None:
             return tbl._row_b
-        row = _FastCandleRow(tbl.cols, real_idx)
+        row = _FastCandleRow(tbl, real_idx)
         tbl._row_b_idx = tbl._row_a_idx
         tbl._row_b = tbl._row_a
         tbl._row_a_idx = real_idx
@@ -223,6 +236,8 @@ class _FastAnalyzedFrame:
 
     @property
     def columns(self):
+        if not self._table._full_loaded:
+            self._table._ensure_full_loaded()
         return self._table.cols.keys()
 
     @property
@@ -231,19 +246,56 @@ class _FastAnalyzedFrame:
 
 
 class _FastAnalyzedTable:
-    """Compact column-dict representation of an analyzed feather file (loads only callback cols)."""
+    """Two-tier lazy column-dict representation of an analyzed feather file."""
 
-    __slots__ = ("cols", "n_rows", "last_date", "_row_a_idx", "_row_a", "_row_b_idx", "_row_b")
+    __slots__ = (
+        "cols",
+        "n_rows",
+        "last_date",
+        "_path",
+        "_deferred_cols",
+        "_full_loaded",
+        "_row_a_idx",
+        "_row_a",
+        "_row_b_idx",
+        "_row_b",
+    )
     _VALID_COLS_BY_DIR: dict[Path, list[str]] = {}
 
-    def __init__(self, cols: dict[str, np.ndarray], n_rows: int, last_date: datetime) -> None:
+    def __init__(
+        self,
+        cols: dict[str, np.ndarray],
+        n_rows: int,
+        last_date: datetime,
+        *,
+        path: Path | None = None,
+        deferred_cols: list[str] | None = None,
+        full_loaded: bool = True,
+    ) -> None:
         self.cols = cols
         self.n_rows = n_rows
         self.last_date = last_date
+        self._path = path
+        self._deferred_cols = deferred_cols or []
+        self._full_loaded = full_loaded
         self._row_a_idx: int = -1
         self._row_a: _FastCandleRow | None = None
         self._row_b_idx: int = -1
         self._row_b: _FastCandleRow | None = None
+
+    def _ensure_full_loaded(self) -> None:
+        if self._full_loaded or self._path is None or not self._deferred_cols:
+            self._full_loaded = True
+            return
+        table = _pa_feather.read_table(self._path, columns=self._deferred_cols)
+        for name in table.column_names:
+            col = table.column(name)
+            try:
+                self.cols[name] = col.to_numpy(zero_copy_only=False)
+            except Exception:
+                self.cols[name] = col.to_pandas().to_numpy()
+        self._deferred_cols = []
+        self._full_loaded = True
 
     @classmethod
     def load_feather(cls, path: Path, needed_cols: set[str] | None = None) -> "_FastAnalyzedTable":
@@ -258,23 +310,34 @@ class _FastAnalyzedTable:
                     avail = set(reader.schema.names)
                 cols_to_read = sorted(needed_cols & avail)
                 cls._VALID_COLS_BY_DIR[parent] = cols_to_read
+        if cols_to_read and "close" in cols_to_read:
+            init_cols = ["close"]
+            deferred = [c for c in cols_to_read if c != "close"]
+            table = _pa_feather.read_table(path, columns=init_cols)
+            n_rows = table.num_rows
+            cols: dict[str, np.ndarray] = {}
+            if n_rows > 0:
+                cols["close"] = table.column("close").to_numpy(zero_copy_only=False)
+            else:
+                cols["close"] = np.empty(0, dtype=np.float64)
+            return cls(
+                cols,
+                n_rows,
+                datetime.fromtimestamp(0, tz=UTC),
+                path=path,
+                deferred_cols=deferred,
+                full_loaded=(len(deferred) == 0),
+            )
         table = _pa_feather.read_table(path, columns=cols_to_read)
         n_rows = table.num_rows
-        cols: dict[str, np.ndarray] = {}
-        last_date = datetime.fromtimestamp(0, tz=UTC)
+        cols = {}
         for name in table.column_names:
             col = table.column(name)
-            if name == "date":
-                s = col.to_pandas()
-                if n_rows > 0:
-                    last_date = s.iloc[-1].to_pydatetime()
-                cols[name] = s.to_numpy()
-            else:
-                try:
-                    cols[name] = col.to_numpy(zero_copy_only=False)
-                except Exception:
-                    cols[name] = col.to_pandas().to_numpy()
-        return cls(cols, n_rows, last_date)
+            try:
+                cols[name] = col.to_numpy(zero_copy_only=False)
+            except Exception:
+                cols[name] = col.to_pandas().to_numpy()
+        return cls(cols, n_rows, datetime.fromtimestamp(0, tz=UTC), path=path, full_loaded=True)
 
 
 _CALLBACK_COLS_CACHE: set[str] | None = None
@@ -293,22 +356,8 @@ def _discover_callback_columns() -> set[str]:
             src,
         )
     )
-    cols.update(
-        {
-            "date",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-            "enter_long",
-            "enter_tag",
-            "exit_long",
-            "exit_tag",
-            "enter_short",
-            "exit_short",
-        }
-    )
+    cols.update({"open", "high", "low", "close"})
+    cols -= {"date", "enter_tag", "exit_tag", "enter_long", "exit_long", "enter_short", "exit_short"}
     _CALLBACK_COLS_CACHE = cols
     return cols
 
@@ -1990,43 +2039,7 @@ class PropParityBacktesting(Backtesting):
             self.prop_latest_bars[pair] = (row[OPEN_IDX], row[HIGH_IDX], row[LOW_IDX], row[CLOSE_IDX])
         return res
 
-    @phase_checkpoint
-    def run_cached_cohort(
-        self,
-        ohclv_lists: dict[str, list[tuple]],
-        analyzed_dfs: dict[str, pd.DataFrame],
-        start_date: datetime,
-        end_date: datetime,
-    ) -> dict[str, Any]:
-        """Run a fresh One-Step challenge cohort reusing pre-computed indicators."""
-        self.reset_backtest(self.enable_protections)
-        self._reset_prop_state(start_date)
-        self._hist_pairlists._last_bucket = None
-        self.wallets.update()
-        # Restore dataprovider analyzed dataframe cache so custom_exit/adjust_trade_position work
-        for pair, df_an in analyzed_dfs.items():
-            self.dataprovider._set_cached_df(
-                pair, self.timeframe, df_an, self.config["candle_type_def"]
-            )
-
-        for (
-            current_time,
-            pair,
-            row,
-            is_last_row,
-            trade_dir,
-        ) in self.time_pair_generator(start_date, end_date, list(ohclv_lists.keys()), ohclv_lists):
-            self.backtest_loop(row, pair, current_time, trade_dir, not is_last_row)
-            if (self._stop_on_halt and self.prop_halted) or (
-                self._stop_on_pass and self.prop_passed
-            ):
-                break
-
-        if not self.prop_halted and not self.prop_passed:
-            self.handle_left_open(LocalTrade.bt_trades_open_pp, data=ohclv_lists)
-            self.wallets.update()
-            self._recompute_ledger(end_date)
-
+    def _build_cohort_result(self, end_date: datetime) -> dict[str, Any]:
         final_eq = float(self.wallets.get_total(self.config["stake_currency"]))
         outcome = (
             "PASS"
@@ -2087,6 +2100,150 @@ class PropParityBacktesting(Backtesting):
             "dynamic_shield_bars": self.prop_dynamic_shield_bars,
             "budget_denials": dict(self.prop_budget_denials),
         }
+
+    @phase_checkpoint
+    def run_cached_cohort(
+        self,
+        ohclv_lists: dict[str, list[tuple]],
+        analyzed_dfs: dict[str, pd.DataFrame],
+        start_date: datetime,
+        end_date: datetime,
+    ) -> dict[str, Any]:
+        """Run a fresh One-Step challenge cohort reusing pre-computed indicators."""
+        self.reset_backtest(self.enable_protections)
+        self._reset_prop_state(start_date)
+        self._hist_pairlists._last_bucket = None
+        self.wallets.update()
+        # Restore dataprovider analyzed dataframe cache so custom_exit/adjust_trade_position work
+        for pair, df_an in analyzed_dfs.items():
+            self.dataprovider._set_cached_df(
+                pair, self.timeframe, df_an, self.config["candle_type_def"]
+            )
+
+        for (
+            current_time,
+            pair,
+            row,
+            is_last_row,
+            trade_dir,
+        ) in self.time_pair_generator(start_date, end_date, list(ohclv_lists.keys()), ohclv_lists):
+            self.backtest_loop(row, pair, current_time, trade_dir, not is_last_row)
+            if (self._stop_on_halt and self.prop_halted) or (
+                self._stop_on_pass and self.prop_passed
+            ):
+                break
+
+        if not self.prop_halted and not self.prop_passed:
+            self.handle_left_open(LocalTrade.bt_trades_open_pp, data=ohclv_lists)
+            self.wallets.update()
+            self._recompute_ledger(end_date)
+
+        return self._build_cohort_result(end_date)
+
+    def run_dual_eval_cohort(
+        self,
+        ohclv_lists: dict[str, list[tuple]],
+        analyzed_dfs: dict[str, pd.DataFrame],
+        start_date: datetime,
+        end_date: datetime,
+        one_step_eval_profile: dict[str, Any],
+        two_step_p1_profile: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """Run One-Step Eval (3d) and continue in-place to Two-Step Phase 1 (4d) when prefix is clean."""
+        if getattr(self, "_phase_checkpoint_root", None) is not None:
+            self._prop_profile = copy.deepcopy(one_step_eval_profile)
+            os_res = self.run_cached_cohort(ohclv_lists, analyzed_dfs, start_date, end_date)
+            return os_res, None
+
+        self._prop_profile = copy.deepcopy(one_step_eval_profile)
+        self.reset_backtest(self.enable_protections)
+        self._reset_prop_state(start_date)
+        self._hist_pairlists._last_bucket = None
+        self.wallets.update()
+        for pair, df_an in analyzed_dfs.items():
+            self.dataprovider._set_cached_df(
+                pair, self.timeframe, df_an, self.config["candle_type_def"]
+            )
+
+        os_res: dict[str, Any] | None = None
+        min_p1_days = int(two_step_p1_profile["min_trading_days"])
+
+        for (
+            current_time,
+            pair,
+            row,
+            is_last_row,
+            trade_dir,
+        ) in self.time_pair_generator(start_date, end_date, list(ohclv_lists.keys()), ohclv_lists):
+            self.backtest_loop(row, pair, current_time, trade_dir, not is_last_row)
+            if os_res is None:
+                if self.prop_halted:
+                    os_res = self._build_cohort_result(end_date)
+                    return os_res, None
+                if self.prop_passed:
+                    os_res = self._build_cohort_result(end_date)
+                    os_denials = os_res.get("budget_denials") or {}
+                    has_hr_denial = any(
+                        k.endswith(("operating_headroom_exhausted", "insufficient_operating_headroom_for_stress_bound"))
+                        and v > 0
+                        for k, v in os_denials.items()
+                    )
+                    clean_prefix = (
+                        not has_hr_denial
+                        and self.prop_internal_wick_touch is None
+                        and os_res["official_daily_breach_wick_bars"] == 0
+                        and os_res["official_overall_breach_wick_bars"] == 0
+                        and os_res["shock_1coin_50_breach_bars"] == 0
+                    )
+                    if not clean_prefix:
+                        return os_res, None
+                    if int(os_res["qualifying_days"]) >= min_p1_days:
+                        return os_res, copy.deepcopy(os_res)
+                    # Transition in-place to Two-Step Phase 1 (4 qualifying days) without restarting!
+                    self._prop_profile = copy.deepcopy(two_step_p1_profile)
+                    self._prop_limits_cache = floors(self._prop_profile, self.prop_midnight_equity)
+                    self.prop_passed = False
+                    self.prop_pass_dt = None
+                    self.prop_milestone_pass_dt = None
+                    self._recompute_ledger(current_time)
+                    if (self._stop_on_halt and self.prop_halted) or (
+                        self._stop_on_pass and self.prop_passed
+                    ):
+                        break
+            else:
+                if (self._stop_on_halt and self.prop_halted) or (
+                    self._stop_on_pass and self.prop_passed
+                ):
+                    break
+
+        if not self.prop_halted and not self.prop_passed:
+            self.handle_left_open(LocalTrade.bt_trades_open_pp, data=ohclv_lists)
+            self.wallets.update()
+            self._recompute_ledger(end_date)
+
+        if os_res is None:
+            os_res = self._build_cohort_result(end_date)
+            os_denials = os_res.get("budget_denials") or {}
+            has_hr_denial = any(
+                k.endswith(("operating_headroom_exhausted", "insufficient_operating_headroom_for_stress_bound"))
+                and v > 0
+                for k, v in os_denials.items()
+            )
+            clean_prefix = (
+                not self.prop_halted
+                and not has_hr_denial
+                and self.prop_internal_wick_touch is None
+                and os_res["official_daily_breach_wick_bars"] == 0
+                and os_res["official_overall_breach_wick_bars"] == 0
+                and os_res["shock_1coin_50_breach_bars"] == 0
+                and os_res["outcome"] in ("OPEN_END", "FAIL_INACTIVITY_30D")
+            )
+            if clean_prefix:
+                return os_res, copy.deepcopy(os_res)
+            return os_res, None
+
+        ts_p1_res = self._build_cohort_result(end_date)
+        return os_res, ts_p1_res
 
 
 def build_bt_config(
@@ -2445,8 +2602,8 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
     ram_mode = getattr(args, "ram_profile", "auto")
     total_ram_gb = _detect_total_ram_gb()
     high_ram = ram_mode == "high" or (ram_mode == "auto" and total_ram_gb >= 15.0)
-    analyzed_lru_max = 256 if high_ram else 12
-    bt._detail_max_cached = 256 if high_ram else 36
+    analyzed_lru_max = 256 if high_ram else 32
+    bt._detail_max_cached = 256 if high_ram else 48
     logger.info(
         "RAM profile=%s (detected %.1f GB): analyzed_lru=%d detail_lru=%d",
         "high" if high_ram else "normal",
@@ -2883,6 +3040,7 @@ def run_sequential_program_cohorts(
     one_step_max_guard: float = 0.065,
     two_step_daily_guard: float = 0.043,
     two_step_max_guard: float = 0.080,
+    phase_memo: dict[tuple[Any, ...], Any] | None = None,
 ) -> dict[str, Any]:
     """Compare One-Step vs Two-Step sequential cohorts (Evaluation -> Funded -> 1st Payout +$250)."""
     saved_profile = copy.deepcopy(bt._prop_profile)
@@ -2902,6 +3060,45 @@ def run_sequential_program_cohorts(
     )
     one_step_cohorts: list[dict[str, Any]] = []
     two_step_cohorts: list[dict[str, Any]] = []
+    memo: dict[tuple[Any, ...], Any] = phase_memo if phase_memo is not None else {}
+    has_dual_runner = hasattr(bt, "run_dual_eval_cohort")
+
+    def _run_phase_memoized(prof: dict[str, Any], s_start: datetime, s_end: datetime) -> dict[str, Any]:
+        u_start = _to_utc(s_start)
+        u_end = _to_utc(s_end)
+        exact_key = ("phase", prof["profile_id"], prof["phase_id"], u_start, u_end)
+        if exact_key in memo:
+            res = copy.deepcopy(memo[exact_key])
+            bt.prop_pass_dt = datetime.fromisoformat(res["pass_dt"]) if res.get("pass_dt") else None
+            bt.prop_halt_dt = datetime.fromisoformat(res["halt_dt"]) if res.get("halt_dt") else None
+            return res
+        if prof["phase_id"] == "funded":
+            clean_key = ("funded_clean", u_start, u_end)
+            if clean_key in memo:
+                res = copy.deepcopy(memo[clean_key])
+                bt.prop_pass_dt = datetime.fromisoformat(res["pass_dt"]) if res.get("pass_dt") else None
+                bt.prop_halt_dt = datetime.fromisoformat(res["halt_dt"]) if res.get("halt_dt") else None
+                return res
+        bt._prop_profile = copy.deepcopy(prof)
+        res = bt.run_cached_cohort(ohclv_lists, analyzed_dfs, s_start, s_end)
+        memo[exact_key] = copy.deepcopy(res)
+        if prof["phase_id"] == "funded" and prof["profile_id"] == "hyro_one_step_funded":
+            denials = res.get("budget_denials") or {}
+            has_hr_denial = any(
+                k.endswith(("operating_headroom_exhausted", "insufficient_operating_headroom_for_stress_bound"))
+                and v > 0
+                for k, v in denials.items()
+            )
+            if (
+                not has_hr_denial
+                and res["outcome"] not in ("HALT_INTERNAL_GUARD", "FAIL_OFFICIAL")
+                and res.get("internal_wick_touch") is None
+                and res.get("official_daily_breach_wick_bars", 0) == 0
+                and res.get("official_overall_breach_wick_bars", 0) == 0
+                and res.get("shock_1coin_50_breach_bars", 0) == 0
+            ):
+                memo[("funded_clean", u_start, u_end)] = copy.deepcopy(res)
+        return res
 
     try:
         prev_os_anchor_dt: datetime | None = None
@@ -2922,6 +3119,7 @@ def run_sequential_program_cohorts(
             s_utc = _to_utc(s_dt)
             s_day_str = s_utc.strftime("%Y-%m-%d")
             os_eval: dict[str, Any] | None = None
+            ts_p1_from_dual: dict[str, Any] | None = None
             logger.info("Sequential cohort %d/%d starting %s", cohort_index, len(start_dates), s_dt)
             # --- A. ONE-STEP SEQUENTIAL: Eval (+10%, 3d) -> Funded (+5% 1st Payout) ---
             if (
@@ -2955,15 +3153,33 @@ def run_sequential_program_cohorts(
                 one_step_cohorts.append(os_row)
                 os_eval_outcome = os_row["eval_outcome"]
             else:
-                bt._prop_profile = copy.deepcopy(profs["one_step_eval"])
-                os_eval = bt.run_cached_cohort(ohclv_lists, analyzed_dfs, s_dt, max_date)
+                dual_key = ("dual_eval", s_utc, _to_utc(max_date))
+                if dual_key in memo:
+                    os_eval, ts_p1_from_dual = copy.deepcopy(memo[dual_key])
+                    bt.prop_pass_dt = (
+                        datetime.fromisoformat(os_eval["pass_dt"]) if os_eval.get("pass_dt") else None
+                    )
+                elif has_dual_runner:
+                    os_eval, ts_p1_from_dual = bt.run_dual_eval_cohort(
+                        ohclv_lists,
+                        analyzed_dfs,
+                        s_dt,
+                        max_date,
+                        profs["one_step_eval"],
+                        profs["two_step_phase1"],
+                    )
+                    memo[dual_key] = (copy.deepcopy(os_eval), copy.deepcopy(ts_p1_from_dual))
+                    bt.prop_pass_dt = (
+                        datetime.fromisoformat(os_eval["pass_dt"]) if os_eval.get("pass_dt") else None
+                    )
+                else:
+                    os_eval = _run_phase_memoized(profs["one_step_eval"], s_dt, max_date)
                 os_funded = None
                 os_days_to_payout = None
                 if os_eval["outcome"] == "PASS" and bt.prop_pass_dt is not None:
                     f_start = _to_utc(bt.prop_pass_dt) + timedelta(minutes=5)
                     if f_start < _to_utc(max_date):
-                        bt._prop_profile = copy.deepcopy(profs["one_step_funded"])
-                        os_funded = bt.run_cached_cohort(ohclv_lists, analyzed_dfs, f_start, max_date)
+                        os_funded = _run_phase_memoized(profs["one_step_funded"], f_start, max_date)
                         if os_funded["outcome"] == "PASS":
                             os_days_to_payout = round(os_eval["days_elapsed"] + os_funded["days_elapsed"], 2)
                 os_row = {
@@ -3012,35 +3228,40 @@ def run_sequential_program_cohorts(
                 two_step_cohorts.append(ts_row)
                 ts_outcome = ts_row["eval_outcome"]
             else:
-                os_denials = (os_eval.get("budget_denials") or {}) if os_eval is not None else {}
-                has_headroom_denial = any(
-                    k.endswith(("operating_headroom_exhausted", "insufficient_operating_headroom_for_stress_bound"))
-                    and v > 0
-                    for k, v in os_denials.items()
-                )
-                can_reuse_os_as_p1 = (
-                    os_eval is not None
-                    and not has_headroom_denial
-                    and os_eval["official_daily_breach_wick_bars"] == 0
-                    and os_eval["official_overall_breach_wick_bars"] == 0
-                    and os_eval["shock_1coin_50_breach_bars"] == 0
-                    and (
-                        os_eval["outcome"] in ("OPEN_END", "FAIL_INACTIVITY_30D")
-                        or (
-                            os_eval["outcome"] == "PASS"
-                            and int(os_eval.get("qualifying_days", 0))
-                            >= int(profs["two_step_phase1"]["min_trading_days"])
-                        )
-                    )
-                )
-                if can_reuse_os_as_p1:
-                    ts_p1 = dict(os_eval)
+                if ts_p1_from_dual is not None:
+                    ts_p1 = ts_p1_from_dual
                     bt.prop_pass_dt = (
                         datetime.fromisoformat(ts_p1["pass_dt"]) if ts_p1.get("pass_dt") else None
                     )
                 else:
-                    bt._prop_profile = copy.deepcopy(profs["two_step_phase1"])
-                    ts_p1 = bt.run_cached_cohort(ohclv_lists, analyzed_dfs, s_dt, max_date)
+                    os_denials = (os_eval.get("budget_denials") or {}) if os_eval is not None else {}
+                    has_headroom_denial = any(
+                        k.endswith(("operating_headroom_exhausted", "insufficient_operating_headroom_for_stress_bound"))
+                        and v > 0
+                        for k, v in os_denials.items()
+                    )
+                    can_reuse_os_as_p1 = (
+                        os_eval is not None
+                        and not has_headroom_denial
+                        and os_eval["official_daily_breach_wick_bars"] == 0
+                        and os_eval["official_overall_breach_wick_bars"] == 0
+                        and os_eval["shock_1coin_50_breach_bars"] == 0
+                        and (
+                            os_eval["outcome"] in ("OPEN_END", "FAIL_INACTIVITY_30D")
+                            or (
+                                os_eval["outcome"] == "PASS"
+                                and int(os_eval.get("qualifying_days", 0))
+                                >= int(profs["two_step_phase1"]["min_trading_days"])
+                            )
+                        )
+                    )
+                    if can_reuse_os_as_p1:
+                        ts_p1 = dict(os_eval)
+                        bt.prop_pass_dt = (
+                            datetime.fromisoformat(ts_p1["pass_dt"]) if ts_p1.get("pass_dt") else None
+                        )
+                    else:
+                        ts_p1 = _run_phase_memoized(profs["two_step_phase1"], s_dt, max_date)
                 ts_p2 = None
                 ts_funded = None
                 ts_days_to_qualify = None
@@ -3049,15 +3270,13 @@ def run_sequential_program_cohorts(
                 if ts_p1["outcome"] == "PASS" and bt.prop_pass_dt is not None:
                     p2_start = _to_utc(bt.prop_pass_dt) + timedelta(minutes=5)
                     if p2_start < _to_utc(max_date):
-                        bt._prop_profile = copy.deepcopy(profs["two_step_phase2"])
-                        ts_p2 = bt.run_cached_cohort(ohclv_lists, analyzed_dfs, p2_start, max_date)
+                        ts_p2 = _run_phase_memoized(profs["two_step_phase2"], p2_start, max_date)
                         ts_outcome = ts_p2["outcome"]
                         if ts_p2["outcome"] == "PASS" and bt.prop_pass_dt is not None:
                             ts_days_to_qualify = round(ts_p1["days_elapsed"] + ts_p2["days_elapsed"], 2)
                             f_start = _to_utc(bt.prop_pass_dt) + timedelta(minutes=5)
                             if f_start < _to_utc(max_date):
-                                bt._prop_profile = copy.deepcopy(profs["two_step_funded"])
-                                ts_funded = bt.run_cached_cohort(ohclv_lists, analyzed_dfs, f_start, max_date)
+                                ts_funded = _run_phase_memoized(profs["two_step_funded"], f_start, max_date)
                                 if ts_funded["outcome"] == "PASS":
                                     ts_days_to_payout = round(ts_days_to_qualify + ts_funded["days_elapsed"], 2)
                     else:
@@ -3291,6 +3510,7 @@ def _execute_scenario(
     program_comparison = None
     autumn_crash_sweep = None
     if cohort_starts:
+        shared_phase_memo: dict[tuple[Any, ...], Any] = {}
         os_d_guard = float(profile.get("daily_limit_percent", 0.036))
         os_m_guard = float(profile.get("max_loss_percent", 0.065))
         ts_d_guard = float(bt._prop_policy.get("_two_step_daily_guard", 0.043))
@@ -3302,6 +3522,7 @@ def _execute_scenario(
             one_step_max_guard=os_m_guard,
             two_step_daily_guard=ts_d_guard,
             two_step_max_guard=ts_m_guard,
+            phase_memo=shared_phase_memo,
         )
         os_s = program_comparison["one_step_summary"]
         ts_s = program_comparison["two_step_summary"]
@@ -3326,6 +3547,7 @@ def _execute_scenario(
                 one_step_max_guard=os_m_guard,
                 two_step_daily_guard=ts_d_guard,
                 two_step_max_guard=ts_m_guard,
+                phase_memo=shared_phase_memo,
             )
 
     pass_days = [c["days_elapsed"] for c in cohorts if c["outcome"] == "PASS"]
