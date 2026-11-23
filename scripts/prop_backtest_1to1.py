@@ -1042,7 +1042,12 @@ class PropParityBacktesting(Backtesting):
                     entry = None
                     loaded_fast = True
                 else:
-                    ts_raw = tbl.column("date").cast("timestamp[s, tz=UTC]").to_numpy(zero_copy_only=False).view(np.int64)
+                    ts_raw = (
+                        tbl.column("date")
+                        .cast("timestamp[s]")
+                        .cast("int64")
+                        .to_numpy(zero_copy_only=False)
+                    )
                     i0 = 0
                     i1 = len(ts_raw)
                     if self.timerange:
@@ -1604,6 +1609,17 @@ class PropParityBacktesting(Backtesting):
             ):
                 return
 
+    def _can_attempt_new_entry(self, is_last_row: bool) -> bool:
+        if is_last_row or self._is_entry_paused():
+            return False
+        if not self.trade_slot_available(LocalTrade.bt_open_open_trade_count):
+            return False
+        if self.prop_dynamic_shield_active:
+            reduced_slots = max(1, int(self.config.get("max_open_trades", 1)) - 1)
+            if len(LocalTrade.bt_trades_open) >= reduced_slots:
+                return False
+        return True
+
     def time_pair_generator(
         self,
         start_date: datetime,
@@ -1631,6 +1647,7 @@ class PropParityBacktesting(Backtesting):
             self.strategy.bot_loop_start(current_time=current_time)
             pair_detail_cache: dict[str, list[tuple]] = {}
             pair_tradedir_cache: dict[str, str | None] = {}
+            deferred_signal_rows: dict[str, Any] = {}
             pairs_with_open_trades = [t.pair for t in LocalTrade.bt_trades_open]
             new_pairlist = list(dict.fromkeys(pairs_with_open_trades + list(pairs)))
             cur_s = int(current_time.timestamp())
@@ -1660,6 +1677,11 @@ class PropParityBacktesting(Backtesting):
                     has_sig = sigs[raw_idx, 0] == 1 or sigs[raw_idx, 2] == 1
                     if not pair_has_open_trades and not has_sig and pair not in pairs_with_open_trades:
                         continue
+                    if not pair_has_open_trades and pair not in pairs_with_open_trades:
+                        if not self._can_attempt_new_entry(is_last_main):
+                            if has_detail and pairs_with_open_trades:
+                                deferred_signal_rows[pair] = (pair_rows, raw_idx)
+                            continue
                     row = pair_rows[raw_idx]
                 else:
                     row_index = self._sync_pair_index(data, pair, row_index, current_time)
@@ -1682,6 +1704,10 @@ class PropParityBacktesting(Backtesting):
 
                 if trade_dir is None and not pair_has_open_trades:
                     continue
+                if not pair_has_open_trades and not self._can_attempt_new_entry(is_last_main):
+                    if has_detail and pairs_with_open_trades:
+                        deferred_signal_rows[pair] = row
+                    continue
 
                 if (
                     has_detail
@@ -1695,6 +1721,8 @@ class PropParityBacktesting(Backtesting):
                         row = pair_detail[0]
 
                 yield current_time, pair, row, is_last_main, trade_dir
+                if len(LocalTrade.bt_trades_open_pp[pair]) > 0 and pair not in pairs_with_open_trades:
+                    pairs_with_open_trades.append(pair)
 
             # 2. Detail candle pass (idx >= 1), only when at least one pair has active detail candles
             if has_detail and pair_detail_cache and detail_td is not None:
@@ -1705,6 +1733,18 @@ class PropParityBacktesting(Backtesting):
                     if current_time_det > det_end_time:
                         break
                     is_last_row = current_time_det == end_date
+                    if deferred_signal_rows and self._can_attempt_new_entry(is_last_row):
+                        for d_pair, d_val in list(deferred_signal_rows.items()):
+                            d_row = d_val[0][d_val[1]] if isinstance(d_val, tuple) else d_val
+                            t_dir = self.check_for_trade_entry(d_row)
+                            pair_tradedir_cache[d_pair] = t_dir
+                            if t_dir is not None and d_pair in self.detail_data:
+                                p_det = self.get_detail_data(d_pair, d_row)
+                                if p_det is not None:
+                                    pair_detail_cache[d_pair] = p_det
+                                    if len(p_det) > max_det_len:
+                                        max_det_len = len(p_det)
+                        deferred_signal_rows.clear()
                     det_pairlist = list(
                         dict.fromkeys(
                             [t.pair for t in LocalTrade.bt_trades_open] + list(pair_detail_cache.keys())
@@ -1713,6 +1753,11 @@ class PropParityBacktesting(Backtesting):
                     for pair in det_pairlist:
                         detail_data = pair_detail_cache.get(pair)
                         if detail_data is None or len(detail_data) <= idx:
+                            continue
+                        pair_has_open_trades = len(LocalTrade.bt_trades_open_pp[pair]) > 0
+                        if pair in pairs_with_open_trades and not pair_has_open_trades:
+                            continue
+                        if not pair_has_open_trades and not self._can_attempt_new_entry(is_last_row):
                             continue
                         row = detail_data[idx]
                         trade_dir = pair_tradedir_cache.get(pair)
@@ -1724,12 +1769,11 @@ class PropParityBacktesting(Backtesting):
                         ):
                             trade_dir = None
                         self.dataprovider._set_dataframe_max_date(current_time_det)
-                        pair_has_open_trades = len(LocalTrade.bt_trades_open_pp[pair]) > 0
-                        if pair in pairs_with_open_trades and not pair_has_open_trades:
-                            continue
                         if pair_has_open_trades and pair not in pairs_with_open_trades:
                             pairs_with_open_trades.append(pair)
                         yield current_time_det, pair, row, is_last_row, trade_dir
+                        if len(LocalTrade.bt_trades_open_pp[pair]) > 0 and pair not in pairs_with_open_trades:
+                            pairs_with_open_trades.append(pair)
 
     def _enter_trade(self, pair: str, row: list, direction: str, *args, **kwargs):
         if self.prop_first_enter_attempt_ts is None:
