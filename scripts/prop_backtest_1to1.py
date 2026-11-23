@@ -218,6 +218,7 @@ class _FastAnalyzedTable:
     """Compact column-dict representation of an analyzed feather file (loads only callback cols)."""
 
     __slots__ = ("cols", "n_rows", "last_date")
+    _VALID_COLS_BY_DIR: dict[Path, list[str]] = {}
 
     def __init__(self, cols: dict[str, np.ndarray], n_rows: int, last_date: datetime) -> None:
         self.cols = cols
@@ -226,7 +227,18 @@ class _FastAnalyzedTable:
 
     @classmethod
     def load_feather(cls, path: Path, needed_cols: set[str] | None = None) -> "_FastAnalyzedTable":
-        table = _pa_feather.read_table(path, columns=list(needed_cols) if needed_cols else None)
+        cols_to_read: list[str] | None = None
+        if needed_cols:
+            parent = path.parent
+            cols_to_read = cls._VALID_COLS_BY_DIR.get(parent)
+            if cols_to_read is None:
+                import pyarrow.ipc as _pa_ipc
+
+                with _pa_ipc.open_file(path) as reader:
+                    avail = set(reader.schema.names)
+                cols_to_read = sorted(needed_cols & avail)
+                cls._VALID_COLS_BY_DIR[parent] = cols_to_read
+        table = _pa_feather.read_table(path, columns=cols_to_read)
         n_rows = table.num_rows
         cols: dict[str, np.ndarray] = {}
         last_date = datetime.fromtimestamp(0, tz=UTC)
