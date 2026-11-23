@@ -1597,15 +1597,13 @@ class PropParityBacktesting(Backtesting):
         start_date: datetime,
         end_date: datetime,
         pairs: list[str],
-        data: dict[str, list],
+        data: dict[str, list[tuple]],
     ):
         """Sparse 1:1 replacement for Backtesting.time_pair_generator skipping flat no-signal rows."""
-        self.dataprovider._set_dataframe_max_date(start_date)
-        self.pairlists.refresh_pairlist( only_first=True, pairs=self.available_pairs)
-        pair_list = list(self.pairlists.whitelist)
         indexes: dict[str, int] = defaultdict(int)
-        can_long = self.strategy.can_long
-        can_short = self.strategy.can_short
+        has_detail = bool(self.timeframe_detail_td)
+        detail_td = self.timeframe_detail_td
+        req_startup = self.required_startup
 
         for current_time in self._time_generator(start_date, end_date):
             if self._last_eval_det_ts is not None and current_time != self._last_eval_det_ts:
@@ -1614,91 +1612,112 @@ class PropParityBacktesting(Backtesting):
             self._on_tick_rollover_and_guard(current_time, eval_drawdown=False)
 
             self.check_abort()
-            if self.dynamic_pairlist:
+            if self.dynamic_pairlist and self.pairlists:
                 self.pairlists.refresh_pairlist(pairs=self.available_pairs)
-                pair_list = list(self.pairlists.whitelist)
+                pairs = self.pairlists.whitelist
 
             self.strategy.bot_loop_start(current_time=current_time)
-            is_last_main_row = current_time == end_date
-            open_trade_pairs = [p for p in LocalTrade.bt_trades_open_pp if p not in pair_list]
-            active_pairs = pair_list + open_trade_pairs
+            pair_detail_cache: dict[str, list[tuple]] = {}
+            pair_tradedir_cache: dict[str, str | None] = {}
+            pairs_with_open_trades = [t.pair for t in LocalTrade.bt_trades_open]
+            new_pairlist = list(dict.fromkeys(pairs_with_open_trades + list(pairs)))
             cur_s = int(current_time.timestamp())
+            is_last_main = current_time == end_date
 
-            for pair in active_pairs:
+            # 1. Main candle pass (is_first = True, idx = 0)
+            for pair in new_pairlist:
                 pair_rows = data.get(pair)
                 if pair_rows is None:
                     continue
                 row_index = indexes[pair]
-                is_open_pair = pair in LocalTrade.bt_trades_open_pp
+                pair_has_open_trades = len(LocalTrade.bt_trades_open_pp[pair]) > 0
 
                 if isinstance(pair_rows, CompactOhlcvArray):
                     ts_s = pair_rows._ts_s
                     n = len(ts_s)
-                    if row_index >= n:
-                        continue
-                    if ts_s[row_index] < cur_s:
+                    if row_index < n and ts_s[row_index] < cur_s:
                         row_index += int(np.searchsorted(ts_s[row_index:], cur_s, side="left"))
                         indexes[pair] = row_index
-                        if row_index >= n:
-                            continue
-                    if ts_s[row_index] > cur_s:
+                    if row_index >= n or ts_s[row_index] > cur_s:
                         continue
-                    indexes[pair] = row_index + 1
-                    self.dataprovider._set_dataframe_max_index(pair, row_index)
-                    if not is_open_pair:
-                        sigs = pair_rows._sigs
-                        long_sig = can_long and sigs[row_index, 0] == 1
-                        short_sig = can_short and sigs[row_index, 2] == 1
-                        if not long_sig and not short_sig:
-                            continue
-                    row = pair_rows[row_index]
+                    raw_idx = row_index
+                    row_index += 1
+                    indexes[pair] = row_index
+                    self.dataprovider._set_dataframe_max_index(pair, req_startup + row_index)
+                    sigs = pair_rows._sigs
+                    has_sig = sigs[raw_idx, 0] == 1 or sigs[raw_idx, 2] == 1
+                    if not pair_has_open_trades and not has_sig and pair not in pairs_with_open_trades:
+                        continue
+                    row = pair_rows[raw_idx]
                 else:
                     row_index = self._sync_pair_index(data, pair, row_index, current_time)
-                    indexes[pair] = row_index
                     row = self.validate_row(data, pair, row_index, current_time)
                     if not row:
                         continue
                     row_index += 1
                     indexes[pair] = row_index
-                    self.dataprovider._set_dataframe_max_index(pair, row_index)
-                    if not is_open_pair:
-                        long_sig = can_long and row[LONG_IDX] == 1
-                        short_sig = can_short and row[SHORT_IDX] == 1
-                        if not long_sig and not short_sig:
-                            continue
+                    self.dataprovider._set_dataframe_max_index(pair, req_startup + row_index)
 
-                trade_dir: str | None = None
-                if can_long and can_short:
-                    if row[LONG_IDX] == 1 and row[SHORT_IDX] != 1:
-                        trade_dir = "long"
-                    elif row[SHORT_IDX] == 1 and row[LONG_IDX] != 1:
-                        trade_dir = "short"
-                elif can_long:
-                    trade_dir = "long" if row[LONG_IDX] == 1 else None
-                elif can_short:
-                    trade_dir = "short" if row[SHORT_IDX] == 1 else None
+                trade_dir = self.check_for_trade_entry(row)
+                pair_tradedir_cache[pair] = trade_dir
+                self.dataprovider._set_dataframe_max_date(current_time)
+
+                pair_has_open_trades = len(LocalTrade.bt_trades_open_pp[pair]) > 0
+                if pair in pairs_with_open_trades and not pair_has_open_trades:
+                    continue
+                if pair_has_open_trades and pair not in pairs_with_open_trades:
+                    pairs_with_open_trades.append(pair)
+
+                if trade_dir is None and not pair_has_open_trades:
+                    continue
 
                 if (
-                    self.timeframe_detail
+                    has_detail
+                    and pair not in pair_detail_cache
                     and pair in self.detail_data
-                    and (trade_dir is not None or is_open_pair)
+                    and row
                 ):
-                    exit_candle_end = current_time + self.timeframe_td
-                    is_last_detail_base = is_last_main_row or row_index == len(pair_rows)
-                    subrows = self.get_detail_data(pair, row)
-                    if subrows is not None:
-                        for subrow in subrows:
-                            self.dataprovider._set_dataframe_max_date(subrow[DATE_IDX])
-                            is_last_row = is_last_detail_base and subrow[DATE_IDX] == exit_candle_end
-                            yield subrow[DATE_IDX], pair, subrow, is_last_row, trade_dir
-                    else:
-                        self.dataprovider._set_dataframe_max_date(current_time)
-                        is_last_row = is_last_main_row or row_index == len(pair_rows)
-                        yield current_time, pair, row, is_last_row, trade_dir
-                else:
-                    self.dataprovider._set_dataframe_max_date(current_time)
-                    is_last_row = is_last_main_row or row_index == len(pair_rows)
-                    yield current_time, pair, row, is_last_row, trade_dir
+                    pair_detail = self.get_detail_data(pair, row)
+                    if pair_detail is not None:
+                        pair_detail_cache[pair] = pair_detail
+                        row = pair_detail[0]
+
+                yield current_time, pair, row, is_last_main, trade_dir
+
+            # 2. Detail candle pass (idx >= 1), only when at least one pair has active detail candles
+            if has_detail and pair_detail_cache and detail_td is not None:
+                max_det_len = max(len(v) for v in pair_detail_cache.values())
+                det_end_time = current_time + self.timeframe_td
+                for idx in range(1, max_det_len):
+                    current_time_det = current_time + detail_td * idx
+                    if current_time_det > det_end_time:
+                        break
+                    is_last_row = current_time_det == end_date
+                    det_pairlist = list(
+                        dict.fromkeys(
+                            [t.pair for t in LocalTrade.bt_trades_open] + list(pair_detail_cache.keys())
+                        )
+                    )
+                    for pair in det_pairlist:
+                        detail_data = pair_detail_cache.get(pair)
+                        if detail_data is None or len(detail_data) <= idx:
+                            continue
+                        row = detail_data[idx]
+                        trade_dir = pair_tradedir_cache.get(pair)
+                        if self.strategy.ignore_expired_candle(
+                            current_time - self.timeframe_td,
+                            current_time_det,
+                            self.timeframe_secs,
+                            trade_dir is not None,
+                        ):
+                            trade_dir = None
+                        self.dataprovider._set_dataframe_max_date(current_time_det)
+                        pair_has_open_trades = len(LocalTrade.bt_trades_open_pp[pair]) > 0
+                        if pair in pairs_with_open_trades and not pair_has_open_trades:
+                            continue
+                        if pair_has_open_trades and pair not in pairs_with_open_trades:
+                            pairs_with_open_trades.append(pair)
+                        yield current_time_det, pair, row, is_last_row, trade_dir
 
     def _enter_trade(self, pair: str, row: list, direction: str, *args, **kwargs):
         if self.prop_first_enter_attempt_ts is None:
