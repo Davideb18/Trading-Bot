@@ -80,6 +80,25 @@ _ORIG_LOAD_PAIR_HISTORY = history.load_pair_history
 
 def _detect_total_ram_gb() -> float:
     try:
+        if sys.platform == "win32":
+            import ctypes
+
+            class MemoryStatus(ctypes.Structure):
+                _fields_ = [("length", ctypes.c_ulong), ("load", ctypes.c_ulong)] + [
+                    (name, ctypes.c_ulonglong) for name in (
+                        "total_phys", "avail_phys", "total_page", "avail_page",
+                        "total_virtual", "avail_virtual", "avail_extended",
+                    )
+                ]
+
+            status = MemoryStatus()
+            status.length = ctypes.sizeof(status)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                return status.total_phys / (1024.0**3)
+        if sys.platform == "darwin":
+            import subprocess
+
+            return int(subprocess.check_output(["sysctl", "-n", "hw.memsize"])) / (1024.0**3)
         pages = os.sysconf("SC_PHYS_PAGES")
         page_size = os.sysconf("SC_PAGE_SIZE")
         if pages > 0 and page_size > 0:
@@ -87,6 +106,28 @@ def _detect_total_ram_gb() -> float:
     except Exception:
         pass
     return 8.0
+
+
+def _ram_cache_limits(total_ram_gb: float) -> tuple[int, int]:
+    """Conservative physical-RAM tiers; cache counts are not an RSS guarantee."""
+    if total_ram_gb <= 10:
+        return 6, 12
+    if total_ram_gb <= 20:
+        return 16, 24
+    if total_ram_gb <= 40:
+        return 40, 64
+    return 96, 128
+
+
+def _release_unused_memory() -> None:
+    """Collect cyclic callback rows before returning free Arrow pages to the OS."""
+    gc.collect()
+    try:
+        import pyarrow
+
+        pyarrow.default_memory_pool().release_unused()
+    except Exception:
+        pass
 
 
 def _install_fast_custom_data_index() -> None:
@@ -1109,6 +1150,7 @@ class PropParityBacktesting(Backtesting):
             self.futures_data = {}
 
         self._detail_cache.clear()
+        _release_unused_memory()
         saved_detail_tf = self.timeframe_detail
         if saved_detail_tf:
             self._detail_candle_type = self.config.get("candle_type_def", CandleType.SPOT)
@@ -1155,6 +1197,7 @@ class PropParityBacktesting(Backtesting):
                 self._detail_cache[pair] = entry
                 while len(self._detail_cache) > self._detail_max_cached:
                     self._detail_cache.popitem(last=False)
+                    _release_unused_memory()
                 return entry
 
         # Fast path: load 1m feather directly with PyArrow if contiguous (no missing 1m bars)
@@ -1210,36 +1253,28 @@ class PropParityBacktesting(Backtesting):
                 loaded_fast = False
 
         if not loaded_fast:
-            pinned = getattr(self, "_detail_pinned_Cache", None)
-            if pinned is None:
-                pinned = {}
-                self._detail_pinned_Cache = pinned
-            if pair in pinned:
-                entry = pinned[pair]
+            df = history.load_pair_history(
+                pair=pair,
+                timeframe=self.timeframe_detail,
+                datadir=self.config["datadir"],
+                timerange=self.timerange,
+                fill_up_missing=True,
+                startup_candles=0,
+                data_handler=self._detail_handler,
+                candle_type=self._detail_candle_type,
+            )
+            if df.empty:
+                entry = None
             else:
-                df = history.load_pair_history(
-                    pair=pair,
-                    timeframe=self.timeframe_detail,
-                    datadir=self.config["datadir"],
-                    timerange=self.timerange,
-                    fill_up_missing=True,
-                    startup_candles=0,
-                    data_handler=self._detail_handler,
-                    candle_type=self._detail_candle_type,
-                )
-                if df.empty:
-                    entry = None
-                else:
-                    ts_s = df["date"].dt.as_unit("s").to_numpy(dtype=np.int64)
-                    ohlc = df[["open", "high", "low", "close"]].to_numpy(dtype=np.float64)
-                    entry = (ts_s, ohlc)
-                if history.load_pair_history is _ORIG_LOAD_PAIR_HISTORY and disk_cache is None:
-                    pinned[pair] = entry
+                ts_s = df["date"].dt.as_unit("s").to_numpy(dtype=np.int64)
+                ohlc = df[["open", "high", "low", "close"]].to_numpy(dtype=np.float64)
+                entry = (ts_s, ohlc)
         if entry is not None and disk_cache is not None and cache_key is not None:
             entry = disk_cache.save(cache_key, entry)
         self._detail_cache[pair] = entry
         while len(self._detail_cache) > self._detail_max_cached:
             self._detail_cache.popitem(last=False)
+            _release_unused_memory()
         return entry
 
     def get_detail_data(self, pair: str, row: tuple) -> list[tuple] | None:
@@ -2558,7 +2593,7 @@ def _prepare_universe_cached(
                 if k[0] != "BTC/USDT:USDT":
                     cached_bt_map.pop(k, None)
             del data_batch, prep_batch, ohl_batch
-            gc.collect()
+            _release_unused_memory()
             logger.info(
                 "Preprocessed batch %d/%d pairs (elapsed %.1fs)",
                 min(idx + max(1, chunk_size), len(universe)),
@@ -2568,7 +2603,7 @@ def _prepare_universe_cached(
 
         cached_bt_map.clear()
         cached_map.clear()
-        gc.collect()
+        _release_unused_memory()
         if min_date is None or max_date is None:
             raise OperationalException("No preprocessed data in selected timerange.")
         prec_path.write_bytes(pickle.dumps(bt.price_pair_prec))
@@ -2605,6 +2640,7 @@ def _prepare_universe_cached(
                     fast_table_lru[pair] = tbl
                     while len(fast_table_lru) > analyzed_lru_max:
                         fast_table_lru.popitem(last=False)
+                        _release_unused_memory()
                 slice_map = getattr(bt.dataprovider, "_DataProvider__slice_index", {})
                 max_idx = slice_map.get(pair)
                 length = tbl.n_rows if max_idx is None else min(int(max_idx), tbl.n_rows)
@@ -2632,6 +2668,8 @@ def _prepare_universe_cached(
                     for snapshot_key in list(callback_snapshots):
                         if snapshot_key[0] == old_p:
                             del callback_snapshots[snapshot_key]
+                    del _
+                    _release_unused_memory()
         result = orig_get_analyzed(pair, timeframe)
         if not cache_callback_rows or timeframe != bt.timeframe or result[0].empty:
             return result
@@ -2646,6 +2684,7 @@ def _prepare_universe_cached(
             callback_snapshots[snapshot_key] = (CallbackSnapshot(result[0]), result[1])
             while len(callback_snapshots) > analyzed_lru_max:
                 callback_snapshots.popitem(last=False)
+                _release_unused_memory()
         else:
             callback_snapshots.move_to_end(snapshot_key)
         return callback_snapshots[snapshot_key]
@@ -2728,12 +2767,12 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
 
     ram_mode = getattr(args, "ram_profile", "auto")
     total_ram_gb = _detect_total_ram_gb()
-    high_ram = ram_mode == "high" or (ram_mode == "auto" and total_ram_gb >= 15.0)
-    analyzed_lru_max = 256 if high_ram else 32
-    bt._detail_max_cached = 256 if high_ram else 48
+    analyzed_lru_max, bt._detail_max_cached = _ram_cache_limits(
+        total_ram_gb if ram_mode == "auto" else (8.0 if ram_mode == "normal" else 64.0)
+    )
     logger.info(
         "RAM profile=%s (detected %.1f GB): analyzed_lru=%d detail_lru=%d",
-        "high" if high_ram else "normal",
+        ram_mode,
         total_ram_gb,
         analyzed_lru_max,
         bt._detail_max_cached,
@@ -2877,7 +2916,7 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
             tmp_path = suite_path.with_suffix(suite_path.suffix + ".tmp")
             tmp_path.write_text(json.dumps(suite_out, indent=2))
             tmp_path.replace(suite_path)
-            gc.collect()
+            _release_unused_memory()
         return suite_out
 
     res = _execute_scenario(
@@ -4387,7 +4426,7 @@ def run_grid_sweep(
             tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
             tmp_path.write_text(json.dumps(_build_payload(), indent=2))
             tmp_path.replace(out_path)
-        gc.collect()
+        _release_unused_memory()
 
     out = _build_payload()
     if out_path:
@@ -4462,7 +4501,7 @@ def main():
         "--ram-profile",
         choices=["auto", "normal", "high"],
         default="auto",
-        help="Memory profile for analyzed and 1m detail LRU caches (auto detects >=15GB RAM for high).",
+        help="Memory profile for analyzed and 1m detail LRU caches (auto uses conservative physical-RAM tiers).",
     )
     args = parser.parse_args()
     if not args.keep_deepcopy:
