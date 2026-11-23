@@ -83,7 +83,7 @@ def _detect_total_ram_gb() -> float:
         pages = os.sysconf("SC_PHYS_PAGES")
         page_size = os.sysconf("SC_PAGE_SIZE")
         if pages > 0 and page_size > 0:
-            return (pages * page_size) / (1024.0 ** 3)
+            return (pages * page_size) / (1024.0**3)
     except Exception:
         pass
     return 8.0
@@ -377,7 +377,19 @@ def _discover_callback_columns() -> set[str]:
             src,
         )
     )
-    cols.update({"open", "high", "low", "close", "volume", "enter_long", "exit_long", "enter_short", "exit_short"})
+    cols.update(
+        {
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "enter_long",
+            "exit_long",
+            "enter_short",
+            "exit_short",
+        }
+    )
     cols -= {"date", "enter_tag", "exit_tag"}
     _CALLBACK_COLS_CACHE = cols
     return cols
@@ -477,7 +489,9 @@ def compute_hyrotrader_ledger(
             if tr["is_open"]:
                 raw_realized = tr["realized_profit"]
             else:
-                raw_realized = tr["profit_abs"] if tr["profit_abs"] is not None else tr["realized_profit"]
+                raw_realized = (
+                    tr["profit_abs"] if tr["profit_abs"] is not None else tr["realized_profit"]
+                )
             trade_realized = float(raw_realized) if raw_realized is not None else sum_gross
             residual = trade_realized - sum_gross
             total_weight = sum(ev["weight"] for ev in exit_events)
@@ -487,8 +501,11 @@ def compute_hyrotrader_ledger(
                 )
                 day_profits[ev["day"]] = day_profits.get(ev["day"], 0.0) + ev_net
             qualifying_day = qualifying_close_day(
-                is_open=tr["is_open"], close_dt=tr["close_dt"], remaining_qty=cur_qty,
-                exit_events=exit_events, initial_balance=initial_balance,
+                is_open=tr["is_open"],
+                close_dt=tr["close_dt"],
+                remaining_qty=cur_qty,
+                exit_events=exit_events,
+                initial_balance=initial_balance,
             )
             if qualifying_day:
                 qualifying_days.add(qualifying_day)
@@ -787,7 +804,9 @@ class PropParityBacktesting(Backtesting):
         self._detail_candle_type = self.config.get("candle_type_def", CandleType.SPOT)
 
         # Install dynamic historical pairlist adapter AFTER ExchangeResolver & validation
-        self._hist_pairlists = HistoricalPairListAdapter(self._universe_pairs, self._pairlist_schedule)
+        self._hist_pairlists = HistoricalPairListAdapter(
+            self._universe_pairs, self._pairlist_schedule
+        )
         self.pairlists = self._hist_pairlists
         self.dataprovider.add_pairlisthandler(self.pairlists)
         self.dynamic_pairlist = self._pairlist_schedule is not None
@@ -877,7 +896,10 @@ class PropParityBacktesting(Backtesting):
         api = getattr(self.exchange, "_api", None)
         if api is not None and hasattr(api, "publicGetV5MarketRiskLimit"):
             try:
-                logger.info("Fetching full paginated Bybit leverage tiers (%d missing in cache)...", len(missing))
+                logger.info(
+                    "Fetching full paginated Bybit leverage tiers (%d missing in cache)...",
+                    len(missing),
+                )
                 rows: list[dict[str, Any]] = []
                 cursor = ""
                 while True:
@@ -895,7 +917,11 @@ class PropParityBacktesting(Backtesting):
                     self.exchange._leverage_tiers[p] = (
                         [parse_fn(t) for t in tiers] if callable(parse_fn) else tiers
                     )
-                cache_file = self.config["datadir"] / "futures" / f"leverage_tiers_{self.config['stake_currency']}.json"
+                cache_file = (
+                    self.config["datadir"]
+                    / "futures"
+                    / f"leverage_tiers_{self.config['stake_currency']}.json"
+                )
                 if cache_file.exists():
                     try:
                         cur = json.loads(cache_file.read_text())
@@ -905,7 +931,10 @@ class PropParityBacktesting(Backtesting):
                     except Exception:
                         pass
             except Exception as exc:
-                logger.warning("Could not refresh live Bybit leverage tiers (%s); falling back to cached/in-memory tiers.", exc)
+                logger.warning(
+                    "Could not refresh live Bybit leverage tiers (%s); falling back to cached/in-memory tiers.",
+                    exc,
+                )
 
         # Delisted archived symbols are absent from live Bybit risk limits: assign conservative 1x tier in-memory ONLY.
         still_missing = [p for p in universe if p not in self.exchange._leverage_tiers]
@@ -1112,9 +1141,15 @@ class PropParityBacktesting(Backtesting):
         cache_key = None
         if disk_cache is not None and source is not None:
             stat = source.stat() if source.exists() else None
-            cache_key = [str(source.resolve()), stat.st_size if stat else None,
-                         stat.st_mtime_ns if stat else None, self.timerange.startts,
-                         self.timerange.stopts, self.timerange.starttype, self.timerange.stoptype]
+            cache_key = [
+                str(source.resolve()),
+                stat.st_size if stat else None,
+                stat.st_mtime_ns if stat else None,
+                self.timerange.startts,
+                self.timerange.stopts,
+                self.timerange.starttype,
+                self.timerange.stoptype,
+            ]
             entry = disk_cache.load(cache_key)
             if entry is not None:
                 self._detail_cache[pair] = entry
@@ -1132,7 +1167,9 @@ class PropParityBacktesting(Backtesting):
             and source.exists()
         ):
             try:
-                tbl = _pa_feather.read_table(source, columns=["date", "open", "high", "low", "close"])
+                tbl = _pa_feather.read_table(
+                    source, columns=["date", "open", "high", "low", "close"]
+                )
                 if tbl.num_rows == 0:
                     entry = None
                     loaded_fast = True
@@ -1147,14 +1184,20 @@ class PropParityBacktesting(Backtesting):
                     i1 = len(ts_raw)
                     if self.timerange:
                         if self.timerange.starttype == "date" and self.timerange.startts:
-                            i0 = int(np.searchsorted(ts_raw, int(self.timerange.startts), side="left"))
+                            i0 = int(
+                                np.searchsorted(ts_raw, int(self.timerange.startts), side="left")
+                            )
                         if self.timerange.stoptype == "date" and self.timerange.stopts:
-                            i1 = int(np.searchsorted(ts_raw, int(self.timerange.stopts), side="right"))
+                            i1 = int(
+                                np.searchsorted(ts_raw, int(self.timerange.stopts), side="right")
+                            )
                     ts_slice = ts_raw[i0:i1]
                     if len(ts_slice) == 0:
                         entry = None
                         loaded_fast = True
-                    elif len(ts_slice) == 1 or (ts_slice[-1] - ts_slice[0] == (len(ts_slice) - 1) * 60):
+                    elif len(ts_slice) == 1 or (
+                        ts_slice[-1] - ts_slice[0] == (len(ts_slice) - 1) * 60
+                    ):
                         ts_s = np.ascontiguousarray(ts_slice, dtype=np.int64)
                         ohlc = np.empty((len(ts_s), 4), dtype=np.float64)
                         ohlc[:, 0] = tbl.column("open").to_numpy(zero_copy_only=False)[i0:i1]
@@ -1296,8 +1339,12 @@ class PropParityBacktesting(Backtesting):
         self.prop_daily_curve: list[dict[str, Any]] = []
         self._last_eval_det_ts: datetime | None = None
         self._cached_ledger: dict[str, Any] = compute_hyrotrader_ledger(
-            [], [], init_bal, self._prop_profile["profit_target_percent"],
-            self._prop_profile["daily_profit_cap_percent"], start_utc
+            [],
+            [],
+            init_bal,
+            self._prop_profile["profit_target_percent"],
+            self._prop_profile["daily_profit_cap_percent"],
+            start_utc,
         )
         if getattr(self, "strategy", None) is not None:
             if hasattr(self.strategy, "_backtest_profit_snapshot"):
@@ -1390,10 +1437,7 @@ class PropParityBacktesting(Backtesting):
 
     def _is_entry_paused(self) -> bool:
         return (
-            self.prop_halted
-            or self.prop_macro_paused
-            or self.prop_rules_paused
-            or self.prop_passed
+            self.prop_halted or self.prop_macro_paused or self.prop_rules_paused or self.prop_passed
         )
 
     def _update_btc_macro(self, current_time: datetime) -> None:
@@ -1441,15 +1485,17 @@ class PropParityBacktesting(Backtesting):
             self.prop_phase_start,
         )
         self._cached_ledger = ledger
-        if ledger["latest_activity_dt"] and ledger["latest_activity_dt"] > self.prop_latest_activity_dt:
+        if (
+            ledger["latest_activity_dt"]
+            and ledger["latest_activity_dt"] > self.prop_latest_activity_dt
+        ):
             self.prop_latest_activity_dt = ledger["latest_activity_dt"]
 
         day_str = _to_utc(current_time).strftime("%Y-%m-%d")
         today_pnl = ledger["day_profits"].get(day_str, 0.0)
-        target_hit = (
-            round(ledger["counted_profit"], 6) >= round(ledger["target_profit"], 6)
-            and len(ledger["qualifying_days"]) >= int(self._prop_profile["min_trading_days"])
-        )
+        target_hit = round(ledger["counted_profit"], 6) >= round(
+            ledger["target_profit"], 6
+        ) and len(ledger["qualifying_days"]) >= int(self._prop_profile["min_trading_days"])
         if target_hit and self.prop_milestone_pass_dt is None:
             self.prop_milestone_pass_dt = _to_utc(current_time)
 
@@ -1466,7 +1512,9 @@ class PropParityBacktesting(Backtesting):
             self.prop_rules_paused = False
             self.prop_rules_pause_reason = None
 
-    def _emergency_close_all(self, current_time: datetime, reason: str, use_low: bool = False) -> None:
+    def _emergency_close_all(
+        self, current_time: datetime, reason: str, use_low: bool = False
+    ) -> None:
         if self.prop_halted:
             return
         self.prop_halted = True
@@ -1496,9 +1544,7 @@ class PropParityBacktesting(Backtesting):
                 None,
             )
             self._run_funding_fees(tr, current_time, force=True)
-            exit_trade = self._exit_trade(
-                tr, fake_row, px, tr.amount, ExitType.FORCE_EXIT.value
-            )
+            exit_trade = self._exit_trade(tr, fake_row, px, tr.amount, ExitType.FORCE_EXIT.value)
             if exit_trade is not None and exit_trade.orders:
                 ord_obj = exit_trade.orders[-1]
                 self._process_exit_order(ord_obj, exit_trade, current_time, fake_row, tr.pair)
@@ -1556,7 +1602,11 @@ class PropParityBacktesting(Backtesting):
         if not eval_drawdown or self.prop_halted:
             return
 
-        if not LocalTrade.bt_trades_open and not self.prop_closed_records and not self._dynamic_shield_enabled:
+        if (
+            not LocalTrade.bt_trades_open
+            and not self.prop_closed_records
+            and not self._dynamic_shield_enabled
+        ):
             inact_days = (dt_utc - self.prop_latest_activity_dt).total_seconds() / 86400.0
             if inact_days >= 30.0:
                 self.prop_inactivity_breach = True
@@ -1601,13 +1651,17 @@ class PropParityBacktesting(Backtesting):
             if eq_close <= limits["official_overall_floor"]:
                 self.prop_official_breach_close = f"official_overall_close ({eq_close:.2f} <= {limits['official_overall_floor']:.2f})"
             elif eq_close <= limits["official_daily_floor"]:
-                self.prop_official_breach_close = f"official_daily_close ({eq_close:.2f} <= {limits['official_daily_floor']:.2f})"
+                self.prop_official_breach_close = (
+                    f"official_daily_close ({eq_close:.2f} <= {limits['official_daily_floor']:.2f})"
+                )
 
         if self.prop_official_breach_wick is None:
             if eq_wick <= limits["official_overall_floor"]:
                 self.prop_official_breach_wick = f"official_overall_wick ({eq_wick:.2f} <= {limits['official_overall_floor']:.2f})"
             elif eq_wick <= limits["official_daily_floor"]:
-                self.prop_official_breach_wick = f"official_daily_wick ({eq_wick:.2f} <= {limits['official_daily_floor']:.2f})"
+                self.prop_official_breach_wick = (
+                    f"official_daily_wick ({eq_wick:.2f} <= {limits['official_daily_floor']:.2f})"
+                )
 
         if eq_wick <= limits["official_overall_floor"]:
             self.prop_official_overall_breach_wick_bars += 1
@@ -1632,8 +1686,12 @@ class PropParityBacktesting(Backtesting):
                     agg_notional += t_val
             if slot_vals:
                 slot_vals.sort(reverse=True)
-                self.prop_max_slot_notional_observed = max(self.prop_max_slot_notional_observed, slot_vals[0])
-                self.prop_max_aggregate_notional_observed = max(self.prop_max_aggregate_notional_observed, agg_notional)
+                self.prop_max_slot_notional_observed = max(
+                    self.prop_max_slot_notional_observed, slot_vals[0]
+                )
+                self.prop_max_aggregate_notional_observed = max(
+                    self.prop_max_aggregate_notional_observed, agg_notional
+                )
                 if agg_notional > init_bal * 0.25 + 1e-6:
                     self.prop_funded_margin_gt_25pct_bars += 1
                 if agg_notional > init_bal * 2.0 + 1e-6:
@@ -1658,7 +1716,9 @@ class PropParityBacktesting(Backtesting):
             if eq_wick <= limits["operating_overall_floor"]:
                 self.prop_internal_wick_touch = f"operating_overall_wick ({eq_wick:.2f} <= {limits['operating_overall_floor']:.2f})"
             elif eq_wick <= limits["operating_daily_floor"]:
-                self.prop_internal_wick_touch = f"operating_daily_wick ({eq_wick:.2f} <= {limits['operating_daily_floor']:.2f})"
+                self.prop_internal_wick_touch = (
+                    f"operating_daily_wick ({eq_wick:.2f} <= {limits['operating_daily_floor']:.2f})"
+                )
 
         halt_reason = None
         if self._strict_wick_guard:
@@ -1779,7 +1839,11 @@ class PropParityBacktesting(Backtesting):
                     self.dataprovider._set_dataframe_max_index(pair, req_startup + row_index)
                     sigs = pair_rows._sigs
                     has_sig = sigs[raw_idx, 0] == 1 or sigs[raw_idx, 2] == 1
-                    if not pair_has_open_trades and not has_sig and pair not in pairs_with_open_trades:
+                    if (
+                        not pair_has_open_trades
+                        and not has_sig
+                        and pair not in pairs_with_open_trades
+                    ):
                         continue
                     row = pair_rows[raw_idx]
                 else:
@@ -1820,7 +1884,10 @@ class PropParityBacktesting(Backtesting):
                         row = pair_detail[0]
 
                 yield current_time, pair, row, is_last_main, trade_dir
-                if len(LocalTrade.bt_trades_open_pp[pair]) > 0 and pair not in pairs_with_open_trades:
+                if (
+                    len(LocalTrade.bt_trades_open_pp[pair]) > 0
+                    and pair not in pairs_with_open_trades
+                ):
                     pairs_with_open_trades.append(pair)
 
             # 2. Detail candle pass (idx >= 1), only when at least one pair has active detail candles
@@ -1835,14 +1902,17 @@ class PropParityBacktesting(Backtesting):
                     is_last_row = current_time_det == end_date
                     det_pairlist = list(
                         dict.fromkeys(
-                            [t.pair for t in LocalTrade.bt_trades_open] + list(signal_main_rows.keys())
+                            [t.pair for t in LocalTrade.bt_trades_open]
+                            + list(signal_main_rows.keys())
                         )
                     )
                     for pair in det_pairlist:
                         pair_has_open_trades = len(LocalTrade.bt_trades_open_pp[pair]) > 0
                         if pair in pairs_with_open_trades and not pair_has_open_trades:
                             continue
-                        if not pair_has_open_trades and not self._can_attempt_new_entry(is_last_row):
+                        if not pair_has_open_trades and not self._can_attempt_new_entry(
+                            is_last_row
+                        ):
                             continue
                         if pair not in pair_detail_cache:
                             m_row = signal_main_rows.get(pair)
@@ -1868,7 +1938,10 @@ class PropParityBacktesting(Backtesting):
                         if pair_has_open_trades and pair not in pairs_with_open_trades:
                             pairs_with_open_trades.append(pair)
                         yield current_time_det, pair, row, is_last_row, trade_dir
-                        if len(LocalTrade.bt_trades_open_pp[pair]) > 0 and pair not in pairs_with_open_trades:
+                        if (
+                            len(LocalTrade.bt_trades_open_pp[pair]) > 0
+                            and pair not in pairs_with_open_trades
+                        ):
                             pairs_with_open_trades.append(pair)
                     idx += 1
 
@@ -1927,7 +2000,12 @@ class PropParityBacktesting(Backtesting):
     def _check_adjust_trade_for_candle(
         self, trade: LocalTrade, row: tuple, current_time: datetime
     ) -> LocalTrade:
-        self.prop_latest_bars[trade.pair] = (row[OPEN_IDX], row[HIGH_IDX], row[LOW_IDX], row[CLOSE_IDX])
+        self.prop_latest_bars[trade.pair] = (
+            row[OPEN_IDX],
+            row[HIGH_IDX],
+            row[LOW_IDX],
+            row[CLOSE_IDX],
+        )
         current_rate: float = row[OPEN_IDX]
         current_profit = trade.calc_profit_ratio(current_rate)
         min_stake = self.exchange.get_min_pair_stake_amount(trade.pair, current_rate, -0.1)
@@ -2013,7 +2091,9 @@ class PropParityBacktesting(Backtesting):
 
         return trade
 
-    def _try_close_open_order(self, order, trade: LocalTrade, current_date: datetime, row: tuple) -> bool:
+    def _try_close_open_order(
+        self, order, trade: LocalTrade, current_date: datetime, row: tuple
+    ) -> bool:
         filled = super()._try_close_open_order(order, trade, current_date, row)
         if filled:
             dt_utc = _to_utc(current_date)
@@ -2021,7 +2101,9 @@ class PropParityBacktesting(Backtesting):
                 self.prop_latest_activity_dt = dt_utc
         return filled
 
-    def _process_exit_order(self, order, trade: LocalTrade, current_time: datetime, row: tuple, pair: str):
+    def _process_exit_order(
+        self, order, trade: LocalTrade, current_time: datetime, row: tuple, pair: str
+    ):
         was_open = trade.is_open
         super()._process_exit_order(order, trade, current_time, row, pair)
         if not order.ft_is_open and order.filled:
@@ -2057,7 +2139,12 @@ class PropParityBacktesting(Backtesting):
         res = super().backtest_loop(row, pair, current_time, trade_dir, effective_can_enter)
         if LocalTrade.bt_trades_open:
             # Update bar cache if pair stayed open
-            self.prop_latest_bars[pair] = (row[OPEN_IDX], row[HIGH_IDX], row[LOW_IDX], row[CLOSE_IDX])
+            self.prop_latest_bars[pair] = (
+                row[OPEN_IDX],
+                row[HIGH_IDX],
+                row[LOW_IDX],
+                row[CLOSE_IDX],
+            )
         return res
 
     def _build_cohort_result(self, end_date: datetime) -> dict[str, Any]:
@@ -2205,7 +2292,12 @@ class PropParityBacktesting(Backtesting):
                     os_res = self._build_cohort_result(end_date)
                     os_denials = os_res.get("budget_denials") or {}
                     has_hr_denial = any(
-                        k.endswith(("operating_headroom_exhausted", "insufficient_operating_headroom_for_stress_bound"))
+                        k.endswith(
+                            (
+                                "operating_headroom_exhausted",
+                                "insufficient_operating_headroom_for_stress_bound",
+                            )
+                        )
                         and v > 0
                         for k, v in os_denials.items()
                     )
@@ -2246,7 +2338,12 @@ class PropParityBacktesting(Backtesting):
             os_res = self._build_cohort_result(end_date)
             os_denials = os_res.get("budget_denials") or {}
             has_hr_denial = any(
-                k.endswith(("operating_headroom_exhausted", "insufficient_operating_headroom_for_stress_bound"))
+                k.endswith(
+                    (
+                        "operating_headroom_exhausted",
+                        "insufficient_operating_headroom_for_stress_bound",
+                    )
+                )
                 and v > 0
                 for k, v in os_denials.items()
             )
@@ -2324,10 +2421,16 @@ def _resolve_cache_dir(args: argparse.Namespace, universe: list[str]) -> Path:
     if args.cache_dir:
         base = Path(args.cache_dir)
     else:
-        scratch_root = Path("/Users/davide/.gemini/antigravity/brain/f09e073b-7450-46db-bb0e-727f475c8468/scratch")
-        root = scratch_root / "analyzed_cache" if scratch_root.exists() else REPO / ".backtest_cache"
+        scratch_root = Path(
+            "/Users/davide/.gemini/antigravity/brain/f09e073b-7450-46db-bb0e-727f475c8468/scratch"
+        )
+        root = (
+            scratch_root / "analyzed_cache" if scratch_root.exists() else REPO / ".backtest_cache"
+        )
         u_hash = hashlib.sha1(",".join(sorted(universe)).encode()).hexdigest()[:8]
-        strat_mtime = int((REPO / "user_data" / "strategies" / "NostalgiaForInfinityX8_Prop.py").stat().st_mtime)
+        strat_mtime = int(
+            (REPO / "user_data" / "strategies" / "NostalgiaForInfinityX8_Prop.py").stat().st_mtime
+        )
         base = root / f"{args.start}_{args.end}_{len(universe)}_{u_hash}_{strat_mtime}"
     base.mkdir(parents=True, exist_ok=True)
     return base
@@ -2533,6 +2636,7 @@ def _prepare_universe_cached(
         if not cache_callback_rows or timeframe != bt.timeframe or result[0].empty:
             return result
         from scripts.prop_callback_snapshot import CallbackSnapshot
+
         source = getattr(bt.dataprovider, "_DataProvider__cached_pairs", {}).get(
             (pair, timeframe, candle_def)
         )
@@ -2557,7 +2661,9 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
     schedule_meta_summary: dict[str, Any] = {}
     if args.pairlist_schedule:
         meta = json.loads(Path(args.pairlist_schedule).read_text())
-        if meta.get("zero_lookahead") is False and not getattr(args, "allow_research_schedule", False):
+        if meta.get("zero_lookahead") is False and not getattr(
+            args, "allow_research_schedule", False
+        ):
             raise OperationalException(
                 "Historical schedule is unverified: resolve instrument classification, "
                 "market-cap identity and observation-vintage evidence before benchmarking "
@@ -2636,8 +2742,10 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
     if getattr(args, "detail_array_cache", ""):
         revision_files = [Path(__file__), REPO / "scripts" / "prop_detail_array_cache.py"]
         revision_files += sorted((REPO / "freqtrade" / "data").rglob("*.py"))
-        revision = hashlib.sha256(b"".join(p.read_bytes() for p in revision_files)
-                                  + f"{pd.__version__}:{np.__version__}".encode()).hexdigest()
+        revision = hashlib.sha256(
+            b"".join(p.read_bytes() for p in revision_files)
+            + f"{pd.__version__}:{np.__version__}".encode()
+        ).hexdigest()
         bt._detail_array_cache = DetailArrayCache(args.detail_array_cache, revision)
     configure_checkpoints(bt, args, REPO, cfg["datadir"])
     cache_dir = _resolve_cache_dir(args, universe)
@@ -2724,7 +2832,15 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
                 prev_meta = prev.get("meta", {})
                 same_run = all(
                     prev_meta.get(k) == suite_meta.get(k)
-                    for k in ("schema_version", "start", "end", "universe_size", "timeframe_detail", "cohort_step_days", "applied_candidate")
+                    for k in (
+                        "schema_version",
+                        "start",
+                        "end",
+                        "universe_size",
+                        "timeframe_detail",
+                        "cohort_step_days",
+                        "applied_candidate",
+                    )
                 )
                 if same_run and isinstance(prev.get("scenarios"), dict):
                     suite_out["scenarios"] = prev["scenarios"]
@@ -2839,7 +2955,9 @@ def _summarize_trades(trades: list[LocalTrade]) -> dict[str, Any]:
         "max_single_dca_notional_usdt": max(dca_sizes, default=0.0),
         "by_month": dict(sorted(by_month.items())),
         "by_enter_tag": dict(sorted(by_tag.items(), key=lambda kv: kv[1]["pnl"], reverse=True)),
-        "by_exit_reason": dict(sorted(by_exit.items(), key=lambda kv: kv[1]["trades"], reverse=True)),
+        "by_exit_reason": dict(
+            sorted(by_exit.items(), key=lambda kv: kv[1]["trades"], reverse=True)
+        ),
         "by_pair": dict(sorted(by_pair.items())),
         "top_15_pairs": top_pairs,
         "worst_15_pairs": worst_pairs,
@@ -2888,13 +3006,15 @@ def _run_continuous_pass(
     cont_eq = float(bt.wallets.get_total(cfg["stake_currency"]))
     # Include the final (possibly halted or partial) UTC day in withdrawal risk analysis.
     if not bt.prop_daily_curve or bt.prop_daily_curve[-1]["date"] != bt.prop_current_day:
-        bt.prop_daily_curve.append({
-            "date": bt.prop_current_day,
-            "midnight_equity": cont_eq,
-            "min_day_equity_wick": min(bt.prop_min_day_equity_wick, cont_eq),
-            "partial_day": True,
-            "open_trades": len(LocalTrade.bt_trades_open),
-        })
+        bt.prop_daily_curve.append(
+            {
+                "date": bt.prop_current_day,
+                "midnight_equity": cont_eq,
+                "min_day_equity_wick": min(bt.prop_min_day_equity_wick, cont_eq),
+                "partial_day": True,
+                "open_trades": len(LocalTrade.bt_trades_open),
+            }
+        )
     trades_sample = [
         {
             "pair": t.pair,
@@ -2933,7 +3053,9 @@ def _run_continuous_pass(
         "qualifying_days": len(bt._cached_ledger["qualifying_days"]),
         "total_trades": len(LocalTrade.bt_trades),
         "win_trades": sum(1 for t in LocalTrade.bt_trades if (t.close_profit_abs or 0) > 0),
-        "total_funding_fees": round(sum(float(t.funding_fees or 0) for t in LocalTrade.bt_trades), 2),
+        "total_funding_fees": round(
+            sum(float(t.funding_fees or 0) for t in LocalTrade.bt_trades), 2
+        ),
         "max_daily_dd_close": round(bt.prop_max_daily_dd_close, 2),
         "max_daily_dd_wick": round(bt.prop_max_daily_dd_wick, 2),
         "max_overall_dd_close": round(bt.prop_max_overall_dd_close, 2),
@@ -3033,7 +3155,8 @@ def simulate_funded_withdrawals(
 
     return {
         "method": "counterfactual_daily_equity_offset_not_execution_replay",
-        "wick_coverage_complete": all("min_day_equity_wick" in r for r in daily_curve) and bool(daily_curve),
+        "wick_coverage_complete": all("min_day_equity_wick" in r for r in daily_curve)
+        and bool(daily_curve),
         "static_overall_floor_usdt": round(static_floor, 2),
         "reset_5250_to_5000": _run_policy(initial_balance + payout_amount),
         "buffer_5450_to_5200": _run_policy(initial_balance + 200.0 + payout_amount),
@@ -3084,7 +3207,9 @@ def run_sequential_program_cohorts(
     memo: dict[tuple[Any, ...], Any] = phase_memo if phase_memo is not None else {}
     has_dual_runner = hasattr(bt, "run_dual_eval_cohort")
 
-    def _run_phase_memoized(prof: dict[str, Any], s_start: datetime, s_end: datetime) -> dict[str, Any]:
+    def _run_phase_memoized(
+        prof: dict[str, Any], s_start: datetime, s_end: datetime
+    ) -> dict[str, Any]:
         u_start = _to_utc(s_start)
         u_end = _to_utc(s_end)
         exact_key = ("phase", prof["profile_id"], prof["phase_id"], u_start, u_end)
@@ -3097,8 +3222,12 @@ def run_sequential_program_cohorts(
             clean_key = ("funded_clean", u_start, u_end)
             if clean_key in memo:
                 res = copy.deepcopy(memo[clean_key])
-                bt.prop_pass_dt = datetime.fromisoformat(res["pass_dt"]) if res.get("pass_dt") else None
-                bt.prop_halt_dt = datetime.fromisoformat(res["halt_dt"]) if res.get("halt_dt") else None
+                bt.prop_pass_dt = (
+                    datetime.fromisoformat(res["pass_dt"]) if res.get("pass_dt") else None
+                )
+                bt.prop_halt_dt = (
+                    datetime.fromisoformat(res["halt_dt"]) if res.get("halt_dt") else None
+                )
                 return res
         bt._prop_profile = copy.deepcopy(prof)
         res = bt.run_cached_cohort(ohclv_lists, analyzed_dfs, s_start, s_end)
@@ -3106,7 +3235,12 @@ def run_sequential_program_cohorts(
         if prof["phase_id"] == "funded" and prof["profile_id"] == "hyro_one_step_funded":
             denials = res.get("budget_denials") or {}
             has_hr_denial = any(
-                k.endswith(("operating_headroom_exhausted", "insufficient_operating_headroom_for_stress_bound"))
+                k.endswith(
+                    (
+                        "operating_headroom_exhausted",
+                        "insufficient_operating_headroom_for_stress_bound",
+                    )
+                )
                 and v > 0
                 for k, v in denials.items()
             )
@@ -3164,7 +3298,11 @@ def run_sequential_program_cohorts(
                         os_q_days + float(prev_os_funded["days_elapsed"]),
                         2,
                     )
-                    if (os_q_days is not None and prev_os_funded and prev_os_funded["outcome"] == "PASS")
+                    if (
+                        os_q_days is not None
+                        and prev_os_funded
+                        and prev_os_funded["outcome"] == "PASS"
+                    )
                     else None
                 )
                 os_row = dict(prev_os_row)
@@ -3178,7 +3316,9 @@ def run_sequential_program_cohorts(
                 if dual_key in memo:
                     os_eval, ts_p1_from_dual = copy.deepcopy(memo[dual_key])
                     bt.prop_pass_dt = (
-                        datetime.fromisoformat(os_eval["pass_dt"]) if os_eval.get("pass_dt") else None
+                        datetime.fromisoformat(os_eval["pass_dt"])
+                        if os_eval.get("pass_dt")
+                        else None
                     )
                 elif has_dual_runner:
                     os_eval, ts_p1_from_dual = bt.run_dual_eval_cohort(
@@ -3191,7 +3331,9 @@ def run_sequential_program_cohorts(
                     )
                     memo[dual_key] = (copy.deepcopy(os_eval), copy.deepcopy(ts_p1_from_dual))
                     bt.prop_pass_dt = (
-                        datetime.fromisoformat(os_eval["pass_dt"]) if os_eval.get("pass_dt") else None
+                        datetime.fromisoformat(os_eval["pass_dt"])
+                        if os_eval.get("pass_dt")
+                        else None
                     )
                 else:
                     os_eval = _run_phase_memoized(profs["one_step_eval"], s_dt, max_date)
@@ -3202,17 +3344,23 @@ def run_sequential_program_cohorts(
                     if f_start < _to_utc(max_date):
                         os_funded = _run_phase_memoized(profs["one_step_funded"], f_start, max_date)
                         if os_funded["outcome"] == "PASS":
-                            os_days_to_payout = round(os_eval["days_elapsed"] + os_funded["days_elapsed"], 2)
+                            os_days_to_payout = round(
+                                os_eval["days_elapsed"] + os_funded["days_elapsed"], 2
+                            )
                 os_row = {
                     "cohort_start": s_day_str,
                     "eval_outcome": os_eval["outcome"],
-                    "days_to_qualify": os_eval["days_elapsed"] if os_eval["outcome"] == "PASS" else None,
+                    "days_to_qualify": os_eval["days_elapsed"]
+                    if os_eval["outcome"] == "PASS"
+                    else None,
                     "funded_1st_payout_outcome": os_funded["outcome"] if os_funded else None,
                     "days_to_first_payout": os_days_to_payout,
                     "max_daily_dd_wick": os_eval["max_daily_dd_wick"],
                     "max_overall_dd_wick": os_eval["max_overall_dd_wick"],
                     "official_daily_breach_wick_bars": os_eval["official_daily_breach_wick_bars"],
-                    "official_overall_breach_wick_bars": os_eval["official_overall_breach_wick_bars"],
+                    "official_overall_breach_wick_bars": os_eval[
+                        "official_overall_breach_wick_bars"
+                    ],
                     "shock_1coin_50_breach_bars": os_eval["shock_1coin_50_breach_bars"],
                 }
                 one_step_cohorts.append(os_row)
@@ -3240,12 +3388,23 @@ def run_sequential_program_cohorts(
                 ts_row = dict(prev_ts_row)
                 ts_row["cohort_start"] = s_day_str
                 if ts_row["p1_days"] is not None:
-                    ts_row["p1_days"] = round(max(0.0, float(prev_ts_row["p1_days"]) - delta_days), 2)
+                    ts_row["p1_days"] = round(
+                        max(0.0, float(prev_ts_row["p1_days"]) - delta_days), 2
+                    )
                 if ts_row["days_to_qualify"] is not None and ts_row["p2_days"] is not None:
-                    ts_row["days_to_qualify"] = round(float(ts_row["p1_days"]) + float(ts_row["p2_days"]), 2)
-                if ts_row["days_to_first_payout"] is not None and prev_ts_row["days_to_qualify"] is not None:
-                    funded_d = float(prev_ts_row["days_to_first_payout"]) - float(prev_ts_row["days_to_qualify"])
-                    ts_row["days_to_first_payout"] = round(float(ts_row["days_to_qualify"]) + funded_d, 2)
+                    ts_row["days_to_qualify"] = round(
+                        float(ts_row["p1_days"]) + float(ts_row["p2_days"]), 2
+                    )
+                if (
+                    ts_row["days_to_first_payout"] is not None
+                    and prev_ts_row["days_to_qualify"] is not None
+                ):
+                    funded_d = float(prev_ts_row["days_to_first_payout"]) - float(
+                        prev_ts_row["days_to_qualify"]
+                    )
+                    ts_row["days_to_first_payout"] = round(
+                        float(ts_row["days_to_qualify"]) + funded_d, 2
+                    )
                 two_step_cohorts.append(ts_row)
                 ts_outcome = ts_row["eval_outcome"]
             else:
@@ -3255,9 +3414,16 @@ def run_sequential_program_cohorts(
                         datetime.fromisoformat(ts_p1["pass_dt"]) if ts_p1.get("pass_dt") else None
                     )
                 else:
-                    os_denials = (os_eval.get("budget_denials") or {}) if os_eval is not None else {}
+                    os_denials = (
+                        (os_eval.get("budget_denials") or {}) if os_eval is not None else {}
+                    )
                     has_headroom_denial = any(
-                        k.endswith(("operating_headroom_exhausted", "insufficient_operating_headroom_for_stress_bound"))
+                        k.endswith(
+                            (
+                                "operating_headroom_exhausted",
+                                "insufficient_operating_headroom_for_stress_bound",
+                            )
+                        )
                         and v > 0
                         for k, v in os_denials.items()
                     )
@@ -3279,7 +3445,9 @@ def run_sequential_program_cohorts(
                     if can_reuse_os_as_p1:
                         ts_p1 = dict(os_eval)
                         bt.prop_pass_dt = (
-                            datetime.fromisoformat(ts_p1["pass_dt"]) if ts_p1.get("pass_dt") else None
+                            datetime.fromisoformat(ts_p1["pass_dt"])
+                            if ts_p1.get("pass_dt")
+                            else None
                         )
                     else:
                         ts_p1 = _run_phase_memoized(profs["two_step_phase1"], s_dt, max_date)
@@ -3294,12 +3462,18 @@ def run_sequential_program_cohorts(
                         ts_p2 = _run_phase_memoized(profs["two_step_phase2"], p2_start, max_date)
                         ts_outcome = ts_p2["outcome"]
                         if ts_p2["outcome"] == "PASS" and bt.prop_pass_dt is not None:
-                            ts_days_to_qualify = round(ts_p1["days_elapsed"] + ts_p2["days_elapsed"], 2)
+                            ts_days_to_qualify = round(
+                                ts_p1["days_elapsed"] + ts_p2["days_elapsed"], 2
+                            )
                             f_start = _to_utc(bt.prop_pass_dt) + timedelta(minutes=5)
                             if f_start < _to_utc(max_date):
-                                ts_funded = _run_phase_memoized(profs["two_step_funded"], f_start, max_date)
+                                ts_funded = _run_phase_memoized(
+                                    profs["two_step_funded"], f_start, max_date
+                                )
                                 if ts_funded["outcome"] == "PASS":
-                                    ts_days_to_payout = round(ts_days_to_qualify + ts_funded["days_elapsed"], 2)
+                                    ts_days_to_payout = round(
+                                        ts_days_to_qualify + ts_funded["days_elapsed"], 2
+                                    )
                     else:
                         ts_outcome = "OPEN_END"
                 ts_row = {
@@ -3307,16 +3481,25 @@ def run_sequential_program_cohorts(
                     "p1_outcome": ts_p1["outcome"],
                     "p1_days": ts_p1["days_elapsed"] if ts_p1["outcome"] == "PASS" else None,
                     "p2_outcome": ts_p2["outcome"] if ts_p2 else None,
-                    "p2_days": ts_p2["days_elapsed"] if (ts_p2 and ts_p2["outcome"] == "PASS") else None,
+                    "p2_days": ts_p2["days_elapsed"]
+                    if (ts_p2 and ts_p2["outcome"] == "PASS")
+                    else None,
                     "eval_outcome": ts_outcome,
                     "days_to_qualify": ts_days_to_qualify,
                     "funded_1st_payout_outcome": ts_funded["outcome"] if ts_funded else None,
                     "days_to_first_payout": ts_days_to_payout,
-                    "max_daily_dd_wick": max(ts_p1["max_daily_dd_wick"], ts_p2["max_daily_dd_wick"] if ts_p2 else 0.0),
-                    "max_overall_dd_wick": max(ts_p1["max_overall_dd_wick"], ts_p2["max_overall_dd_wick"] if ts_p2 else 0.0),
-                    "official_daily_breach_wick_bars": ts_p1["official_daily_breach_wick_bars"] + (ts_p2["official_daily_breach_wick_bars"] if ts_p2 else 0),
-                    "official_overall_breach_wick_bars": ts_p1["official_overall_breach_wick_bars"] + (ts_p2["official_overall_breach_wick_bars"] if ts_p2 else 0),
-                    "shock_1coin_50_breach_bars": ts_p1["shock_1coin_50_breach_bars"] + (ts_p2["shock_1coin_50_breach_bars"] if ts_p2 else 0),
+                    "max_daily_dd_wick": max(
+                        ts_p1["max_daily_dd_wick"], ts_p2["max_daily_dd_wick"] if ts_p2 else 0.0
+                    ),
+                    "max_overall_dd_wick": max(
+                        ts_p1["max_overall_dd_wick"], ts_p2["max_overall_dd_wick"] if ts_p2 else 0.0
+                    ),
+                    "official_daily_breach_wick_bars": ts_p1["official_daily_breach_wick_bars"]
+                    + (ts_p2["official_daily_breach_wick_bars"] if ts_p2 else 0),
+                    "official_overall_breach_wick_bars": ts_p1["official_overall_breach_wick_bars"]
+                    + (ts_p2["official_overall_breach_wick_bars"] if ts_p2 else 0),
+                    "shock_1coin_50_breach_bars": ts_p1["shock_1coin_50_breach_bars"]
+                    + (ts_p2["shock_1coin_50_breach_bars"] if ts_p2 else 0),
                 }
                 two_step_cohorts.append(ts_row)
                 fe_ts_iso = ts_p1.get("first_enter_attempt_ts")
@@ -3327,8 +3510,11 @@ def run_sequential_program_cohorts(
                 prev_ts_row = ts_row
             logger.info(
                 "Sequential cohort %d/%d completed in %.1fs: one-step=%s two-step=%s",
-                cohort_index, len(start_dates), time.monotonic() - cohort_started,
-                os_eval_outcome, ts_outcome,
+                cohort_index,
+                len(start_dates),
+                time.monotonic() - cohort_started,
+                os_eval_outcome,
+                ts_outcome,
             )
     finally:
         bt._prop_profile = saved_profile
@@ -3339,7 +3525,9 @@ def run_sequential_program_cohorts(
     def _summarize_seq(rows: list[dict[str, Any]]) -> dict[str, Any]:
         n = len(rows)
         q_days = [float(r["days_to_qualify"]) for r in rows if r["days_to_qualify"] is not None]
-        p_days = [float(r["days_to_first_payout"]) for r in rows if r["days_to_first_payout"] is not None]
+        p_days = [
+            float(r["days_to_first_payout"]) for r in rows if r["days_to_first_payout"] is not None
+        ]
         return {
             "total_cohorts": n,
             "qualified_count": len(q_days),
@@ -3347,17 +3535,29 @@ def run_sequential_program_cohorts(
             "first_payout_count": len(p_days),
             "first_payout_rate_pct": round(100.0 * len(p_days) / n, 1) if n else 0.0,
             "fail_official": sum(1 for r in rows if r["eval_outcome"] == "FAIL_OFFICIAL"),
-            "fail_inactivity_30d": sum(1 for r in rows if r["eval_outcome"] == "FAIL_INACTIVITY_30D"),
-            "halt_internal_guard": sum(1 for r in rows if r["eval_outcome"] == "HALT_INTERNAL_GUARD"),
+            "fail_inactivity_30d": sum(
+                1 for r in rows if r["eval_outcome"] == "FAIL_INACTIVITY_30D"
+            ),
+            "halt_internal_guard": sum(
+                1 for r in rows if r["eval_outcome"] == "HALT_INTERNAL_GUARD"
+            ),
             "open_end": sum(1 for r in rows if r["eval_outcome"] == "OPEN_END"),
             "median_days_to_qualify": round(statistics.median(q_days), 1) if q_days else None,
             "p95_days_to_qualify": _percentile(q_days, 95.0),
             "median_days_to_first_payout": round(statistics.median(p_days), 1) if p_days else None,
             "p95_days_to_first_payout": _percentile(p_days, 95.0),
-            "worst_daily_dd_wick": round(max((r["max_daily_dd_wick"] for r in rows), default=0.0), 2),
-            "worst_overall_dd_wick": round(max((r["max_overall_dd_wick"] for r in rows), default=0.0), 2),
-            "total_official_daily_breach_wick_bars": sum(r["official_daily_breach_wick_bars"] for r in rows),
-            "total_official_overall_breach_wick_bars": sum(r["official_overall_breach_wick_bars"] for r in rows),
+            "worst_daily_dd_wick": round(
+                max((r["max_daily_dd_wick"] for r in rows), default=0.0), 2
+            ),
+            "worst_overall_dd_wick": round(
+                max((r["max_overall_dd_wick"] for r in rows), default=0.0), 2
+            ),
+            "total_official_daily_breach_wick_bars": sum(
+                r["official_daily_breach_wick_bars"] for r in rows
+            ),
+            "total_official_overall_breach_wick_bars": sum(
+                r["official_overall_breach_wick_bars"] for r in rows
+            ),
             "total_shock_1coin_50_breach_bars": sum(r["shock_1coin_50_breach_bars"] for r in rows),
         }
 
@@ -3387,7 +3587,9 @@ def _can_derive_two_step_funded_from_one_step(res: dict[str, Any]) -> bool:
         return False
     denials = res.get("budget_denials") or {}
     return not any(
-        k.endswith(("operating_headroom_exhausted", "insufficient_operating_headroom_for_stress_bound"))
+        k.endswith(
+            ("operating_headroom_exhausted", "insufficient_operating_headroom_for_stress_bound")
+        )
         and v > 0
         for k, v in denials.items()
     )
@@ -3493,9 +3695,17 @@ def _execute_scenario(
         )
     else:
         continuous_funded_two_step_summary = _run_continuous_pass(
-            bt, cfg, funded_profiles["two_step_funded"], ohclv_lists, analyzed_dfs,
-            min_date, max_date, universe_size=universe_size, name=name,
-            slippage_bps=slippage_bps, strict_wick_guard=strict_wick_guard,
+            bt,
+            cfg,
+            funded_profiles["two_step_funded"],
+            ohclv_lists,
+            analyzed_dfs,
+            min_date,
+            max_date,
+            universe_size=universe_size,
+            name=name,
+            slippage_bps=slippage_bps,
+            strict_wick_guard=strict_wick_guard,
             ignore_target_pause=True,
         )
     bt._prop_profile = copy.deepcopy(profile)
@@ -3537,7 +3747,11 @@ def _execute_scenario(
         ts_d_guard = float(bt._prop_policy.get("_two_step_daily_guard", 0.043))
         ts_m_guard = float(bt._prop_policy.get("_two_step_max_guard", 0.080))
         program_comparison = run_sequential_program_cohorts(
-            bt, ohclv_lists, analyzed_dfs, cohort_starts, max_date,
+            bt,
+            ohclv_lists,
+            analyzed_dfs,
+            cohort_starts,
+            max_date,
             initial_balance=float(profile["initial_balance"]),
             one_step_daily_guard=os_d_guard,
             one_step_max_guard=os_m_guard,
@@ -3555,14 +3769,22 @@ def _execute_scenario(
         )
         crash_w_start = datetime(2026, 9, 15, tzinfo=UTC)
         crash_w_end = datetime(2026, 11, 10, tzinfo=UTC)
-        if (not skip_crash_sweep) and _to_utc(min_date) <= crash_w_start and _to_utc(max_date) >= crash_w_end:
+        if (
+            (not skip_crash_sweep)
+            and _to_utc(min_date) <= crash_w_start
+            and _to_utc(max_date) >= crash_w_end
+        ):
             daily_starts: list[datetime] = []
             d_cur = crash_w_start
             while d_cur <= crash_w_end:
                 daily_starts.append(d_cur)
                 d_cur += timedelta(days=1)
             autumn_crash_sweep = run_sequential_program_cohorts(
-                bt, ohclv_lists, analyzed_dfs, daily_starts, max_date,
+                bt,
+                ohclv_lists,
+                analyzed_dfs,
+                daily_starts,
+                max_date,
                 initial_balance=float(profile["initial_balance"]),
                 one_step_daily_guard=os_d_guard,
                 one_step_max_guard=os_m_guard,
@@ -3586,10 +3808,18 @@ def _execute_scenario(
         "p95_days_to_pass": _percentile(pass_days, 95.0),
         "min_days_to_pass": round(min(pass_days), 1) if pass_days else None,
         "max_days_to_pass": round(max(pass_days), 1) if pass_days else None,
-        "worst_daily_dd_close": round(max((c["max_daily_dd_close"] for c in cohorts), default=0.0), 2),
-        "worst_daily_dd_wick": round(max((c["max_daily_dd_wick"] for c in cohorts), default=0.0), 2),
-        "worst_overall_dd_close": round(max((c["max_overall_dd_close"] for c in cohorts), default=0.0), 2),
-        "worst_overall_dd_wick": round(max((c["max_overall_dd_wick"] for c in cohorts), default=0.0), 2),
+        "worst_daily_dd_close": round(
+            max((c["max_daily_dd_close"] for c in cohorts), default=0.0), 2
+        ),
+        "worst_daily_dd_wick": round(
+            max((c["max_daily_dd_wick"] for c in cohorts), default=0.0), 2
+        ),
+        "worst_overall_dd_close": round(
+            max((c["max_overall_dd_close"] for c in cohorts), default=0.0), 2
+        ),
+        "worst_overall_dd_wick": round(
+            max((c["max_overall_dd_wick"] for c in cohorts), default=0.0), 2
+        ),
     }
     return {
         "continuous": continuous_summary,
@@ -3605,35 +3835,275 @@ def _execute_scenario(
 
 DEFAULT_MONEY_GRID: list[dict[str, Any]] = [
     # --- A. 2 CRYPTO SIMULTANEE (da ultra-prudente $750 fino a $1.200 sotto limite Funded $1.250) ---
-    {"id": "S2_E255_SLOT375_AGG750", "max_open_trades": 2, "stake_amount": 255.0, "max_slot_notional_usdt": 375.0, "max_aggregate_notional_usdt": 750.0, "guard": "standard", "macro": "standard", "dynamic_shield": False, "headroom_mode": "standard"},
-    {"id": "S2_E275_SLOT400_AGG850", "max_open_trades": 2, "stake_amount": 275.0, "max_slot_notional_usdt": 400.0, "max_aggregate_notional_usdt": 850.0, "guard": "standard", "macro": "standard", "dynamic_shield": False, "headroom_mode": "standard"},
-    {"id": "S2_E275_SLOT475_AGG950", "max_open_trades": 2, "stake_amount": 275.0, "max_slot_notional_usdt": 475.0, "max_aggregate_notional_usdt": 950.0, "guard": "standard", "macro": "standard", "dynamic_shield": False, "headroom_mode": "standard"},
-    {"id": "S2_E300_SLOT550_AGG1100", "max_open_trades": 2, "stake_amount": 300.0, "max_slot_notional_usdt": 550.0, "max_aggregate_notional_usdt": 1100.0, "guard": "standard", "macro": "standard", "dynamic_shield": False, "headroom_mode": "standard"},
-    {"id": "S2_E350_SLOT600_AGG1200", "max_open_trades": 2, "stake_amount": 350.0, "max_slot_notional_usdt": 600.0, "max_aggregate_notional_usdt": 1200.0, "guard": "standard", "macro": "standard", "dynamic_shield": False, "headroom_mode": "standard"},
+    {
+        "id": "S2_E255_SLOT375_AGG750",
+        "max_open_trades": 2,
+        "stake_amount": 255.0,
+        "max_slot_notional_usdt": 375.0,
+        "max_aggregate_notional_usdt": 750.0,
+        "guard": "standard",
+        "macro": "standard",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
+    {
+        "id": "S2_E275_SLOT400_AGG850",
+        "max_open_trades": 2,
+        "stake_amount": 275.0,
+        "max_slot_notional_usdt": 400.0,
+        "max_aggregate_notional_usdt": 850.0,
+        "guard": "standard",
+        "macro": "standard",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
+    {
+        "id": "S2_E275_SLOT475_AGG950",
+        "max_open_trades": 2,
+        "stake_amount": 275.0,
+        "max_slot_notional_usdt": 475.0,
+        "max_aggregate_notional_usdt": 950.0,
+        "guard": "standard",
+        "macro": "standard",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
+    {
+        "id": "S2_E300_SLOT550_AGG1100",
+        "max_open_trades": 2,
+        "stake_amount": 300.0,
+        "max_slot_notional_usdt": 550.0,
+        "max_aggregate_notional_usdt": 1100.0,
+        "guard": "standard",
+        "macro": "standard",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
+    {
+        "id": "S2_E350_SLOT600_AGG1200",
+        "max_open_trades": 2,
+        "stake_amount": 350.0,
+        "max_slot_notional_usdt": 600.0,
+        "max_aggregate_notional_usdt": 1200.0,
+        "guard": "standard",
+        "macro": "standard",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
     # --- B. 3 CRYPTO SIMULTANEE (da entry $155<$250 fino a $275/$1.200 + baseline unlimited) ---
-    {"id": "S3_E155_SLOT350_AGG850", "max_open_trades": 3, "stake_amount": 155.0, "max_slot_notional_usdt": 350.0, "max_aggregate_notional_usdt": 850.0, "guard": "standard", "macro": "standard", "dynamic_shield": False, "headroom_mode": "standard"},
-    {"id": "S3_E200_SLOT350_AGG850", "max_open_trades": 3, "stake_amount": 200.0, "max_slot_notional_usdt": 350.0, "max_aggregate_notional_usdt": 850.0, "guard": "standard", "macro": "standard", "dynamic_shield": False, "headroom_mode": "standard"},
-    {"id": "S3_E200_SLOT400_AGG950", "max_open_trades": 3, "stake_amount": 200.0, "max_slot_notional_usdt": 400.0, "max_aggregate_notional_usdt": 950.0, "guard": "standard", "macro": "standard", "dynamic_shield": False, "headroom_mode": "standard"},
-    {"id": "S3_E255_SLOT350_AGG950", "max_open_trades": 3, "stake_amount": 255.0, "max_slot_notional_usdt": 350.0, "max_aggregate_notional_usdt": 950.0, "guard": "standard", "macro": "standard", "dynamic_shield": False, "headroom_mode": "standard"},
-    {"id": "S3_E255_SLOT400_AGG950", "max_open_trades": 3, "stake_amount": 255.0, "max_slot_notional_usdt": 400.0, "max_aggregate_notional_usdt": 950.0, "guard": "standard", "macro": "standard", "dynamic_shield": False, "headroom_mode": "standard"},
-    {"id": "S3_E255_SLOT450_AGG1100", "max_open_trades": 3, "stake_amount": 255.0, "max_slot_notional_usdt": 450.0, "max_aggregate_notional_usdt": 1100.0, "guard": "standard", "macro": "standard", "dynamic_shield": False, "headroom_mode": "standard"},
-    {"id": "S3_E275_SLOT500_AGG1200", "max_open_trades": 3, "stake_amount": 275.0, "max_slot_notional_usdt": 500.0, "max_aggregate_notional_usdt": 1200.0, "guard": "standard", "macro": "standard", "dynamic_shield": False, "headroom_mode": "standard"},
-    {"id": "S3_UNLIM_SLOT500_AGG950", "max_open_trades": 3, "stake_amount": "unlimited", "max_slot_notional_usdt": 500.0, "max_aggregate_notional_usdt": 950.0, "guard": "standard", "macro": "standard", "dynamic_shield": False, "headroom_mode": "standard"},
+    {
+        "id": "S3_E155_SLOT350_AGG850",
+        "max_open_trades": 3,
+        "stake_amount": 155.0,
+        "max_slot_notional_usdt": 350.0,
+        "max_aggregate_notional_usdt": 850.0,
+        "guard": "standard",
+        "macro": "standard",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
+    {
+        "id": "S3_E200_SLOT350_AGG850",
+        "max_open_trades": 3,
+        "stake_amount": 200.0,
+        "max_slot_notional_usdt": 350.0,
+        "max_aggregate_notional_usdt": 850.0,
+        "guard": "standard",
+        "macro": "standard",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
+    {
+        "id": "S3_E200_SLOT400_AGG950",
+        "max_open_trades": 3,
+        "stake_amount": 200.0,
+        "max_slot_notional_usdt": 400.0,
+        "max_aggregate_notional_usdt": 950.0,
+        "guard": "standard",
+        "macro": "standard",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
+    {
+        "id": "S3_E255_SLOT350_AGG950",
+        "max_open_trades": 3,
+        "stake_amount": 255.0,
+        "max_slot_notional_usdt": 350.0,
+        "max_aggregate_notional_usdt": 950.0,
+        "guard": "standard",
+        "macro": "standard",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
+    {
+        "id": "S3_E255_SLOT400_AGG950",
+        "max_open_trades": 3,
+        "stake_amount": 255.0,
+        "max_slot_notional_usdt": 400.0,
+        "max_aggregate_notional_usdt": 950.0,
+        "guard": "standard",
+        "macro": "standard",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
+    {
+        "id": "S3_E255_SLOT450_AGG1100",
+        "max_open_trades": 3,
+        "stake_amount": 255.0,
+        "max_slot_notional_usdt": 450.0,
+        "max_aggregate_notional_usdt": 1100.0,
+        "guard": "standard",
+        "macro": "standard",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
+    {
+        "id": "S3_E275_SLOT500_AGG1200",
+        "max_open_trades": 3,
+        "stake_amount": 275.0,
+        "max_slot_notional_usdt": 500.0,
+        "max_aggregate_notional_usdt": 1200.0,
+        "guard": "standard",
+        "macro": "standard",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
+    {
+        "id": "S3_UNLIM_SLOT500_AGG950",
+        "max_open_trades": 3,
+        "stake_amount": "unlimited",
+        "max_slot_notional_usdt": 500.0,
+        "max_aggregate_notional_usdt": 950.0,
+        "guard": "standard",
+        "macro": "standard",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
     # --- C. 4 CRYPTO SIMULTANEE (massima diversificazione dentro cap Funded $1.200) ---
-    {"id": "S4_E155_SLOT350_AGG950", "max_open_trades": 4, "stake_amount": 155.0, "max_slot_notional_usdt": 350.0, "max_aggregate_notional_usdt": 950.0, "guard": "standard", "macro": "standard", "dynamic_shield": False, "headroom_mode": "standard"},
-    {"id": "S4_E200_SLOT350_AGG1100", "max_open_trades": 4, "stake_amount": 200.0, "max_slot_notional_usdt": 350.0, "max_aggregate_notional_usdt": 1100.0, "guard": "standard", "macro": "standard", "dynamic_shield": False, "headroom_mode": "standard"},
-    {"id": "S4_E255_SLOT400_AGG1200", "max_open_trades": 4, "stake_amount": 255.0, "max_slot_notional_usdt": 400.0, "max_aggregate_notional_usdt": 1200.0, "guard": "standard", "macro": "standard", "dynamic_shield": False, "headroom_mode": "standard"},
+    {
+        "id": "S4_E155_SLOT350_AGG950",
+        "max_open_trades": 4,
+        "stake_amount": 155.0,
+        "max_slot_notional_usdt": 350.0,
+        "max_aggregate_notional_usdt": 950.0,
+        "guard": "standard",
+        "macro": "standard",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
+    {
+        "id": "S4_E200_SLOT350_AGG1100",
+        "max_open_trades": 4,
+        "stake_amount": 200.0,
+        "max_slot_notional_usdt": 350.0,
+        "max_aggregate_notional_usdt": 1100.0,
+        "guard": "standard",
+        "macro": "standard",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
+    {
+        "id": "S4_E255_SLOT400_AGG1200",
+        "max_open_trades": 4,
+        "stake_amount": 255.0,
+        "max_slot_notional_usdt": 400.0,
+        "max_aggregate_notional_usdt": 1200.0,
+        "guard": "standard",
+        "macro": "standard",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
     # --- D. ABLAZIONI SOGLIE STOP-LOSS GIORNALIERO/TOTALE (conservative vs standard vs near_official) ---
-    {"id": "S3_E255_SLOT400_AGG950_CONSERVATIVE", "max_open_trades": 3, "stake_amount": 255.0, "max_slot_notional_usdt": 400.0, "max_aggregate_notional_usdt": 950.0, "guard": "conservative", "macro": "standard", "dynamic_shield": False, "headroom_mode": "standard"},
-    {"id": "S3_E255_SLOT400_AGG950_NEARGUARD", "max_open_trades": 3, "stake_amount": 255.0, "max_slot_notional_usdt": 400.0, "max_aggregate_notional_usdt": 950.0, "guard": "near_official", "macro": "standard", "dynamic_shield": False, "headroom_mode": "standard"},
-    {"id": "S3_E275_SLOT500_AGG1200_NEARGUARD", "max_open_trades": 3, "stake_amount": 275.0, "max_slot_notional_usdt": 500.0, "max_aggregate_notional_usdt": 1200.0, "guard": "near_official", "macro": "standard", "dynamic_shield": False, "headroom_mode": "standard"},
+    {
+        "id": "S3_E255_SLOT400_AGG950_CONSERVATIVE",
+        "max_open_trades": 3,
+        "stake_amount": 255.0,
+        "max_slot_notional_usdt": 400.0,
+        "max_aggregate_notional_usdt": 950.0,
+        "guard": "conservative",
+        "macro": "standard",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
+    {
+        "id": "S3_E255_SLOT400_AGG950_NEARGUARD",
+        "max_open_trades": 3,
+        "stake_amount": 255.0,
+        "max_slot_notional_usdt": 400.0,
+        "max_aggregate_notional_usdt": 950.0,
+        "guard": "near_official",
+        "macro": "standard",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
+    {
+        "id": "S3_E275_SLOT500_AGG1200_NEARGUARD",
+        "max_open_trades": 3,
+        "stake_amount": 275.0,
+        "max_slot_notional_usdt": 500.0,
+        "max_aggregate_notional_usdt": 1200.0,
+        "guard": "near_official",
+        "macro": "standard",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
     # --- E. ABLAZIONI PAUSA CRASH BTC (OFF vs tight -3%/-6.5% vs wide -5%/-10%) ---
-    {"id": "S3_E255_SLOT400_AGG950_MACRO_OFF", "max_open_trades": 3, "stake_amount": 255.0, "max_slot_notional_usdt": 400.0, "max_aggregate_notional_usdt": 950.0, "guard": "standard", "macro": "off", "dynamic_shield": False, "headroom_mode": "standard"},
-    {"id": "S3_E255_SLOT400_AGG950_MACRO_TIGHT", "max_open_trades": 3, "stake_amount": 255.0, "max_slot_notional_usdt": 400.0, "max_aggregate_notional_usdt": 950.0, "guard": "standard", "macro": "tight", "dynamic_shield": False, "headroom_mode": "standard"},
-    {"id": "S3_E255_SLOT400_AGG950_MACRO_WIDE", "max_open_trades": 3, "stake_amount": 255.0, "max_slot_notional_usdt": 400.0, "max_aggregate_notional_usdt": 950.0, "guard": "standard", "macro": "wide", "dynamic_shield": False, "headroom_mode": "standard"},
+    {
+        "id": "S3_E255_SLOT400_AGG950_MACRO_OFF",
+        "max_open_trades": 3,
+        "stake_amount": 255.0,
+        "max_slot_notional_usdt": 400.0,
+        "max_aggregate_notional_usdt": 950.0,
+        "guard": "standard",
+        "macro": "off",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
+    {
+        "id": "S3_E255_SLOT400_AGG950_MACRO_TIGHT",
+        "max_open_trades": 3,
+        "stake_amount": 255.0,
+        "max_slot_notional_usdt": 400.0,
+        "max_aggregate_notional_usdt": 950.0,
+        "guard": "standard",
+        "macro": "tight",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
+    {
+        "id": "S3_E255_SLOT400_AGG950_MACRO_WIDE",
+        "max_open_trades": 3,
+        "stake_amount": 255.0,
+        "max_slot_notional_usdt": 400.0,
+        "max_aggregate_notional_usdt": 950.0,
+        "guard": "standard",
+        "macro": "wide",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
     # --- F. SCUDO DINAMICO EQUITY (riduce slot se eq < $4.900) & HEADROOM BUFFER RIDOTTO ---
-    {"id": "S3_E275_SLOT500_AGG1200_SHIELD", "max_open_trades": 3, "stake_amount": 275.0, "max_slot_notional_usdt": 500.0, "max_aggregate_notional_usdt": 1200.0, "guard": "standard", "macro": "standard", "dynamic_shield": True, "headroom_mode": "standard"},
-    {"id": "S3_E255_SLOT400_AGG950_TIGHT_HEADROOM", "max_open_trades": 3, "stake_amount": 255.0, "max_slot_notional_usdt": 400.0, "max_aggregate_notional_usdt": 950.0, "guard": "standard", "macro": "standard", "dynamic_shield": False, "headroom_mode": "tight"},
+    {
+        "id": "S3_E275_SLOT500_AGG1200_SHIELD",
+        "max_open_trades": 3,
+        "stake_amount": 275.0,
+        "max_slot_notional_usdt": 500.0,
+        "max_aggregate_notional_usdt": 1200.0,
+        "guard": "standard",
+        "macro": "standard",
+        "dynamic_shield": True,
+        "headroom_mode": "standard",
+    },
+    {
+        "id": "S3_E255_SLOT400_AGG950_TIGHT_HEADROOM",
+        "max_open_trades": 3,
+        "stake_amount": 255.0,
+        "max_slot_notional_usdt": 400.0,
+        "max_aggregate_notional_usdt": 950.0,
+        "guard": "standard",
+        "macro": "standard",
+        "dynamic_shield": False,
+        "headroom_mode": "tight",
+    },
 ]
 
 
@@ -3754,7 +4224,8 @@ def run_grid_sweep(
                 and prev.get("slippage_bps_roundtrip") == args.slippage_bps
                 and prev.get("strict_wick_guard") == args.strict_wick_guard
                 and prev.get("cohort_step_days") == args.cohort_step_days
-                and (prev.get("schedule_meta") or {}).get("path") == (schedule_meta or {}).get("path")
+                and (prev.get("schedule_meta") or {}).get("path")
+                == (schedule_meta or {}).get("path")
             )
             if same_run and isinstance(prev.get("candidates"), list):
                 for row in prev["candidates"]:
@@ -3796,8 +4267,15 @@ def run_grid_sweep(
         print(f"\n=== GRID CANDIDATE {c_id}: {cand} ===", flush=True)
         _apply_candidate_money_params(bt, cfg, profile, cand)
         full_res = _execute_scenario(
-            bt, cfg, profile, ohclv_lists, analyzed_dfs, min_date, max_date,
-            universe_size=len(ohclv_lists), name=f"{c_id}_full",
+            bt,
+            cfg,
+            profile,
+            ohclv_lists,
+            analyzed_dfs,
+            min_date,
+            max_date,
+            universe_size=len(ohclv_lists),
+            name=f"{c_id}_full",
             slippage_bps=args.slippage_bps,
             strict_wick_guard=args.strict_wick_guard,
             cohort_step_days=args.cohort_step_days,
@@ -3816,15 +4294,29 @@ def run_grid_sweep(
         two_step_funded_profile = profs["two_step_funded"]
 
         train_funded = _run_continuous_pass(
-            bt, cfg, one_step_funded_profile, ohclv_lists, analyzed_dfs, _to_utc(min_date), mid_date,
-            universe_size=len(ohclv_lists), name=f"{c_id}_train",
+            bt,
+            cfg,
+            one_step_funded_profile,
+            ohclv_lists,
+            analyzed_dfs,
+            _to_utc(min_date),
+            mid_date,
+            universe_size=len(ohclv_lists),
+            name=f"{c_id}_train",
             slippage_bps=args.slippage_bps,
             strict_wick_guard=args.strict_wick_guard,
             ignore_target_pause=True,
         )
         oos_funded = _run_continuous_pass(
-            bt, cfg, one_step_funded_profile, ohclv_lists, analyzed_dfs, mid_date, _to_utc(max_date),
-            universe_size=len(ohclv_lists), name=f"{c_id}_oos",
+            bt,
+            cfg,
+            one_step_funded_profile,
+            ohclv_lists,
+            analyzed_dfs,
+            mid_date,
+            _to_utc(max_date),
+            universe_size=len(ohclv_lists),
+            name=f"{c_id}_oos",
             slippage_bps=args.slippage_bps,
             strict_wick_guard=args.strict_wick_guard,
             ignore_target_pause=True,
@@ -3843,33 +4335,53 @@ def run_grid_sweep(
                 )
             else:
                 result = _run_continuous_pass(
-                    bt, cfg, two_step_funded_profile, ohclv_lists, analyzed_dfs, window_start, window_end,
-                    universe_size=len(ohclv_lists), name=f"{c_id}_{window_name}",
-                    slippage_bps=args.slippage_bps, strict_wick_guard=args.strict_wick_guard,
+                    bt,
+                    cfg,
+                    two_step_funded_profile,
+                    ohclv_lists,
+                    analyzed_dfs,
+                    window_start,
+                    window_end,
+                    universe_size=len(ohclv_lists),
+                    name=f"{c_id}_{window_name}",
+                    slippage_bps=args.slippage_bps,
+                    strict_wick_guard=args.strict_wick_guard,
                     ignore_target_pause=True,
                 )
-            two_step_windows[window_name] = {k: v for k, v in result.items()
-                                             if k not in ("daily_curve", "trades_head", "trades_tail")}
-        bt._prop_profile = copy.deepcopy(profile)
-        results.append({
-            "candidate": cand,
-            **two_step_windows,
-            "full_2y_continuous_funded_two_step": {
-                k: v for k, v in full_res["continuous_funded_two_step"].items()
+            two_step_windows[window_name] = {
+                k: v
+                for k, v in result.items()
                 if k not in ("daily_curve", "trades_head", "trades_tail")
-            },
-            "train_1y_funded": {
-                k: v for k, v in train_funded.items() if k not in ("daily_curve", "trades_head", "trades_tail")
-            },
-            "oos_1y_funded": {
-                k: v for k, v in oos_funded.items() if k not in ("daily_curve", "trades_head", "trades_tail")
-            },
-            "full_2y_continuous_funded": {
-                k: v for k, v in full_res["continuous_funded"].items() if k not in ("daily_curve", "trades_head", "trades_tail")
-            },
-            "program_comparison": full_res["program_comparison"],
-            "autumn_2026_daily_crash_sweep": full_res["autumn_2026_daily_crash_sweep"],
-        })
+            }
+        bt._prop_profile = copy.deepcopy(profile)
+        results.append(
+            {
+                "candidate": cand,
+                **two_step_windows,
+                "full_2y_continuous_funded_two_step": {
+                    k: v
+                    for k, v in full_res["continuous_funded_two_step"].items()
+                    if k not in ("daily_curve", "trades_head", "trades_tail")
+                },
+                "train_1y_funded": {
+                    k: v
+                    for k, v in train_funded.items()
+                    if k not in ("daily_curve", "trades_head", "trades_tail")
+                },
+                "oos_1y_funded": {
+                    k: v
+                    for k, v in oos_funded.items()
+                    if k not in ("daily_curve", "trades_head", "trades_tail")
+                },
+                "full_2y_continuous_funded": {
+                    k: v
+                    for k, v in full_res["continuous_funded"].items()
+                    if k not in ("daily_curve", "trades_head", "trades_tail")
+                },
+                "program_comparison": full_res["program_comparison"],
+                "autumn_2026_daily_crash_sweep": full_res["autumn_2026_daily_crash_sweep"],
+            }
+        )
         if out_path:
             out_path.parent.mkdir(parents=True, exist_ok=True)
             tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
@@ -3887,22 +4399,32 @@ def run_grid_sweep(
 
 
 def main():
-    logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
     logger.setLevel(logging.INFO)
     logging.getLogger("NostalgiaForInfinityX8_Prop").setLevel(logging.WARNING)
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=str(REPO / "user_data" / "config_prop_nfix8.json"))
     parser.add_argument("--pairlist-schedule", default="")
-    parser.add_argument("--allow-research-schedule", action="store_true", default=False,
-                        help="Allow running schedules marked zero_lookahead=False for research sweeps (limitations recorded in JSON).")
+    parser.add_argument(
+        "--allow-research-schedule",
+        action="store_true",
+        default=False,
+        help="Allow running schedules marked zero_lookahead=False for research sweeps (limitations recorded in JSON).",
+    )
     parser.add_argument("--pairs", nargs="*", default=None)
     parser.add_argument("--start", default="2023-11-15")
     parser.add_argument("--end", default="2026-11-15")
     parser.add_argument("--timeframe-detail", default="")
     parser.add_argument("--slippage-bps", type=float, default=0.0)
     parser.add_argument("--cohort-step-days", type=int, default=7)
-    parser.add_argument("--skip-crash-sweep", action="store_true", default=False,
-                        help="Skip the 57-day daily Sep-Nov 2026 crash sweep during fast 24-candidate grid screening.")
+    parser.add_argument(
+        "--skip-crash-sweep",
+        action="store_true",
+        default=False,
+        help="Skip the 57-day daily Sep-Nov 2026 crash sweep during fast 24-candidate grid screening.",
+    )
     parser.add_argument("--limit-pairs", type=int, default=0)
     parser.add_argument("--stop-on-halt", action="store_true", default=True)
     parser.add_argument("--stop-on-pass", action="store_true", default=False)
@@ -3910,25 +4432,46 @@ def main():
     parser.add_argument("--output-json", default="")
     parser.add_argument("--suite-json", default="")
     parser.add_argument("--grid-json", default="")
-    parser.add_argument("--candidates", nargs="*", default=None,
-                        help="Optional subset of candidate IDs from DEFAULT_MONEY_GRID to run.")
+    parser.add_argument(
+        "--candidates",
+        nargs="*",
+        default=None,
+        help="Optional subset of candidate IDs from DEFAULT_MONEY_GRID to run.",
+    )
     parser.add_argument("--overwrite-suite", action="store_true", default=False)
     parser.add_argument("--cache-dir", default="")
     parser.add_argument("--chunk-size", type=int, default=8)
     parser.add_argument("--keep-deepcopy", action="store_true", default=False)
-    parser.add_argument("--cache-callback-rows", action="store_true", default=False,
-                        help="Cache rows of immutable offline callback snapshots (opt-in).")
-    parser.add_argument("--phase-checkpoint-dir", default="",
-                        help="Opt-in atomic resume checkpoints for completed phases and cohorts.")
-    parser.add_argument("--detail-array-cache", default="",
-                        help="Opt-in disk cache of normalized minute arrays, read through memory maps.")
-    parser.add_argument("--ram-profile", choices=["auto", "normal", "high"], default="auto",
-                        help="Memory profile for analyzed and 1m detail LRU caches (auto detects >=15GB RAM for high).")
+    parser.add_argument(
+        "--cache-callback-rows",
+        action="store_true",
+        default=False,
+        help="Cache rows of immutable offline callback snapshots (opt-in).",
+    )
+    parser.add_argument(
+        "--phase-checkpoint-dir",
+        default="",
+        help="Opt-in atomic resume checkpoints for completed phases and cohorts.",
+    )
+    parser.add_argument(
+        "--detail-array-cache",
+        default="",
+        help="Opt-in disk cache of normalized minute arrays, read through memory maps.",
+    )
+    parser.add_argument(
+        "--ram-profile",
+        choices=["auto", "normal", "high"],
+        default="auto",
+        help="Memory profile for analyzed and 1m detail LRU caches (auto detects >=15GB RAM for high).",
+    )
     args = parser.parse_args()
     if not args.keep_deepcopy:
         import freqtrade.strategy.strategy_wrapper as _sw
+
         _orig_sw_deepcopy = _sw.deepcopy
-        _sw.deepcopy = lambda obj, *a, **kw: obj if isinstance(obj, LocalTrade) else _orig_sw_deepcopy(obj, *a, **kw)
+        _sw.deepcopy = lambda obj, *a, **kw: (
+            obj if isinstance(obj, LocalTrade) else _orig_sw_deepcopy(obj, *a, **kw)
+        )
     res = run_suite(args)
     if args.grid_json:
         for row in res.get("candidates", []):
@@ -3958,15 +4501,31 @@ def main():
                 f"OPEN={c_s['open_end']} ({sc_res['runtime_sec']}s)"
             )
         return
-    print(json.dumps({k: v for k, v in res["continuous"].items() if k not in ("daily_curve", "trades_head", "trades_tail")}, indent=2))
+    print(
+        json.dumps(
+            {
+                k: v
+                for k, v in res["continuous"].items()
+                if k not in ("daily_curve", "trades_head", "trades_tail")
+            },
+            indent=2,
+        )
+    )
     if res["cohorts"]:
         passed = sum(1 for c in res["cohorts"] if c["outcome"] == "PASS")
-        halted = sum(1 for c in res["cohorts"] if c["outcome"].startswith("FAIL") or c["outcome"].startswith("HALT"))
+        halted = sum(
+            1
+            for c in res["cohorts"]
+            if c["outcome"].startswith("FAIL") or c["outcome"].startswith("HALT")
+        )
         open_end = sum(1 for c in res["cohorts"] if c["outcome"] == "OPEN_END")
-        print(f"COHORTS SUMMARY: total={len(res['cohorts'])} PASS={passed} FAIL/HALT={halted} OPEN_END={open_end}")
+        print(
+            f"COHORTS SUMMARY: total={len(res['cohorts'])} PASS={passed} FAIL/HALT={halted} OPEN_END={open_end}"
+        )
 
 
 if __name__ == "__main__":
     import warnings
+
     warnings.filterwarnings("ignore", category=FutureWarning)
     main()
