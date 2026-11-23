@@ -145,25 +145,34 @@ def _install_fast_custom_data_index() -> None:
 
 
 class _FastCandleRow:
-    """Zero-copy scalar row accessor replacing pandas Series indf.iloc[-1]/df.iloc[-2]."""
+    """Zero-copy scalar row accessor replacing pandas Series in df.iloc[-1]/df.iloc[-2]."""
 
-    __slots__ = ("_cols", "_idx")
+    __slots__ = ("_cols", "_idx", "_cache")
 
     def __init__(self, cols: dict[str, np.ndarray], idx: int) -> None:
         self._cols = cols
         self._idx = idx
+        self._cache: dict[str, Any] = {}
 
     def squeeze(self) -> "_FastCandleRow":
         return self
 
     def __getitem__(self, key: str) -> Any:
-        return self._cols[key][self._idx]
+        val = self._cache.get(key)
+        if val is None and key not in self._cache:
+            val = self._cols[key][self._idx]
+            self._cache[key] = val
+        return val
 
     def get(self, key: str, default: Any = None) -> Any:
-        arr = self._cols.get(key)
-        if arr is None:
-            return default
-        return arr[self._idx]
+        val = self._cache.get(key)
+        if val is None and key not in self._cache:
+            arr = self._cols.get(key)
+            if arr is None:
+                return default
+            val = arr[self._idx]
+            self._cache[key] = val
+        return val
 
     def __contains__(self, key: str) -> bool:
         return key in self._cols
@@ -177,13 +186,20 @@ class _FastAnalyzedIloc:
         self._len = length
 
     def __getitem__(self, idx: int) -> _FastCandleRow:
-        if idx < 0:
-            real_idx = self._len + idx
-        else:
-            real_idx = idx
+        real_idx = self._len + idx if idx < 0 else idx
         if real_idx < 0 or real_idx >= self._len:
             raise IndexError(idx)
-        return _FastCandleRow(self._table.cols, real_idx)
+        tbl = self._table
+        if real_idx == tbl._row_a_idx and tbl._row_a is not None:
+            return tbl._row_a
+        if real_idx == tbl._row_b_idx and tbl._row_b is not None:
+            return tbl._row_b
+        row = _FastCandleRow(tbl.cols, real_idx)
+        tbl._row_b_idx = tbl._row_a_idx
+        tbl._row_b = tbl._row_a
+        tbl._row_a_idx = real_idx
+        tbl._row_a = row
+        return row
 
 
 class _FastAnalyzedFrame:
@@ -217,13 +233,17 @@ class _FastAnalyzedFrame:
 class _FastAnalyzedTable:
     """Compact column-dict representation of an analyzed feather file (loads only callback cols)."""
 
-    __slots__ = ("cols", "n_rows", "last_date")
+    __slots__ = ("cols", "n_rows", "last_date", "_row_a_idx", "_row_a", "_row_b_idx", "_row_b")
     _VALID_COLS_BY_DIR: dict[Path, list[str]] = {}
 
     def __init__(self, cols: dict[str, np.ndarray], n_rows: int, last_date: datetime) -> None:
         self.cols = cols
         self.n_rows = n_rows
         self.last_date = last_date
+        self._row_a_idx: int = -1
+        self._row_a: _FastCandleRow | None = None
+        self._row_b_idx: int = -1
+        self._row_b: _FastCandleRow | None = None
 
     @classmethod
     def load_feather(cls, path: Path, needed_cols: set[str] | None = None) -> "_FastAnalyzedTable":
@@ -267,7 +287,12 @@ def _discover_callback_columns() -> set[str]:
         return _CALLBACK_COLS_CACHE
     strat_path = REPO / "user_data" / "strategies" / "NostalgiaForInfinityX8_Prop.py"
     src = strat_path.read_text()
-    cols = set(re.findall(r'candle(?:_\d+)?\[\s*["\']([A-Za-z0-9_.-]+)["\']\s*\]', src))
+    cols = set(
+        re.findall(
+            r'candle(?:_\d+)?(?:\[\s*|\.get\(\s*)["\']([A-Za-z0-9_.-]+)["\']',
+            src,
+        )
+    )
     cols.update(
         {
             "date",
@@ -1072,22 +1097,31 @@ class PropParityBacktesting(Backtesting):
                 loaded_fast = False
 
         if not loaded_fast:
-            df = history.load_pair_history(
-                pair=pair,
-                timeframe=self.timeframe_detail,
-                datadir=self.config["datadir"],
-                timerange=self.timerange,
-                fill_up_missing=True,
-                startup_candles=0,
-                data_handler=self._detail_handler,
-                candle_type=self._detail_candle_type,
-            )
-            if df.empty:
-                entry = None
+            pinned = getattr(self, "_detail_pinned_Cache", None)
+            if pinned is None:
+                pinned = {}
+                self._detail_pinned_Cache = pinned
+            if pair in pinned:
+                entry = pinned[pair]
             else:
-                ts_s = df["date"].dt.as_unit("s").to_numpy(dtype=np.int64)
-                ohlc = df[["open", "high", "low", "close"]].to_numpy(dtype=np.float64)
-                entry = (ts_s, ohlc)
+                df = history.load_pair_history(
+                    pair=pair,
+                    timeframe=self.timeframe_detail,
+                    datadir=self.config["datadir"],
+                    timerange=self.timerange,
+                    fill_up_missing=True,
+                    startup_candles=0,
+                    data_handler=self._detail_handler,
+                    candle_type=self._detail_candle_type,
+                )
+                if df.empty:
+                    entry = None
+                else:
+                    ts_s = df["date"].dt.as_unit("s").to_numpy(dtype=np.int64)
+                    ohlc = df[["open", "high", "low", "close"]].to_numpy(dtype=np.float64)
+                    entry = (ts_s, ohlc)
+                if history.load_pair_history is _ORIG_LOAD_PAIR_HISTORY and disk_cache is None:
+                    pinned[pair] = entry
         if entry is not None and disk_cache is not None and cache_key is not None:
             entry = disk_cache.save(cache_key, entry)
         self._detail_cache[pair] = entry
@@ -1647,7 +1681,7 @@ class PropParityBacktesting(Backtesting):
             self.strategy.bot_loop_start(current_time=current_time)
             pair_detail_cache: dict[str, list[tuple]] = {}
             pair_tradedir_cache: dict[str, str | None] = {}
-            deferred_signal_rows: dict[str, Any] = {}
+            signal_main_rows: dict[str, Any] = {}
             pairs_with_open_trades = [t.pair for t in LocalTrade.bt_trades_open]
             new_pairlist = list(dict.fromkeys(pairs_with_open_trades + list(pairs)))
             cur_s = int(current_time.timestamp())
@@ -1677,11 +1711,6 @@ class PropParityBacktesting(Backtesting):
                     has_sig = sigs[raw_idx, 0] == 1 or sigs[raw_idx, 2] == 1
                     if not pair_has_open_trades and not has_sig and pair not in pairs_with_open_trades:
                         continue
-                    if not pair_has_open_trades and pair not in pairs_with_open_trades:
-                        if not self._can_attempt_new_entry(is_last_main):
-                            if has_detail and pairs_with_open_trades:
-                                deferred_signal_rows[pair] = (pair_rows, raw_idx)
-                            continue
                     row = pair_rows[raw_idx]
                 else:
                     row_index = self._sync_pair_index(data, pair, row_index, current_time)
@@ -1704,9 +1733,9 @@ class PropParityBacktesting(Backtesting):
 
                 if trade_dir is None and not pair_has_open_trades:
                     continue
+
+                signal_main_rows[pair] = row
                 if not pair_has_open_trades and not self._can_attempt_new_entry(is_last_main):
-                    if has_detail and pairs_with_open_trades:
-                        deferred_signal_rows[pair] = row
                     continue
 
                 if (
@@ -1728,36 +1757,33 @@ class PropParityBacktesting(Backtesting):
             if has_detail and pair_detail_cache and detail_td is not None:
                 max_det_len = max(len(v) for v in pair_detail_cache.values())
                 det_end_time = current_time + self.timeframe_td
-                for idx in range(1, max_det_len):
+                idx = 1
+                while idx < max_det_len:
                     current_time_det = current_time + detail_td * idx
                     if current_time_det > det_end_time:
                         break
                     is_last_row = current_time_det == end_date
-                    if deferred_signal_rows and self._can_attempt_new_entry(is_last_row):
-                        for d_pair, d_val in list(deferred_signal_rows.items()):
-                            d_row = d_val[0][d_val[1]] if isinstance(d_val, tuple) else d_val
-                            t_dir = self.check_for_trade_entry(d_row)
-                            pair_tradedir_cache[d_pair] = t_dir
-                            if t_dir is not None and d_pair in self.detail_data:
-                                p_det = self.get_detail_data(d_pair, d_row)
-                                if p_det is not None:
-                                    pair_detail_cache[d_pair] = p_det
-                                    if len(p_det) > max_det_len:
-                                        max_det_len = len(p_det)
-                        deferred_signal_rows.clear()
                     det_pairlist = list(
                         dict.fromkeys(
-                            [t.pair for t in LocalTrade.bt_trades_open] + list(pair_detail_cache.keys())
+                            [t.pair for t in LocalTrade.bt_trades_open] + list(signal_main_rows.keys())
                         )
                     )
                     for pair in det_pairlist:
-                        detail_data = pair_detail_cache.get(pair)
-                        if detail_data is None or len(detail_data) <= idx:
-                            continue
                         pair_has_open_trades = len(LocalTrade.bt_trades_open_pp[pair]) > 0
                         if pair in pairs_with_open_trades and not pair_has_open_trades:
                             continue
                         if not pair_has_open_trades and not self._can_attempt_new_entry(is_last_row):
+                            continue
+                        if pair not in pair_detail_cache:
+                            m_row = signal_main_rows.get(pair)
+                            if m_row is not None and pair in self.detail_data:
+                                p_det = self.get_detail_data(pair, m_row)
+                                if p_det is not None:
+                                    pair_detail_cache[pair] = p_det
+                                    if len(p_det) > max_det_len:
+                                        max_det_len = len(p_det)
+                        detail_data = pair_detail_cache.get(pair)
+                        if detail_data is None or len(detail_data) <= idx:
                             continue
                         row = detail_data[idx]
                         trade_dir = pair_tradedir_cache.get(pair)
@@ -1774,6 +1800,7 @@ class PropParityBacktesting(Backtesting):
                         yield current_time_det, pair, row, is_last_row, trade_dir
                         if len(LocalTrade.bt_trades_open_pp[pair]) > 0 and pair not in pairs_with_open_trades:
                             pairs_with_open_trades.append(pair)
+                    idx += 1
 
     def _enter_trade(self, pair: str, row: list, direction: str, *args, **kwargs):
         if self.prop_first_enter_attempt_ts is None:
@@ -3102,6 +3129,57 @@ def run_sequential_program_cohorts(
     }
 
 
+def _can_derive_two_step_funded_from_one_step(res: dict[str, Any]) -> bool:
+    """True when one_step_funded continuous pass had zero halts, headroom denials, or floor touches."""
+    if not isinstance(res, dict) or "daily_curve" not in res or "budget_denials" not in res:
+        return False
+    if res.get("halted") or res.get("internal_wick_touch") is not None:
+        return False
+    if (
+        res.get("official_daily_breach_wick_bars", 0) != 0
+        or res.get("official_overall_breach_wick_bars", 0) != 0
+        or res.get("shock_1coin_35_breach_bars", 0) != 0
+        or res.get("shock_1coin_50_breach_bars", 0) != 0
+        or res.get("shock_2coin_25_breach_bars", 0) != 0
+        or res.get("official_breach_close") is not None
+        or res.get("official_breach_wick") is not None
+    ):
+        return False
+    denials = res.get("budget_denials") or {}
+    return not any(
+        k.endswith(("operating_headroom_exhausted", "insufficient_operating_headroom_for_stress_bound"))
+        and v > 0
+        for k, v in denials.items()
+    )
+
+
+def _derive_two_step_funded_summary(
+    one_step_res: dict[str, Any],
+    one_step_profile: dict[str, Any],
+    two_step_profile: dict[str, Any],
+    *,
+    scenario_name: str | None = None,
+) -> dict[str, Any]:
+    out = copy.deepcopy(one_step_res)
+    if scenario_name is not None:
+        out["scenario"] = scenario_name
+    init_bal = float(two_step_profile["initial_balance"])
+    out["funded_withdrawal_policies"] = simulate_funded_withdrawals(
+        one_step_res["daily_curve"],
+        initial_balance=init_bal,
+        official_max_loss_pct=float(two_step_profile["official_max_loss_percent"]),
+    )
+    daily_floor_diff = init_bal * (
+        float(two_step_profile["official_daily_limit_percent"])
+        - float(one_step_profile["official_daily_limit_percent"])
+    )
+    if "min_post_shock_50_headroom_usd" in out and out["min_post_shock_50_headroom_usd"] < init_bal:
+        out["min_post_shock_50_headroom_usd"] = round(
+            float(out["min_post_shock_50_headroom_usd"]) + daily_floor_diff, 2
+        )
+    return out
+
+
 def _execute_scenario(
     bt: PropParityBacktesting,
     cfg: dict[str, Any],
@@ -3134,19 +3212,23 @@ def _execute_scenario(
     )
 
     # 1. Continuous runs: (a) strict Evaluation pause at +10%, (b) 24-month Non-Compounding Funded projection
-    continuous_summary = _run_continuous_pass(
-        bt,
-        cfg,
-        profile,
-        ohclv_lists,
-        analyzed_dfs,
-        min_date,
-        max_date,
-        universe_size=universe_size,
-        name=name,
-        slippage_bps=slippage_bps,
-        strict_wick_guard=strict_wick_guard,
-        ignore_target_pause=False,
+    continuous_summary = (
+        None
+        if skip_standalone_cohorts
+        else _run_continuous_pass(
+            bt,
+            cfg,
+            profile,
+            ohclv_lists,
+            analyzed_dfs,
+            min_date,
+            max_date,
+            universe_size=universe_size,
+            name=name,
+            slippage_bps=slippage_bps,
+            strict_wick_guard=strict_wick_guard,
+            ignore_target_pause=False,
+        )
     )
     continuous_funded_summary = _run_continuous_pass(
         bt,
@@ -3162,12 +3244,20 @@ def _execute_scenario(
         strict_wick_guard=strict_wick_guard,
         ignore_target_pause=True,
     )
-    continuous_funded_two_step_summary = _run_continuous_pass(
-        bt, cfg, funded_profiles["two_step_funded"], ohclv_lists, analyzed_dfs,
-        min_date, max_date, universe_size=universe_size, name=name,
-        slippage_bps=slippage_bps, strict_wick_guard=strict_wick_guard,
-        ignore_target_pause=True,
-    )
+    if _can_derive_two_step_funded_from_one_step(continuous_funded_summary):
+        continuous_funded_two_step_summary = _derive_two_step_funded_summary(
+            continuous_funded_summary,
+            funded_profiles["one_step_funded"],
+            funded_profiles["two_step_funded"],
+            scenario_name=name,
+        )
+    else:
+        continuous_funded_two_step_summary = _run_continuous_pass(
+            bt, cfg, funded_profiles["two_step_funded"], ohclv_lists, analyzed_dfs,
+            min_date, max_date, universe_size=universe_size, name=name,
+            slippage_bps=slippage_bps, strict_wick_guard=strict_wick_guard,
+            ignore_target_pause=True,
+        )
     bt._prop_profile = copy.deepcopy(profile)
     print(
         f"  [{name}] Funded 2y Continuous: Eq=${continuous_funded_summary['final_equity']} "
@@ -3497,16 +3587,24 @@ def run_grid_sweep(
             ignore_target_pause=True,
         )
         two_step_windows = {}
-        for window_name, window_start, window_end in (
-            ("train_1y_funded_two_step", _to_utc(min_date), mid_date),
-            ("oos_1y_funded_two_step", mid_date, _to_utc(max_date)),
+        for window_name, window_start, window_end, one_step_win in (
+            ("train_1y_funded_two_step", _to_utc(min_date), mid_date, train_funded),
+            ("oos_1y_funded_two_step", mid_date, _to_utc(max_date), oos_funded),
         ):
-            result = _run_continuous_pass(
-                bt, cfg, two_step_funded_profile, ohclv_lists, analyzed_dfs, window_start, window_end,
-                universe_size=len(ohclv_lists), name=f"{c_id}_{window_name}",
-                slippage_bps=args.slippage_bps, strict_wick_guard=args.strict_wick_guard,
-                ignore_target_pause=True,
-            )
+            if _can_derive_two_step_funded_from_one_step(one_step_win):
+                result = _derive_two_step_funded_summary(
+                    one_step_win,
+                    one_step_funded_profile,
+                    two_step_funded_profile,
+                    scenario_name=f"{c_id}_{window_name}",
+                )
+            else:
+                result = _run_continuous_pass(
+                    bt, cfg, two_step_funded_profile, ohclv_lists, analyzed_dfs, window_start, window_end,
+                    universe_size=len(ohclv_lists), name=f"{c_id}_{window_name}",
+                    slippage_bps=args.slippage_bps, strict_wick_guard=args.strict_wick_guard,
+                    ignore_target_pause=True,
+                )
             two_step_windows[window_name] = {k: v for k, v in result.items()
                                              if k not in ("daily_curve", "trades_head", "trades_tail")}
         bt._prop_profile = copy.deepcopy(profile)
