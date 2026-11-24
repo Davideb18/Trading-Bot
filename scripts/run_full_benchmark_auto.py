@@ -8,7 +8,9 @@ by qualification and payout rates; official breaches always disqualify a row.
 
 from __future__ import annotations
 
+import argparse
 import ast
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
 import math
@@ -17,6 +19,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 
@@ -30,6 +33,8 @@ DETAIL_CACHE_DIR = Path("user_data/forensic/detail_mmap_cache")
 DETAIL_CACHE_MIN_FREE_BYTES = 25 * 1024**3
 COMMON = ["--allow-research-schedule", "--start", "2024-11-15", "--end", "2026-11-15",
           "--timeframe-detail", "1m", "--ram-profile", "auto"]
+HEARTBEAT_SEC = 300.0
+WORKER_STAGGER_SEC = 4.0
 
 
 def read_json(path):
@@ -78,6 +83,47 @@ def present(path):
     return path.is_file() and path.stat().st_size > 0
 
 
+def detect_total_ram_gb():
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            class MemoryStatus(ctypes.Structure):
+                _fields_ = [("length", ctypes.c_ulong), ("load", ctypes.c_ulong)] + [
+                    (name, ctypes.c_ulonglong) for name in (
+                        "total_phys", "avail_phys", "total_page", "avail_page",
+                        "total_virtual", "avail_virtual", "avail_extended",
+                    )
+                ]
+
+            status = MemoryStatus()
+            status.length = ctypes.sizeof(status)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                return status.total_phys / (1024.0 ** 3)
+        if sys.platform == "darwin":
+            return int(subprocess.check_output(["sysctl", "-n", "hw.memsize"])) / (1024.0 ** 3)
+        pages = os.sysconf("SC_PHYS_PAGES")
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        if pages > 0 and page_size > 0:
+            return (pages * page_size) / (1024.0 ** 3)
+    except Exception:
+        pass
+    return 8.0
+
+
+def choose_workers(ram_gb=None, cpu_count=None):
+    """Pick safe parallel worker count from physical RAM (~1.8 GB/worker in normal profile)."""
+    ram = detect_total_ram_gb() if ram_gb is None else float(ram_gb)
+    cpus = (os.cpu_count() or 1) if cpu_count is None else int(cpu_count)
+    if ram < 12.0:
+        return 1
+    if ram < 22.0:
+        return max(1, min(4, cpus // 2))
+    if ram < 40.0:
+        return max(1, min(6, cpus // 2))
+    return max(1, min(8, cpus // 2))
+
+
 def detail_cache_enabled():
     """Enable disk mmap 1m cache only when already populated or >= 25 GiB free."""
     cache_dir = DETAIL_CACHE_DIR if DETAIL_CACHE_DIR.is_absolute() else ROOT / DETAIL_CACHE_DIR
@@ -89,8 +135,11 @@ def detail_cache_enabled():
         return False
 
 
-def common_args():
+def common_args(ram_profile="auto"):
     args = list(COMMON)
+    if ram_profile != "auto" and "--ram-profile" in args:
+        idx = args.index("--ram-profile")
+        args[idx + 1] = str(ram_profile)
     if detail_cache_enabled():
         args.extend(["--detail-array-cache", str(DETAIL_CACHE_DIR)])
     return args
@@ -318,6 +367,116 @@ def signature(command, schedule):
     return digest.hexdigest()
 
 
+def engine_signature(schedule, *, kind, step, slippage=10, strict_wick=True, candidate=None):
+    """Hash only the engine, schedule, and simulation parameters (orchestrator/worker-count agnostic)."""
+    payload = {
+        "kind": kind,
+        "start": "2024-11-15",
+        "end": "2026-11-15",
+        "timeframe_detail": "1m",
+        "step": int(step),
+        "slippage": int(slippage),
+        "strict_wick": bool(strict_wick),
+        "candidate": candidate,
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode())
+    for path in (ENGINE, schedule):
+        digest.update(Path(path).read_bytes())
+    return digest.hexdigest()
+
+
+def _legacy_marker_compatible(old_marker, *, schedule, step):
+    """Allow seamless resume of Marco's completed single-worker checkpoints after orchestrator update."""
+    if not isinstance(old_marker, dict) or old_marker.get("engine_signature"):
+        return False
+    cmd = old_marker.get("command")
+    if not isinstance(cmd, list) or not cmd:
+        return False
+    try:
+        if cmd[cmd.index("--cohort-step-days") + 1] != str(step):
+            return False
+        if cmd[cmd.index("--slippage-bps") + 1] != "10":
+            return False
+        if "--strict-wick-guard" not in cmd:
+            return False
+        sched_arg = cmd[cmd.index("--pairlist-schedule") + 1]
+        return str(sched_arg).replace("\\", "/") == str(schedule).replace("\\", "/")
+    except (ValueError, IndexError):
+        return False
+
+
+def _backup_incompatible(output):
+    backup = output.with_suffix(output.suffix + ".previous")
+    index = 1
+    while backup.exists():
+        backup = output.with_suffix(output.suffix + f".previous.{index}")
+        index += 1
+    _replace_atomic(output, backup)
+
+
+def _has_populated_indicator_cache():
+    cache_root = ROOT / ".backtest_cache"
+    return cache_root.is_dir() and any(cache_root.rglob("_manifest.json"))
+
+
+def _worker_env():
+    env = os.environ.copy()
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    return env
+
+
+def _run_logged_worker(command, log_path, active_procs, procs_lock):
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("w", encoding="utf-8", errors="replace") as log_file:
+        log_file.write(">>> " + subprocess.list2cmdline(command) + "\n")
+        log_file.flush()
+        proc = subprocess.Popen(
+            command,
+            cwd=ROOT,
+            env=_worker_env(),
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
+        with procs_lock:
+            active_procs.add(proc)
+        try:
+            rc = proc.wait()
+        finally:
+            with procs_lock:
+                active_procs.discard(proc)
+    if rc != 0:
+        tail = ""
+        try:
+            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            tail = "\n".join(lines[-25:])
+        except OSError:
+            pass
+        raise RuntimeError(
+            f"Worker fallito (exit={rc}, log={log_path}):\n{tail}"
+        )
+
+
+def _terminate_procs(active_procs, procs_lock):
+    with procs_lock:
+        procs = list(active_procs)
+    for proc in procs:
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+    deadline = time.monotonic() + 5.0
+    for proc in procs:
+        remaining = max(0.0, deadline - time.monotonic())
+        try:
+            proc.wait(timeout=remaining)
+        except Exception:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+
+
 def checkpoint_job(output, command, schedule, validate, compatible):
     """Preserve incompatible artifacts; let the engine resume compatible partial JSON."""
     marker = output.with_suffix(output.suffix + ".run.json")
@@ -326,12 +485,7 @@ def checkpoint_job(output, command, schedule, validate, compatible):
     old = read_json(marker)
     matches = compatible(doc) and (not old or old.get("signature") == identity)
     if present(output) and not matches:
-        backup = output.with_suffix(output.suffix + ".previous")
-        index = 1
-        while backup.exists():
-            backup = output.with_suffix(output.suffix + f".previous.{index}")
-            index += 1
-        output.replace(backup)
+        _backup_incompatible(output)
         doc = {}
     atomic_json(marker, {"signature": identity, "command": command})
     if matches and validate(doc):
@@ -344,11 +498,26 @@ def checkpoint_job(output, command, schedule, validate, compatible):
     return result
 
 
-def grid(preset, ids, step, name):
+def _summarize_completed_row(row):
+    try:
+        pnl = float(row["full_2y_continuous_funded"]["net_pnl"])
+        dd = float(row["full_2y_continuous_funded"]["max_overall_dd_wick"])
+        os_s = row["program_comparison"]["one_step_summary"]
+        ts_s = row["program_comparison"]["two_step_summary"]
+        fail = int(os_s.get("fail_official", 0)) + int(ts_s.get("fail_official", 0))
+        return (
+            f"2y Net {pnl:+.2f}$ | DD {dd:.2f}$ | "
+            f"1-Step Qual {os_s['qualify_rate_pct']}% | 2-Step Qual {ts_s['qualify_rate_pct']}% | "
+            f"Fail {fail}"
+        )
+    except (KeyError, TypeError, ValueError):
+        return "ok"
+
+
+def grid(preset, ids, step, name, workers=1):
     schedule = schedule_path(preset)
-    command = [sys.executable, "-u", str(ENGINE), *common_args(), "--pairlist-schedule", str(schedule),
-               "--cohort-step-days", str(step), "--slippage-bps", "10", "--strict-wick-guard",
-               "--candidates", *ids, "--grid-json", str(OUT / name)]
+    output = OUT / name
+    workers = max(1, int(workers))
 
     def compatible(doc):
         return (isinstance(doc, dict) and doc.get("schema_version") == 4
@@ -360,14 +529,201 @@ def grid(preset, ids, step, name):
                 == str(schedule).replace("\\", "/")
                 and all(complete_row(r) for r in doc.get("candidates", [])))
 
-    return checkpoint_job(OUT / name, command, schedule,
-                          lambda d: {r["candidate"]["id"] for r in d.get("candidates", [])} == set(ids),
-                          compatible)["candidates"]
+    if workers <= 1:
+        command = [sys.executable, "-u", str(ENGINE), *common_args("auto"), "--pairlist-schedule", str(schedule),
+                   "--cohort-step-days", str(step), "--slippage-bps", "10", "--strict-wick-guard",
+                   "--candidates", *ids, "--grid-json", str(output)]
+        return checkpoint_job(output, command, schedule,
+                              lambda d: {r["candidate"]["id"] for r in d.get("candidates", [])} == set(ids),
+                              compatible)["candidates"]
+
+    marker = output.with_suffix(output.suffix + ".run.json")
+    eng_sig = engine_signature(schedule, kind="grid", step=step, slippage=10, strict_wick=True)
+    doc = read_json(output)
+    old = read_json(marker)
+    marker_ok = (
+        not old
+        or old.get("engine_signature") == eng_sig
+        or _legacy_marker_compatible(old, schedule=schedule, step=step)
+    )
+    matches = compatible(doc) and marker_ok
+    if present(output) and not matches:
+        _backup_incompatible(output)
+        doc = {}
+
+    completed_by_id = {}
+    meta_template = {}
+    if matches:
+        meta_template = {k: v for k, v in doc.items() if k != "candidates"}
+        for row in doc.get("candidates", []):
+            cid = (row.get("candidate") or {}).get("id")
+            if cid in ids and complete_row(row):
+                completed_by_id[cid] = row
+
+    workers_dir = OUT / "_workers"
+    # Harvest any finished single-candidate worker outputs left by a previous interrupted run.
+    if workers_dir.is_dir():
+        for cid in ids:
+            if cid in completed_by_id:
+                continue
+            wpath = workers_dir / f"{output.stem}.{cid}.json"
+            if not present(wpath):
+                continue
+            wdoc = read_json(wpath)
+            if compatible(wdoc):
+                for row in wdoc.get("candidates", []):
+                    if (row.get("candidate") or {}).get("id") == cid and complete_row(row):
+                        completed_by_id[cid] = row
+                        if not meta_template:
+                            meta_template = {k: v for k, v in wdoc.items() if k != "candidates"}
+                        break
+            wpath.unlink(missing_ok=True)
+
+    atomic_json(marker, {"engine_signature": eng_sig, "workers": workers, "preset": preset, "step": step})
+
+    def _persist_merged():
+        ordered = [completed_by_id[cid] for cid in ids if cid in completed_by_id]
+        if not ordered or not meta_template:
+            return
+        payload = dict(meta_template)
+        payload["candidates"] = ordered
+        atomic_json(output, payload)
+
+    if completed_by_id:
+        _persist_merged()
+
+    remaining = [cid for cid in ids if cid not in completed_by_id]
+    if not remaining:
+        print(f"Completo: {output.name} ({len(completed_by_id)}/{len(ids)}); saltato.", flush=True)
+        return [completed_by_id[cid] for cid in ids]
+
+    eff_workers = min(workers, len(remaining))
+    print(
+        f"\n=== PARALLEL GRID {output.name}: {len(completed_by_id)}/{len(ids)} gia completati, "
+        f"{len(remaining)} rimanenti con {eff_workers} worker paralleli (ram-profile=normal) ===",
+        flush=True,
+    )
+
+    merge_lock = threading.Lock()
+    procs_lock = threading.Lock()
+    active_procs = set()
+    running_started = {}
+    stop_heartbeat = threading.Event()
+    cancel_event = threading.Event()
+
+    def _run_one_candidate(cid, stagger_sec=0.0):
+        nonlocal meta_template
+        if stagger_sec > 0 and cancel_event.wait(stagger_sec):
+            raise RuntimeError(f"Annullato prima dell'avvio di {cid}")
+        if cancel_event.is_set():
+            raise RuntimeError(f"Annullato prima dell'avvio di {cid}")
+        wjson = workers_dir / f"{output.stem}.{cid}.json"
+        wlog = workers_dir / f"{output.stem}.{cid}.log"
+        command = [
+            sys.executable, "-u", str(ENGINE), *common_args("normal"),
+            "--pairlist-schedule", str(schedule),
+            "--cohort-step-days", str(step),
+            "--slippage-bps", "10", "--strict-wick-guard",
+            "--candidates", cid, "--grid-json", str(wjson),
+        ]
+        t0 = time.monotonic()
+        with merge_lock:
+            running_started[cid] = t0
+            ts = datetime.now().strftime("%H:%M:%S")
+            print(f"[{ts}] Avviato: {cid} (log: {wlog})", flush=True)
+        last_exc = None
+        for attempt in range(2):
+            if cancel_event.is_set():
+                break
+            try:
+                _run_logged_worker(command, wlog, active_procs, procs_lock)
+                wdoc = read_json(wjson)
+                if not compatible(wdoc):
+                    raise RuntimeError(f"Output worker incompatibile per {cid}: {wjson}")
+                row = next(
+                    (r for r in wdoc.get("candidates", []) if (r.get("candidate") or {}).get("id") == cid),
+                    None,
+                )
+                if row is None or not complete_row(row):
+                    raise RuntimeError(f"Riga worker incompleta per {cid}: {wjson}")
+                elapsed_min = (time.monotonic() - t0) / 60.0
+                with merge_lock:
+                    running_started.pop(cid, None)
+                    completed_by_id[cid] = row
+                    if not meta_template:
+                        meta_template = {k: v for k, v in wdoc.items() if k != "candidates"}
+                    _persist_merged()
+                    done_count = len(completed_by_id)
+                    ts = datetime.now().strftime("%H:%M:%S")
+                    print(
+                        f"[{ts}] Completato {done_count}/{len(ids)}: {cid} ({elapsed_min:.1f} min) | "
+                        f"{_summarize_completed_row(row)}",
+                        flush=True,
+                    )
+                wjson.unlink(missing_ok=True)
+                return row
+            except Exception as exc:
+                last_exc = exc
+                if attempt == 0 and not cancel_event.is_set():
+                    ts = datetime.now().strftime("%H:%M:%S")
+                    print(f"[{ts}] Retry worker {cid} dopo errore transitorio...", flush=True)
+                    if cancel_event.wait(10.0):
+                        break
+        with merge_lock:
+            running_started.pop(cid, None)
+        raise last_exc or RuntimeError(f"Worker {cid} annullato")
+
+    def _heartbeat_loop():
+        while not stop_heartbeat.wait(HEARTBEAT_SEC):
+            with merge_lock:
+                if not running_started:
+                    continue
+                now = time.monotonic()
+                active_desc = ", ".join(
+                    f"{cid} ({(now - started) / 60.0:.0f}m)"
+                    for cid, started in running_started.items()
+                )
+                ts = datetime.now().strftime("%H:%M:%S")
+                print(
+                    f"[{ts}] Attivi ({len(completed_by_id)}/{len(ids)} completati): {active_desc}",
+                    flush=True,
+                )
+
+    # On a fresh machine without indicator cache yet, warm up the cache with 1 candidate first.
+    if not completed_by_id and len(remaining) > 1 and not _has_populated_indicator_cache():
+        first_cid = remaining.pop(0)
+        print(f"Warmup cache indicatori su primo candidato: {first_cid}...", flush=True)
+        _run_one_candidate(first_cid, stagger_sec=0.0)
+
+    hb_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
+    hb_thread.start()
+    pool = ThreadPoolExecutor(max_workers=eff_workers)
+    try:
+        futures = {}
+        for idx, cid in enumerate(remaining):
+            stagger = WORKER_STAGGER_SEC * idx if idx < eff_workers else 0.0
+            futures[pool.submit(_run_one_candidate, cid, stagger)] = cid
+        for fut in as_completed(futures):
+            fut.result()
+    except BaseException:
+        cancel_event.set()
+        _terminate_procs(active_procs, procs_lock)
+        pool.shutdown(wait=True, cancel_futures=True)
+        raise
+    else:
+        pool.shutdown(wait=True)
+    finally:
+        stop_heartbeat.set()
+
+    result = read_json(output)
+    if not compatible(result) or {r["candidate"]["id"] for r in result.get("candidates", [])} != set(ids):
+        raise RuntimeError(f"Output incompleto o incompatibile: {output}")
+    return result["candidates"]
 
 
-def stress(preset, candidate, name):
+def stress(preset, candidate, name, ram_profile="auto"):
     schedule = schedule_path(preset)
-    command = [sys.executable, "-u", str(ENGINE), *common_args(), "--pairlist-schedule", str(schedule),
+    command = [sys.executable, "-u", str(ENGINE), *common_args(ram_profile), "--pairlist-schedule", str(schedule),
                "--cohort-step-days", "7", "--slippage-bps", "10", "--strict-wick-guard",
                "--candidates", candidate, "--suite-json", str(OUT / name)]
 
@@ -400,17 +756,33 @@ def stress(preset, candidate, name):
     checkpoint_job(OUT / name, command, schedule, complete, compatible)
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Offline resumable prop benchmark orchestrator.")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=0,
+        help="Parallel worker count (0 = auto from physical RAM & CPU cores).",
+    )
+    parsed = parser.parse_args(argv if argv is not None else [])
+    workers = parsed.workers if parsed.workers > 0 else choose_workers()
     os.chdir(ROOT)
     OUT.mkdir(parents=True, exist_ok=True)
+    ram_gb = detect_total_ram_gb()
+    cpus = os.cpu_count() or 1
+    print(
+        f"Hardware: {ram_gb:.1f} GB RAM, {cpus} core CPU -> {workers} worker "
+        f"({'paralleli, ram-profile=normal' if workers > 1 else 'singolo, ram-profile=auto'}).",
+        flush=True,
+    )
     all_ids = [c["id"] for c in candidates()]
     prepare_data()
-    rows = grid("base", all_ids, 14, "grid_base_24cands.json")
+    rows = grid("base", all_ids, 14, "grid_base_24cands.json", workers=workers)
     selected = top_four(rows)
     print("Top 4: " + ", ".join(selected), flush=True)
     options = []
     for preset in ("base", "strict", "bluechip"):
-        rows = grid(preset, selected, 7, f"grid_top4_{preset}_7d_crash.json")
+        rows = grid(preset, selected, 7, f"grid_top4_{preset}_7d_crash.json", workers=workers)
         options.extend((preset, row) for row in rows if safe(row))
     if not options:
         raise RuntimeError("Test B: nessun vincitore rispetta i vincoli di sicurezza.")
@@ -421,17 +793,24 @@ def main():
     atomic_json(OUT / "benchmark_selection.json", {"top4": selected, "winners": winners,
                 "ranking": "equal OOS/24m net_pnl/max(1,wick drawdown), then qualification and payout rates"})
     first = winners["one_step"]
-    stress(first["preset"], first["candidate"], "suite_winner_stress.json")
     second = winners["two_step"]
-    if (second["preset"], second["candidate"]) != (first["preset"], first["candidate"]):
-        stress(second["preset"], second["candidate"], "suite_winner_2step_stress.json")
+    if (second["preset"], second["candidate"]) != (first["preset"], first["candidate"]) and workers >= 2:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f1 = pool.submit(stress, first["preset"], first["candidate"], "suite_winner_stress.json", "normal")
+            f2 = pool.submit(stress, second["preset"], second["candidate"], "suite_winner_2step_stress.json", "normal")
+            f1.result()
+            f2.result()
+    else:
+        stress(first["preset"], first["candidate"], "suite_winner_stress.json")
+        if (second["preset"], second["candidate"]) != (first["preset"], first["candidate"]):
+            stress(second["preset"], second["candidate"], "suite_winner_2step_stress.json")
     run_script("prop_shock_bounds.py")
     print("=== TUTTO COMPLETATO! ORA INCOLLA IL PROMPT 2 IN CODEX ===", flush=True)
 
 
 if __name__ == "__main__":
     try:
-        main()
+        main(sys.argv[1:])
     except (RuntimeError, subprocess.CalledProcessError, KeyboardInterrupt) as exc:
         print(f"\nInterrotto: {exc}\nRilanciare lo stesso comando per riprendere.", file=sys.stderr)
         sys.exit(1)

@@ -100,6 +100,7 @@ def test_orchestration_uses_required_flags_and_separate_winners(monkeypatch, tmp
     monkeypatch.setattr(auto, "ROOT", tmp_path)
     monkeypatch.setattr(auto, "OUT", tmp_path)
     monkeypatch.setattr(auto, "prepare_data", lambda: None)
+    monkeypatch.setattr(auto, "choose_workers", lambda: 1)
     monkeypatch.setattr(auto, "candidates", lambda: [{"id": str(i)} for i in range(24)])
     commands = []
 
@@ -193,3 +194,86 @@ def test_detail_cache_flag_adapts_to_free_disk_space(tmp_path, monkeypatch):
     assert "--detail-array-cache" not in auto.common_args()
     monkeypatch.setattr(auto.shutil, "disk_usage", lambda _: SimpleNamespace(free=40 * 1024**3))
     assert "--detail-array-cache" in auto.common_args()
+
+
+@pytest.mark.parametrize("ram,cpus,expected", [
+    (8.0, 8, 1),
+    (11.5, 16, 1),
+    (15.9, 20, 4),
+    (16.0, 4, 2),
+    (32.0, 20, 6),
+    (64.0, 32, 8),
+])
+def test_choose_workers_scales_by_ram_and_cpu(ram, cpus, expected):
+    assert auto.choose_workers(ram_gb=ram, cpu_count=cpus) == expected
+
+
+def _grid_doc(schedule, step, rows):
+    return {
+        "schema_version": 4,
+        "train_window": ["2024-11-15 00:00:00+00:00", "2025-11-15 00:00:00+00:00"],
+        "oos_window": ["2025-11-15 00:00:00+00:00", "2026-11-15 00:00:00+00:00"],
+        "slippage_bps_roundtrip": 10,
+        "strict_wick_guard": True,
+        "cohort_step_days": step,
+        "schedule_meta": {"path": str(schedule)},
+        "delisted_fallbacks": {},
+        "runtime_sec": 12.3,
+        "candidates": rows,
+    }
+
+
+def test_parallel_grid_preserves_legacy_completed_candidates_and_merges_order(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(auto, "ROOT", tmp_path)
+    monkeypatch.setattr(auto, "OUT", Path("evidence"))
+    monkeypatch.setattr(auto, "ENGINE", tmp_path / "engine.py")
+    monkeypatch.setattr(auto, "WORKER_STAGGER_SEC", 0.0)
+    (tmp_path / "engine.py").write_text("# engine v1\n", encoding="utf-8")
+    sched = auto.schedule_path("base")
+    auto.atomic_json(sched, {"schedule": {}})
+
+    # Simulate Marco's existing grid_base_24cands.json + legacy .run.json marker with 2 done candidates.
+    output = auto.OUT / "grid_base_24cands.json"
+    auto.atomic_json(output, _grid_doc(sched, 14, [row("C1", 2, 100), row("C2", 2, 200)]))
+    legacy_cmd = [
+        "python.exe", "-u", "scripts\\prop_backtest_1to1.py",
+        "--pairlist-schedule", str(sched).replace("/", "\\"),
+        "--cohort-step-days", "14", "--slippage-bps", "10", "--strict-wick-guard",
+        "--candidates", "C1", "C2", "C3", "C4",
+    ]
+    auto.atomic_json(output.with_suffix(output.suffix + ".run.json"), {
+        "signature": "old-single-worker-signature",
+        "command": legacy_cmd,
+    })
+
+    # Also drop a harvested worker output for C3 from an interrupted parallel run.
+    auto.atomic_json(auto.OUT / "_workers" / "grid_base_24cands.C3.json", _grid_doc(sched, 14, [row("C3", 3, 300)]))
+
+    launched = []
+
+    def fake_worker(command, log_path, active_procs, procs_lock):
+        cid = command[command.index("--candidates") + 1]
+        assert command[command.index("--ram-profile") + 1] == "normal"
+        wjson = Path(command[command.index("--grid-json") + 1])
+        launched.append(cid)
+        auto.atomic_json(wjson, _grid_doc(sched, 14, [row(cid, 3, 400)]))
+
+    monkeypatch.setattr(auto, "_run_logged_worker", fake_worker)
+    result_rows = auto.grid("base", ["C1", "C2", "C3", "C4"], 14, "grid_base_24cands.json", workers=4)
+    # Only C4 should have been executed; C1, C2 preserved from legacy JSON, C3 harvested from _workers!
+    assert launched == ["C4"]
+    assert [r["candidate"]["id"] for r in result_rows] == ["C1", "C2", "C3", "C4"]
+    assert not output.with_suffix(".json.previous").exists()
+    # Second run skips everything.
+    launched.clear()
+    result_rows_2 = auto.grid("base", ["C1", "C2", "C3", "C4"], 14, "grid_base_24cands.json", workers=4)
+    assert launched == []
+    assert [r["candidate"]["id"] for r in result_rows_2] == ["C1", "C2", "C3", "C4"]
+
+    # Changing ENGINE invalidates and backs up the old artifact.
+    (tmp_path / "engine.py").write_text("# engine v2\n", encoding="utf-8")
+    result_rows_3 = auto.grid("base", ["C1", "C2"], 14, "grid_base_24cands.json", workers=2)
+    assert sorted(launched) == ["C1", "C2"]
+    assert [r["candidate"]["id"] for r in result_rows_3] == ["C1", "C2"]
+    assert output.with_suffix(".json.previous").exists()
