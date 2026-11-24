@@ -119,15 +119,20 @@ def _ram_cache_limits(total_ram_gb: float) -> tuple[int, int]:
     return 96, 128
 
 
-def _release_unused_memory() -> None:
-    """Collect cyclic callback rows before returning free Arrow pages to the OS."""
-    gc.collect()
+def _release_arrow_unused() -> None:
+    """Return freed Arrow buffers to the OS without triggering a full Python GC pause."""
     try:
         import pyarrow
 
         pyarrow.default_memory_pool().release_unused()
     except Exception:
         pass
+
+
+def _release_unused_memory() -> None:
+    """Collect cyclic callback rows before returning free Arrow pages to the OS."""
+    gc.collect()
+    _release_arrow_unused()
 
 
 def _install_fast_custom_data_index() -> None:
@@ -302,6 +307,7 @@ class _FastAnalyzedTable:
         "_path",
         "_deferred_cols",
         "_full_loaded",
+        "_on_full_load",
         "_row_a_idx",
         "_row_a",
         "_row_b_idx",
@@ -318,6 +324,7 @@ class _FastAnalyzedTable:
         path: Path | None = None,
         deferred_cols: list[str] | None = None,
         full_loaded: bool = True,
+        on_full_load: Any = None,
     ) -> None:
         self.cols = cols
         self.n_rows = n_rows
@@ -325,6 +332,7 @@ class _FastAnalyzedTable:
         self._path = path
         self._deferred_cols = deferred_cols or []
         self._full_loaded = full_loaded
+        self._on_full_load = on_full_load
         self._row_a_idx: int = -1
         self._row_a: _FastCandleRow | None = None
         self._row_b_idx: int = -1
@@ -343,6 +351,33 @@ class _FastAnalyzedTable:
                 self.cols[name] = col.to_pandas().to_numpy()
         self._deferred_cols = []
         self._full_loaded = True
+        if callable(self._on_full_load):
+            self._on_full_load(self)
+
+    def demote_to_tier1(self) -> None:
+        """Drop Tier-2 callback columns while keeping lightweight Tier-1 'close' warm."""
+        if not self._full_loaded or self._path is None or "close" not in self.cols:
+            return
+        close_arr = self.cols["close"]
+        deferred = [c for c in self.cols if c != "close"]
+        self.cols.clear()
+        self.cols["close"] = close_arr
+        self._deferred_cols = deferred
+        self._full_loaded = False
+        self._row_a_idx = -1
+        self._row_a = None
+        self._row_b_idx = -1
+        self._row_b = None
+
+    def release(self) -> None:
+        """Break row-cache reference cycles so CPython frees arrays immediately without gc.collect()."""
+        self._row_a_idx = -1
+        self._row_a = None
+        self._row_b_idx = -1
+        self._row_b = None
+        self.cols.clear()
+        self._deferred_cols = []
+        self._on_full_load = None
 
     def _load_single_col(self, key: str) -> np.ndarray | None:
         if self._path is None:
@@ -360,7 +395,13 @@ class _FastAnalyzedTable:
             return None
 
     @classmethod
-    def load_feather(cls, path: Path, needed_cols: set[str] | None = None) -> "_FastAnalyzedTable":
+    def load_feather(
+        cls,
+        path: Path,
+        needed_cols: set[str] | None = None,
+        *,
+        on_full_load: Any = None,
+    ) -> "_FastAnalyzedTable":
         cols_to_read: list[str] | None = None
         if needed_cols:
             parent = path.parent
@@ -389,6 +430,7 @@ class _FastAnalyzedTable:
                 path=path,
                 deferred_cols=deferred,
                 full_loaded=(len(deferred) == 0),
+                on_full_load=on_full_load,
             )
         table = _pa_feather.read_table(path, columns=cols_to_read)
         n_rows = table.num_rows
@@ -399,7 +441,14 @@ class _FastAnalyzedTable:
                 cols[name] = col.to_numpy(zero_copy_only=False)
             except Exception:
                 cols[name] = col.to_pandas().to_numpy()
-        return cls(cols, n_rows, datetime.fromtimestamp(0, tz=UTC), path=path, full_loaded=True)
+        return cls(
+            cols,
+            n_rows,
+            datetime.fromtimestamp(0, tz=UTC),
+            path=path,
+            full_loaded=True,
+            on_full_load=on_full_load,
+        )
 
 
 _CALLBACK_COLS_CACHE: set[str] | None = None
@@ -1195,9 +1244,15 @@ class PropParityBacktesting(Backtesting):
             entry = disk_cache.load(cache_key)
             if entry is not None:
                 self._detail_cache[pair] = entry
+                evicted = 0
                 while len(self._detail_cache) > self._detail_max_cached:
                     self._detail_cache.popitem(last=False)
-                    _release_unused_memory()
+                    evicted += 1
+                if evicted:
+                    self._detail_evictions = getattr(self, "_detail_evictions", 0) + evicted
+                    if self._detail_evictions >= 16:
+                        self._detail_evictions = 0
+                        _release_arrow_unused()
                 return entry
 
         # Fast path: load 1m feather directly with PyArrow if contiguous (no missing 1m bars)
@@ -1272,9 +1327,15 @@ class PropParityBacktesting(Backtesting):
         if entry is not None and disk_cache is not None and cache_key is not None:
             entry = disk_cache.save(cache_key, entry)
         self._detail_cache[pair] = entry
+        evicted = 0
         while len(self._detail_cache) > self._detail_max_cached:
             self._detail_cache.popitem(last=False)
-            _release_unused_memory()
+            evicted += 1
+        if evicted:
+            self._detail_evictions = getattr(self, "_detail_evictions", 0) + evicted
+            if self._detail_evictions >= 16:
+                self._detail_evictions = 0
+                _release_arrow_unused()
         return entry
 
     def get_detail_data(self, pair: str, row: tuple) -> list[tuple] | None:
@@ -2531,6 +2592,84 @@ def _prepare_universe_cached(
                 cache_dir,
             )
     if not ohclv_lists:
+        # Reuse a sibling superset cache with identical (start, end, strat_mtime) so subset
+        # presets (strict, bluechip) do not duplicate ~14 GB of identical per-pair feathers.
+        auto_parts = cache_dir.name.split("_")
+        if (
+            len(auto_parts) == 5
+            and len(auto_parts[0]) == 10
+            and len(auto_parts[1]) == 10
+            and auto_parts[2].isdigit()
+            and auto_parts[4].isdigit()
+            and cache_dir.parent.is_dir()
+        ):
+            prefix = f"{auto_parts[0]}_{auto_parts[1]}_"
+            suffix = f"_{auto_parts[4]}"
+            universe_set = set(universe)
+            for sib in sorted(cache_dir.parent.iterdir()):
+                if (
+                    sib == cache_dir
+                    or not sib.is_dir()
+                    or not sib.name.startswith(prefix)
+                    or not sib.name.endswith(suffix)
+                ):
+                    continue
+                sib_manifest_path = sib / "_manifest.json"
+                sib_prec_path = sib / "_price_prec.pkl"
+                if not (sib_manifest_path.exists() and sib_prec_path.exists()):
+                    continue
+                try:
+                    sib_manifest = json.loads(sib_manifest_path.read_text())
+                    sib_universe = set(sib_manifest.get("universe", []))
+                    if not (sib_manifest.get("complete") and universe_set <= sib_universe):
+                        continue
+                    sib_files = sib_manifest.get("files", {})
+                    sib_avail = set(sib_manifest.get("available_pairs", []))
+                    needed_pairs = [p for p in universe if p in sib_files]
+                    if not needed_pairs:
+                        continue
+                    if not all(
+                        (sib / sib_files[p]["ohlcv"]).is_file()
+                        and (sib / sib_files[p]["analyzed"]).is_file()
+                        for p in needed_pairs
+                    ):
+                        continue
+                    sib_prec = pickle.loads(sib_prec_path.read_bytes())
+                    tmp_ohlcv: dict[str, CompactOhlcvArray] = {}
+                    tmp_an: dict[str, Path] = {}
+                    min_ts: int | None = None
+                    max_ts: int | None = None
+                    for p in needed_pairs:
+                        arr = CompactOhlcvArray.load_npz(sib / sib_files[p]["ohlcv"])
+                        tmp_ohlcv[p] = arr
+                        tmp_an[p] = sib / sib_files[p]["analyzed"]
+                        if len(arr._ts_s):
+                            t0_s = int(arr._ts_s[0])
+                            t1_s = int(arr._ts_s[-1])
+                            if min_ts is None or t0_s < min_ts:
+                                min_ts = t0_s
+                            if max_ts is None or t1_s > max_ts:
+                                max_ts = t1_s
+                    if min_ts is None or max_ts is None:
+                        continue
+                    ohclv_lists = tmp_ohlcv
+                    analyzed_paths = tmp_an
+                    bt.price_pair_prec = {p: sib_prec[p] for p in universe if p in sib_prec}
+                    bt.available_pairs = [p for p in universe if p in sib_avail]
+                    min_date = datetime.fromtimestamp(min_ts, tz=UTC)
+                    max_date = datetime.fromtimestamp(max_ts, tz=UTC)
+                    logger.info(
+                        "Reusing superset indicator cache (%d/%d pairs, %s -> %s) from %s",
+                        len(ohclv_lists),
+                        len(sib_files),
+                        min_date,
+                        max_date,
+                        sib,
+                    )
+                    break
+                except Exception as exc:
+                    logger.warning("Skipping unusable sibling cache %s: %s", sib, exc)
+    if not ohclv_lists:
         t_prep = time.time()
         min_date: datetime | None = None
         max_date: datetime | None = None
@@ -2620,12 +2759,33 @@ def _prepare_universe_cached(
             )
         )
 
-    # Install fast column-pruned LRU wrapper on dataprovider.get_analyzed_dataframe
+    # Install fast column-pruned two-tier LRU wrapper on dataprovider.get_analyzed_dataframe.
+    # Full Tier-2 tables (~100 MB each, only needed for open trades) are strictly bounded by
+    # analyzed_lru_max; lightweight Tier-1 tables ('close' only, ~1.5 MB each) stay warm for
+    # all active daily pairs so confirm_trade_entry never evicts open-trade Tier-2 tables.
+    analyzed_lru_max = max(1, int(analyzed_lru_max))
+    tier1_lru_max = max(48, analyzed_lru_max)
     orig_get_analyzed = bt.dataprovider.get_analyzed_dataframe
     needed_callback_cols = _discover_callback_columns()
     fast_table_lru: OrderedDict[str, _FastAnalyzedTable] = OrderedDict()
+    full_table_lru: OrderedDict[str, _FastAnalyzedTable] = OrderedDict()
     analyzed_lru: OrderedDict[str, tuple[pd.DataFrame, datetime]] = OrderedDict()
     callback_snapshots: OrderedDict[tuple, tuple[pd.DataFrame, datetime]] = OrderedDict()
+    evict_counter = [0]
+
+    def _note_eviction() -> None:
+        evict_counter[0] += 1
+        if evict_counter[0] >= 16:
+            evict_counter[0] = 0
+            _release_arrow_unused()
+
+    def _register_full_table(pair: str, tbl: _FastAnalyzedTable) -> None:
+        full_table_lru[pair] = tbl
+        full_table_lru.move_to_end(pair)
+        while len(full_table_lru) > analyzed_lru_max:
+            _, old_tbl = full_table_lru.popitem(last=False)
+            old_tbl.demote_to_tier1()
+            _note_eviction()
 
     def _lazy_get_analyzed_dataframe(pair: str, timeframe: str):
         if timeframe == bt.timeframe and pair in analyzed_paths:
@@ -2633,14 +2793,22 @@ def _prepare_universe_cached(
                 if pair in fast_table_lru:
                     fast_table_lru.move_to_end(pair)
                     tbl = fast_table_lru[pair]
+                    if tbl._full_loaded and pair in full_table_lru:
+                        full_table_lru.move_to_end(pair)
                 else:
                     tbl = _FastAnalyzedTable.load_feather(
-                        analyzed_paths[pair], needed_cols=needed_callback_cols
+                        analyzed_paths[pair],
+                        needed_cols=needed_callback_cols,
+                        on_full_load=lambda loaded_tbl, p=pair: _register_full_table(p, loaded_tbl),
                     )
                     fast_table_lru[pair] = tbl
-                    while len(fast_table_lru) > analyzed_lru_max:
-                        fast_table_lru.popitem(last=False)
-                        _release_unused_memory()
+                    if tbl._full_loaded:
+                        _register_full_table(pair, tbl)
+                    while len(fast_table_lru) > tier1_lru_max:
+                        old_p, old_tbl = fast_table_lru.popitem(last=False)
+                        full_table_lru.pop(old_p, None)
+                        old_tbl.release()
+                        _note_eviction()
                 slice_map = getattr(bt.dataprovider, "_DataProvider__slice_index", {})
                 max_idx = slice_map.get(pair)
                 length = tbl.n_rows if max_idx is None else min(int(max_idx), tbl.n_rows)
@@ -2669,7 +2837,7 @@ def _prepare_universe_cached(
                         if snapshot_key[0] == old_p:
                             del callback_snapshots[snapshot_key]
                     del _
-                    _release_unused_memory()
+                    _note_eviction()
         result = orig_get_analyzed(pair, timeframe)
         if not cache_callback_rows or timeframe != bt.timeframe or result[0].empty:
             return result
@@ -2684,7 +2852,7 @@ def _prepare_universe_cached(
             callback_snapshots[snapshot_key] = (CallbackSnapshot(result[0]), result[1])
             while len(callback_snapshots) > analyzed_lru_max:
                 callback_snapshots.popitem(last=False)
-                _release_unused_memory()
+                _note_eviction()
         else:
             callback_snapshots.move_to_end(snapshot_key)
         return callback_snapshots[snapshot_key]

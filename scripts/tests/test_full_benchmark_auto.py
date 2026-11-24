@@ -1,7 +1,8 @@
 import copy
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -124,3 +125,71 @@ def test_orchestration_uses_required_flags_and_separate_winners(monkeypatch, tmp
     assert all(c[c.index("--cohort-step-days") + 1] == "7" for c in commands[1:-1])
     assert commands[-1] == ["prop_shock_bounds.py"]
     assert json.loads((tmp_path / "benchmark_selection.json").read_text())["winners"]["two_step"]["candidate"] == "1"
+
+
+def test_data_readiness_accepts_unix_epoch_schedule_keys(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(auto, "OUT", Path("evidence"))
+    buckets = {}
+    day = date(2024, 11, 15)
+    while day < date(2026, 11, 15):
+        ts = int(datetime(day.year, day.month, day.day, tzinfo=timezone.utc).timestamp())
+        buckets[str(ts)] = ["BTC/USDT:USDT"]
+        day += timedelta(days=1)
+    doc = {"schedule": buckets, "coverage_diagnostics": {"empty_days": 0},
+           "anti_survivorship": True, "include_archived_delisted": True}
+    for preset in ("base", "strict", "bluechip"):
+        auto.atomic_json(auto.schedule_path(preset), doc)
+    archive = Path("evidence/archive/OLDUSDT/day-1m.feather")
+    archive.parent.mkdir(parents=True)
+    archive.write_bytes(b"fixture")
+    auto.atomic_json(Path("evidence/archive_download_manifest.json"), {
+        "sample_only": False, "start": "2024-11-01", "end": "2026-11-18",
+        "results": [{"symbol": "OLDUSDT", "output": str(archive)}]})
+    futures = Path("user_data/data/bybit/futures")
+    futures.mkdir(parents=True)
+    for symbol in ("BTC", "OLD"):
+        for tf in auto.TIMEFRAMES:
+            (futures / f"{symbol}_USDT_USDT-{tf}-futures.feather").write_bytes(b"fixture")
+    for kind in ("mark", "funding_rate"):
+        (futures / f"BTC_USDT_USDT-1h-{kind}.feather").write_bytes(b"fixture")
+    assert auto.data_readiness_issues() == []
+    assert auto.data_ready()
+
+
+def test_prepare_data_uses_demo_trading_override_and_cleans_up(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(auto, "OUT", tmp_path / "evidence")
+    ready_calls = [0]
+
+    def fake_issues():
+        ready_calls[0] += 1
+        return ["missing"] if ready_calls[0] == 1 else []
+
+    monkeypatch.setattr(auto, "data_readiness_issues", fake_issues)
+    seen_override = {}
+    seen_commands = []
+
+    def fake_run(command):
+        seen_commands.append(command)
+        if "download-data" in command:
+            config_indices = [i for i, arg in enumerate(command) if arg == "--config"]
+            assert len(config_indices) == 2
+            override = Path(command[config_indices[1] + 1])
+            assert override.is_file()
+            seen_override.update(json.loads(override.read_text(encoding="utf-8")))
+
+    monkeypatch.setattr(auto, "run", fake_run)
+    auto.prepare_data()
+    assert seen_override == {"dry_run": True, "exchange": {"demo_trading": False, "key": "", "secret": ""}}
+    assert not (tmp_path / "evidence" / "_download_override.json").exists()
+    assert any("download-data" in cmd for cmd in seen_commands)
+
+
+def test_detail_cache_flag_adapts_to_free_disk_space(tmp_path, monkeypatch):
+    monkeypatch.setattr(auto, "ROOT", tmp_path)
+    monkeypatch.setattr(auto, "DETAIL_CACHE_DIR", Path("detail_mmap_cache"))
+    monkeypatch.setattr(auto.shutil, "disk_usage", lambda _: SimpleNamespace(free=7 * 1024**3))
+    assert "--detail-array-cache" not in auto.common_args()
+    monkeypatch.setattr(auto.shutil, "disk_usage", lambda _: SimpleNamespace(free=40 * 1024**3))
+    assert "--detail-array-cache" in auto.common_args()

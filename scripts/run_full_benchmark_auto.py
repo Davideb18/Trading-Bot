@@ -14,9 +14,10 @@ import json
 import math
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = Path("user_data/forensic/strict_validation")
@@ -24,9 +25,10 @@ ENGINE = Path("scripts/prop_backtest_1to1.py")
 TIMEFRAMES = ("1m", "5m", "15m", "1h", "4h", "1d")
 SCENARIOS = {"base_0bps", "friction_10bps_rt", "stress_28bps_rt",
              "strict_wick_guard", "stress_28bps_strict_wick"}
+DETAIL_CACHE_DIR = Path("user_data/forensic/detail_mmap_cache")
+DETAIL_CACHE_MIN_FREE_BYTES = 25 * 1024**3
 COMMON = ["--allow-research-schedule", "--start", "2024-11-15", "--end", "2026-11-15",
-          "--timeframe-detail", "1m", "--ram-profile", "auto",
-          "--detail-array-cache", "user_data/forensic/detail_mmap_cache"]
+          "--timeframe-detail", "1m", "--ram-profile", "auto"]
 
 
 def read_json(path):
@@ -64,55 +66,115 @@ def present(path):
     return path.is_file() and path.stat().st_size > 0
 
 
-def data_ready():
-    """Check every daily bucket, required futures file and archived download output."""
+def detail_cache_enabled():
+    """Enable disk mmap 1m cache only when already populated or >= 25 GiB free."""
+    cache_dir = DETAIL_CACHE_DIR if DETAIL_CACHE_DIR.is_absolute() else ROOT / DETAIL_CACHE_DIR
+    if cache_dir.is_dir() and any(cache_dir.rglob("*.complete")):
+        return True
+    try:
+        return shutil.disk_usage(ROOT).free >= DETAIL_CACHE_MIN_FREE_BYTES
+    except OSError:
+        return False
+
+
+def common_args():
+    args = list(COMMON)
+    if detail_cache_enabled():
+        args.extend(["--detail-array-cache", str(DETAIL_CACHE_DIR)])
+    return args
+
+
+def _schedule_day_key(raw_key):
+    text = str(raw_key).strip()
+    if len(text) >= 10 and text[4:5] == "-" and text[7:8] == "-":
+        return text[:10]
+    try:
+        ts = int(float(text))
+        return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+    except (ValueError, OverflowError, OSError):
+        return text[:10]
+
+
+def data_readiness_issues():
+    """Return concrete missing/invalid items blocking a clean 1:1 benchmark run."""
+    issues = []
     pairs = set()
     for preset in ("base", "strict", "bluechip"):
-        doc = read_json(schedule_path(preset))
-        if not isinstance(doc, dict):
-            return False
+        spath = schedule_path(preset)
+        doc = read_json(spath)
+        if not isinstance(doc, dict) or not doc:
+            issues.append(f"schedule mancante o illeggibile: {spath}")
+            continue
         if doc.get("coverage_diagnostics", {}).get("empty_days") != 0:
-            return False
+            issues.append(f"schedule {preset}: empty_days != 0")
+            continue
         if not doc.get("anti_survivorship") or not doc.get("include_archived_delisted"):
-            return False
-        buckets = {key[:10]: value for key, value in doc.get("schedule", {}).items()}
+            issues.append(f"schedule {preset}: mancano flag anti_survivorship/include_archived_delisted")
+            continue
+        buckets = {_schedule_day_key(key): value for key, value in doc.get("schedule", {}).items()}
+        missing_days = 0
         day = date(2024, 11, 15)
         while day < date(2026, 11, 15):
             values = buckets.get(day.isoformat())
             if not values:
-                return False
-            pairs.update(values)
+                missing_days += 1
+            else:
+                pairs.update(values)
             day += timedelta(days=1)
+        if missing_days:
+            issues.append(f"schedule {preset}: {missing_days} giorni senza coppie")
         pairs.update(doc.get("ever_whitelisted_2y", []))
     archive = OUT / "archive"
     manifest = read_json(OUT / "archive_download_manifest.json")
     if not isinstance(manifest, dict) or manifest.get("sample_only", True):
-        return False
-    if manifest.get("start", "9999") > "2024-11-01" or manifest.get("end", "") < "2026-11-18":
-        return False
-    records = manifest.get("results", [])
+        issues.append("archive_download_manifest.json mancante o sample_only")
+    elif manifest.get("start", "9999") > "2024-11-01" or manifest.get("end", "") < "2026-11-18":
+        issues.append(
+            f"archive_download_manifest.json intervallo incompleto ({manifest.get('start')}..{manifest.get('end')})"
+        )
+    records = manifest.get("results", []) if isinstance(manifest, dict) else []
     if not records:
-        return False
+        issues.append("archive_download_manifest.json senza risultati")
     archived_pairs = set()
+    missing_archive = []
     for record in records:
         # Resolve the local archive layout even when a manifest came from another OS.
         filename = str(record.get("output", "")).replace("\\", "/").rsplit("/", 1)[-1]
         if not filename or not present(archive / record["symbol"] / filename):
-            return False
+            missing_archive.append(f"{record.get('symbol')}/{filename}")
+            continue
         archived_pairs.add(record["symbol"][:-4] + "/USDT:USDT")
+    if missing_archive:
+        issues.append(f"file archive delisted mancanti ({len(missing_archive)}, es. {missing_archive[0]})")
     pairs.update(archived_pairs)
     futures = Path("user_data/data/bybit/futures")
-    for pair in pairs:
+    missing_ohlcv = []
+    missing_mark_funding = []
+    for pair in sorted(pairs):
         prefix = pair.replace("/", "_").replace(":", "_")
-        if any(not present(futures / f"{prefix}-{tf}-futures.feather") for tf in TIMEFRAMES):
-            return False
+        for tf in TIMEFRAMES:
+            if not present(futures / f"{prefix}-{tf}-futures.feather"):
+                missing_ohlcv.append(f"{prefix}-{tf}")
         # The engine records explicit in-memory fallbacks for archived delistings.
         # Active instruments must have independent mark and funding data on disk.
         if pair not in archived_pairs:
             for kind in ("mark", "funding_rate"):
                 if not any(present(p) for p in futures.glob(f"{prefix}-*-{kind}.feather")):
-                    return False
-    return bool(pairs)
+                    missing_mark_funding.append(f"{prefix}-{kind}")
+    if missing_ohlcv:
+        issues.append(f"candele futures mancanti ({len(missing_ohlcv)}, es. {', '.join(missing_ohlcv[:5])})")
+    if missing_mark_funding:
+        issues.append(
+            f"mark/funding_rate mancanti ({len(missing_mark_funding)}, es. {', '.join(missing_mark_funding[:5])})"
+        )
+    if not pairs:
+        issues.append("nessuna coppia trovata nelle schedule")
+    return issues
+
+
+def data_ready():
+    """Check every daily bucket, required futures file and archived download output."""
+    return not data_readiness_issues()
 
 
 def run(command):
@@ -130,16 +192,32 @@ def prepare_data():
         return
     pairs = str(OUT / "eligible_bybit_pairs.json")
     run_script("prop_prepare_benchmark_data.py", "--anti-survivorship", "--export-download-pairs", pairs)
-    run([sys.executable, "-m", "freqtrade", "download-data", "--config",
-         "user_data/config_prop_nfix8.json", "--pairs-file", pairs, "--trading-mode", "futures",
-         "--timeframes", *TIMEFRAMES, "--timerange", "20241101-20261118", "--prepend"])
+    # config_prop_nfix8.json enables demo_trading for live Bybit demo execution, which conflicts
+    # with Freqtrade download-data (which forces dry_run=True). Pass a temporary override config
+    # without modifying user_data/config_prop_nfix8.json.
+    override_path = OUT / "_download_override.json"
+    atomic_json(
+        override_path,
+        {"dry_run": True, "exchange": {"demo_trading": False, "key": "", "secret": ""}},
+    )
+    try:
+        run([sys.executable, "-m", "freqtrade", "download-data", "--config",
+             "user_data/config_prop_nfix8.json", "--config", str(override_path),
+             "--pairs-file", pairs, "--trading-mode", "futures",
+             "--timeframes", *TIMEFRAMES, "--timerange", "20241101-20261118", "--prepend"])
+    finally:
+        override_path.unlink(missing_ok=True)
     run_script("prop_archive_data.py", "--start", "2024-11-01", "--end", "2026-11-18", "--delete-raw")
     run_script("prop_marketcap_archive.py")
     run_script("prop_prepare_benchmark_data.py", "--start", "2024-11-15", "--end", "2026-11-15",
                "--anti-survivorship", "--include-archived-delisted", "--mcap-mode", "hybrid",
                "--fetch-coingecko", "--build-presets-dir", OUT)
-    if not data_ready():
-        raise RuntimeError("Dati/schedule ancora incompleti: nessun backtest avviato. Correggere i dati e rilanciare.")
+    issues = data_readiness_issues()
+    if issues:
+        detail = "; ".join(issues[:6])
+        raise RuntimeError(
+            f"Dati/schedule ancora incompleti: nessun backtest avviato ({detail}). Correggere i dati e rilanciare."
+        )
 
 
 def walk(value):
@@ -178,7 +256,8 @@ def safe(row):
         for key, value in item.items():
             if key in ("fail_official", "funded_margin_gt_25pct_bars", "funded_notional_gt_2x_bars",
                        "official_daily_breach_wick_bars", "official_overall_breach_wick_bars",
-                       "total_official_daily_breach_wick_bars") and value != 0:
+                       "total_official_daily_breach_wick_bars",
+                       "total_official_overall_breach_wick_bars") and value != 0:
                 return False
             if key in ("official_breach_close", "official_breach_wick") and value is not None:
                 return False
@@ -252,7 +331,7 @@ def checkpoint_job(output, command, schedule, validate, compatible):
 
 def grid(preset, ids, step, name):
     schedule = schedule_path(preset)
-    command = [sys.executable, "-u", str(ENGINE), *COMMON, "--pairlist-schedule", str(schedule),
+    command = [sys.executable, "-u", str(ENGINE), *common_args(), "--pairlist-schedule", str(schedule),
                "--cohort-step-days", str(step), "--slippage-bps", "10", "--strict-wick-guard",
                "--candidates", *ids, "--grid-json", str(OUT / name)]
 
@@ -272,7 +351,7 @@ def grid(preset, ids, step, name):
 
 def stress(preset, candidate, name):
     schedule = schedule_path(preset)
-    command = [sys.executable, "-u", str(ENGINE), *COMMON, "--pairlist-schedule", str(schedule),
+    command = [sys.executable, "-u", str(ENGINE), *common_args(), "--pairlist-schedule", str(schedule),
                "--cohort-step-days", "7", "--slippage-bps", "10", "--strict-wick-guard",
                "--candidates", candidate, "--suite-json", str(OUT / name)]
 
