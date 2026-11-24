@@ -59,7 +59,7 @@ def main():
                   license="CC BY-NC 4.0; retain attribution; evaluate commercial licensing before production use",
                   caveat="Historical revised daily data, not a certified point-in-time vintage. Asset ticker mapping requires verification. Missing assets remain unknown.",
                   assets_with_cap=len({r["asset"] for r in records}), records=records)
-    (ROOT / "manifest.json").write_text(json.dumps(report, indent=2))
+    (ROOT / "manifest.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     print("Capitalization history imported for", report["assets_with_cap"], "assets", flush=True)
 
 

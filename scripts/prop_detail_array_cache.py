@@ -3,9 +3,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from pathlib import Path
 
 import numpy as np
+
+
+def _replace_atomic(src: Path, dst: Path) -> None:
+    for attempt in range(5):
+        try:
+            src.replace(dst)
+            return
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.1 * (attempt + 1))
 
 
 class DetailArrayCache:
@@ -29,9 +41,12 @@ class DetailArrayCache:
             temporary = path.with_suffix(path.suffix + ".tmp")
             with temporary.open("wb") as stream:
                 np.save(stream, array, allow_pickle=False)
-            temporary.replace(path)
+            _replace_atomic(temporary, path)
         # Publish only after both exact arrays are fully written.
         temporary = complete.with_suffix(".tmp")
-        temporary.write_text("Normalized by Freqtrade; includes its existing missing-bar treatment.\n")
-        temporary.replace(complete)
+        temporary.write_text(
+            "Normalized by Freqtrade; includes its existing missing-bar treatment.\n",
+            encoding="utf-8",
+        )
+        _replace_atomic(temporary, complete)
         return self.load(key)

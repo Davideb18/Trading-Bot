@@ -76,12 +76,32 @@ from scripts.prop_detail_array_cache import DetailArrayCache
 logger = logging.getLogger("prop_backtest_1to1")
 
 _ORIG_LOAD_PAIR_HISTORY = history.load_pair_history
+_EPOCH_UTC = datetime(1970, 1, 1, tzinfo=UTC)
+
+
+def _replace_atomic(src: Path, dst: Path) -> None:
+    """Atomic replace resilient to transient Windows antivirus/indexer locks."""
+    for attempt in range(5):
+        try:
+            src.replace(dst)
+            return
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.1 * (attempt + 1))
 
 
 def _configure_windows_asyncio() -> None:
-    """Match Freqtrade CLI Windows SelectorEventLoop and force native OS DNS (avoids aiodns DNSError 11)."""
+    """Match Freqtrade CLI Windows SelectorEventLoop, native OS DNS, and UTF-8 stdio."""
     if sys.platform != "win32":
         return
+    for stream in (sys.stdout, sys.stderr):
+        reconf = getattr(stream, "reconfigure", None)
+        if callable(reconf):
+            try:
+                reconf(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
     try:
         from freqtrade.system import asyncio_setup
 
@@ -446,7 +466,7 @@ class _FastAnalyzedTable:
             return cls(
                 cols,
                 n_rows,
-                datetime.fromtimestamp(0, tz=UTC),
+                _EPOCH_UTC,
                 path=path,
                 deferred_cols=deferred,
                 full_loaded=(len(deferred) == 0),
@@ -464,7 +484,7 @@ class _FastAnalyzedTable:
         return cls(
             cols,
             n_rows,
-            datetime.fromtimestamp(0, tz=UTC),
+            _EPOCH_UTC,
             path=path,
             full_loaded=True,
             on_full_load=on_full_load,
@@ -480,7 +500,7 @@ def _discover_callback_columns() -> set[str]:
     if _CALLBACK_COLS_CACHE is not None:
         return _CALLBACK_COLS_CACHE
     strat_path = REPO / "user_data" / "strategies" / "NostalgiaForInfinityX8_Prop.py"
-    src = strat_path.read_text()
+    src = strat_path.read_text(encoding="utf-8")
     cols = set(
         re.findall(
             r'candle(?:_\d+)?(?:\[\s*|\.get\(\s*)["\']([A-Za-z0-9_.-]+)["\']',
@@ -1035,10 +1055,10 @@ class PropParityBacktesting(Backtesting):
                 )
                 if cache_file.exists():
                     try:
-                        cur = json.loads(cache_file.read_text())
+                        cur = json.loads(cache_file.read_text(encoding="utf-8"))
                         cur.setdefault("data", {}).update(parsed)
                         cur["updated"] = datetime.now(UTC).isoformat()
-                        cache_file.write_text(json.dumps(cur))
+                        cache_file.write_text(json.dumps(cur), encoding="utf-8")
                     except Exception:
                         pass
             except Exception as exc:
@@ -2488,7 +2508,7 @@ def build_bt_config(
     timeframe_detail: str = "",
     start_iso: str = "2023-11-15",
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    raw_cfg = json.loads(config_path.read_text())
+    raw_cfg = json.loads(config_path.read_text(encoding="utf-8"))
     pg = raw_cfg.setdefault("prop_guard", {})
     if not pg.get("account_id"):
         pg["account_id"] = "backtest_sim_acct"
@@ -2596,7 +2616,7 @@ def _prepare_universe_cached(
     analyzed_paths: dict[str, Path] = {}
 
     if manifest_path.exists() and prec_path.exists():
-        manifest = json.loads(manifest_path.read_text())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if manifest.get("universe") == universe and manifest.get("complete"):
             bt.price_pair_prec = pickle.loads(prec_path.read_bytes())
             bt.available_pairs = list(manifest["available_pairs"])
@@ -2640,7 +2660,7 @@ def _prepare_universe_cached(
                 if not (sib_manifest_path.exists() and sib_prec_path.exists()):
                     continue
                 try:
-                    sib_manifest = json.loads(sib_manifest_path.read_text())
+                    sib_manifest = json.loads(sib_manifest_path.read_text(encoding="utf-8"))
                     sib_universe = set(sib_manifest.get("universe", []))
                     if not (sib_manifest.get("complete") and universe_set <= sib_universe):
                         continue
@@ -2777,7 +2797,8 @@ def _prepare_universe_cached(
                     "max_date": pd.Timestamp(max_date).isoformat(),
                     "files": file_index,
                 }
-            )
+            ),
+            encoding="utf-8",
         )
 
     # Install fast column-pruned two-tier LRU wrapper on dataprovider.get_analyzed_dataframe.
@@ -2847,7 +2868,7 @@ def _prepare_universe_cached(
                 la = (
                     df_full["date"].iloc[-1].to_pydatetime()
                     if not df_full.empty
-                    else datetime.fromtimestamp(0, tz=UTC)
+                    else _EPOCH_UTC
                 )
                 analyzed_lru[pair] = (df_full, la)
                 cur_map[key] = (df_full, la)
@@ -2888,7 +2909,7 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
     schedule = None
     schedule_meta_summary: dict[str, Any] = {}
     if args.pairlist_schedule:
-        meta = json.loads(Path(args.pairlist_schedule).read_text())
+        meta = json.loads(Path(args.pairlist_schedule).read_text(encoding="utf-8"))
         if meta.get("zero_lookahead") is False and not getattr(
             args, "allow_research_schedule", False
         ):
@@ -3056,7 +3077,7 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
         suite_path.parent.mkdir(parents=True, exist_ok=True)
         if suite_path.exists() and not getattr(args, "overwrite_suite", False):
             try:
-                prev = json.loads(suite_path.read_text())
+                prev = json.loads(suite_path.read_text(encoding="utf-8"))
                 prev_meta = prev.get("meta", {})
                 same_run = all(
                     prev_meta.get(k) == suite_meta.get(k)
@@ -3103,8 +3124,8 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
             suite_out["scenarios"][sc["name"]] = sc_res
             suite_out["total_runtime_sec"] = round(time.time() - t0, 1)
             tmp_path = suite_path.with_suffix(suite_path.suffix + ".tmp")
-            tmp_path.write_text(json.dumps(suite_out, indent=2))
-            tmp_path.replace(suite_path)
+            tmp_path.write_text(json.dumps(suite_out, indent=2), encoding="utf-8")
+            _replace_atomic(tmp_path, suite_path)
             _release_unused_memory()
         return suite_out
 
@@ -3129,7 +3150,7 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
         "runtime_sec": round(time.time() - t0, 1),
     }
     if args.output_json:
-        Path(args.output_json).write_text(json.dumps(out, indent=2))
+        Path(args.output_json).write_text(json.dumps(out, indent=2), encoding="utf-8")
     return out
 
 
@@ -4444,7 +4465,7 @@ def run_grid_sweep(
     completed_by_id: dict[str, dict[str, Any]] = {}
     if out_path and out_path.exists() and not getattr(args, "overwrite_suite", False):
         try:
-            prev = json.loads(out_path.read_text())
+            prev = json.loads(out_path.read_text(encoding="utf-8"))
             same_run = (
                 prev.get("schema_version") == 4
                 and prev.get("train_window") == [str(_to_utc(min_date)), str(mid_date)]
@@ -4452,8 +4473,8 @@ def run_grid_sweep(
                 and prev.get("slippage_bps_roundtrip") == args.slippage_bps
                 and prev.get("strict_wick_guard") == args.strict_wick_guard
                 and prev.get("cohort_step_days") == args.cohort_step_days
-                and (prev.get("schedule_meta") or {}).get("path")
-                == (schedule_meta or {}).get("path")
+                and str((prev.get("schedule_meta") or {}).get("path") or "").replace("\\", "/")
+                == str((schedule_meta or {}).get("path") or "").replace("\\", "/")
             )
             if same_run and isinstance(prev.get("candidates"), list):
                 for row in prev["candidates"]:
@@ -4613,16 +4634,16 @@ def run_grid_sweep(
         if out_path:
             out_path.parent.mkdir(parents=True, exist_ok=True)
             tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
-            tmp_path.write_text(json.dumps(_build_payload(), indent=2))
-            tmp_path.replace(out_path)
+            tmp_path.write_text(json.dumps(_build_payload(), indent=2), encoding="utf-8")
+            _replace_atomic(tmp_path, out_path)
         _release_unused_memory()
 
     out = _build_payload()
     if out_path:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
-        tmp_path.write_text(json.dumps(out, indent=2))
-        tmp_path.replace(out_path)
+        tmp_path.write_text(json.dumps(out, indent=2), encoding="utf-8")
+        _replace_atomic(tmp_path, out_path)
     return out
 
 

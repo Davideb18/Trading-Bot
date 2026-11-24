@@ -134,3 +134,66 @@ def test_configure_windows_asyncio_forces_threaded_resolver(monkeypatch):
     assert called == ["asyncio_setup"]
     assert aiohttp.resolver.DefaultResolver is aiohttp.resolver.ThreadedResolver
     assert aiohttp.connector.DefaultResolver is aiohttp.resolver.ThreadedResolver
+
+
+def test_all_benchmark_scripts_use_explicit_utf8_text_io():
+    import ast
+    from pathlib import Path
+
+    scripts = [
+        "scripts/run_full_benchmark_auto.py",
+        "scripts/prop_backtest_1to1.py",
+        "scripts/prop_detail_array_cache.py",
+        "scripts/prop_phase_checkpoint.py",
+        "scripts/prop_callback_snapshot.py",
+        "scripts/prop_shock_bounds.py",
+        "scripts/prop_prepare_benchmark_data.py",
+        "scripts/prop_archive_data.py",
+        "scripts/prop_marketcap_archive.py",
+    ]
+    missing = []
+    for rel in scripts:
+        tree = ast.parse(Path(rel).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in ("read_text", "write_text")
+            ):
+                if not any(kw.arg == "encoding" for kw in node.keywords):
+                    missing.append(f"{rel}:{node.lineno}: {node.func.attr}()")
+    assert missing == []
+
+
+def test_discover_callback_columns_survives_windows_cp1252_default(monkeypatch):
+    from pathlib import Path
+
+    orig_read_text = Path.read_text
+
+    def cp1252_default(self, encoding=None, errors=None, newline=None):
+        return orig_read_text(self, encoding=encoding or "cp1252", errors=errors, newline=newline)
+
+    monkeypatch.setattr(Path, "read_text", cp1252_default)
+    monkeypatch.setattr(engine, "_CALLBACK_COLS_CACHE", None)
+    cols = engine._discover_callback_columns()
+    assert "close" in cols and "enter_long" in cols
+
+
+def test_replace_atomic_retries_windows_permission_error(tmp_path, monkeypatch):
+    src = tmp_path / "a.tmp"
+    dst = tmp_path / "a.json"
+    src.write_text("{}", encoding="utf-8")
+    attempts = [0]
+    orig_replace = type(src).replace
+
+    def flaky_replace(self, target):
+        attempts[0] += 1
+        if attempts[0] < 3:
+            raise PermissionError("Windows Defender transient lock")
+        return orig_replace(self, target)
+
+    monkeypatch.setattr(type(src), "replace", flaky_replace)
+    monkeypatch.setattr(engine.time, "sleep", lambda _: None)
+    engine._replace_atomic(src, dst)
+    assert attempts[0] == 3
+    assert dst.read_text(encoding="utf-8") == "{}"

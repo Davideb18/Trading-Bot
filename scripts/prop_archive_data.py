@@ -47,12 +47,12 @@ def download(job, *, delete_raw: bool = False):
     raw = directory / filename
     result_path = directory / (filename + ".manifest.json")
     if result_path.exists():
-        existing = json.loads(result_path.read_text())
+        existing = json.loads(result_path.read_text(encoding="utf-8"))
         if delete_raw and raw.exists() and Path(existing.get("output", "")).exists():
             raw.unlink(missing_ok=True)
             if not existing.get("raw_deleted"):
                 existing["raw_deleted"] = True
-                result_path.write_text(json.dumps(existing, indent=2))
+                result_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
         return existing
     url = BASE + symbol + "/" + filename
     if not raw.exists():
@@ -97,7 +97,7 @@ def download(job, *, delete_raw: bool = False):
                       + 1 - len(bars),
                   downloaded_at=datetime.now(UTC).isoformat(),
                   caveat="Observed trade bars only; no mark, funding or classification evidence")
-    result_path.write_text(json.dumps(result, indent=2))
+    result_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(f"{symbol} {filename}: {len(bars)} minute bars (raw_deleted={bool(delete_raw)})", flush=True)
     return result
 
@@ -118,7 +118,7 @@ def main():
     ROOT.mkdir(parents=True, exist_ok=True)
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
         inventories = list(pool.map(inventory, args.symbols))
-        (ROOT / "archive_inventory.json").write_text(json.dumps(inventories, indent=2))
+        (ROOT / "archive_inventory.json").write_text(json.dumps(inventories, indent=2), encoding="utf-8")
         jobs = []
         for item in inventories:
             symbol = item["symbol"]
@@ -133,7 +133,7 @@ def main():
         if not args.inventory_only:
             results = list(pool.map(lambda j: download(j, delete_raw=delete_raw), jobs))
             (ROOT / "archive_download_manifest.json").write_text(json.dumps(
-                dict(sample_only=args.sample, delete_raw=delete_raw, start=args.start, end=args.end, results=results), indent=2))
+                dict(sample_only=args.sample, delete_raw=delete_raw, start=args.start, end=args.end, results=results), indent=2), encoding="utf-8")
 
 
 if __name__ == "__main__":

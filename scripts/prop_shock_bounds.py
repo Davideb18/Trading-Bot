@@ -24,7 +24,7 @@ def main():
     out.write_text(json.dumps(dict(
         assumptions="5000 USDT; 1x; 28bps roundtrip slippage; illustrative 11bps roundtrip fees; no prior loss or funding",
         result_type="necessary sizing bounds, not historical or synthetic portfolio replay",
-        rows=rows), indent=2))
+        rows=rows), indent=2), encoding="utf-8")
     print(json.dumps(rows, indent=2))
 
 

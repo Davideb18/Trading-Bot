@@ -17,6 +17,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 from datetime import date, datetime, timedelta, timezone
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,12 +39,23 @@ def read_json(path):
         return {}
 
 
+def _replace_atomic(src, dst):
+    for attempt in range(5):
+        try:
+            src.replace(dst)
+            return
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.1 * (attempt + 1))
+
+
 def atomic_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(path.suffix + ".tmp")
     temp.write_text(json.dumps(value, indent=2, allow_nan=False), encoding="utf-8")
-    temp.replace(path)
+    _replace_atomic(temp, path)
 
 
 def candidates():
@@ -179,7 +191,10 @@ def data_ready():
 
 def run(command):
     print("\n>>> " + subprocess.list2cmdline(command), flush=True)
-    subprocess.run(command, cwd=ROOT, check=True)
+    env = os.environ.copy()
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    subprocess.run(command, cwd=ROOT, env=env, check=True)
 
 
 def run_script(name, *args):
@@ -341,7 +356,8 @@ def grid(preset, ids, step, name):
                 and doc.get("strict_wick_guard") is True
                 and doc.get("train_window", [""])[0][:10] == "2024-11-15"
                 and doc.get("oos_window", ["", ""])[-1][:10] == "2026-11-15"
-                and doc.get("schedule_meta", {}).get("path") == str(schedule)
+                and str(doc.get("schedule_meta", {}).get("path") or "").replace("\\", "/")
+                == str(schedule).replace("\\", "/")
                 and all(complete_row(r) for r in doc.get("candidates", [])))
 
     return checkpoint_job(OUT / name, command, schedule,
@@ -364,7 +380,8 @@ def stress(preset, candidate, name):
                 and meta.get("start", "")[:10] == "2024-11-15"
                 and meta.get("end", "")[:10] == "2026-11-15"
                 and (meta.get("applied_candidate") or {}).get("id") == candidate
-                and meta.get("schedule_meta", {}).get("path") == str(schedule))
+                and str(meta.get("schedule_meta", {}).get("path") or "").replace("\\", "/")
+                == str(schedule).replace("\\", "/"))
 
     def complete(doc):
         scenarios = doc.get("scenarios", {})

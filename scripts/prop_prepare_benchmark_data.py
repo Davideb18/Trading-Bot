@@ -81,7 +81,7 @@ def fetch_or_load_bybit_instruments(*, allow_offline_empty: bool = False) -> dic
     rows: list[dict[str, Any]] = []
     if inst_path.is_file():
         try:
-            payload = json.loads(inst_path.read_text())
+            payload = json.loads(inst_path.read_text(encoding="utf-8"))
             rows = payload.get("list") or payload.get("result", {}).get("list") or []
         except Exception:
             rows = []
@@ -107,7 +107,8 @@ def fetch_or_load_bybit_instruments(*, allow_offline_empty: bool = False) -> dic
                 json.dumps(
                     {"observed_at": datetime.now(UTC).isoformat(), "count": len(rows), "list": rows},
                     indent=2,
-                )
+                ),
+                encoding="utf-8",
             )
         except Exception:
             if not allow_offline_empty:
@@ -133,7 +134,7 @@ def load_or_fetch_coingecko_mcap_map(*, fetch_online: bool = False) -> dict[str,
         if not candidate.is_file():
             continue
         try:
-            raw = json.loads(candidate.read_text())
+            raw = json.loads(candidate.read_text(encoding="utf-8"))
             if isinstance(raw, dict) and isinstance(raw.get("caps"), dict):
                 for k, v in raw["caps"].items():
                     if isinstance(v, (int, float)) and np.isfinite(v) and v > 0:
@@ -206,7 +207,8 @@ def load_or_fetch_coingecko_mcap_map(*, fetch_online: bool = False) -> dict[str,
                     "caps": fetched,
                 },
                 indent=2,
-            )
+            ),
+            encoding="utf-8",
         )
     return fetched
 
@@ -218,7 +220,7 @@ def export_eligible_download_pairs(
     anti_survivorship: bool = True,
 ) -> list[str]:
     """Write a Freqtrade `--pairs-file` JSON list containing ONLY eligible Bybit USDT crypto perpetuals."""
-    cfg = json.loads(config_path.read_text())
+    cfg = json.loads(config_path.read_text(encoding="utf-8"))
     patterns = (
         STRUCTURAL_BLACKLIST_PATTERNS
         if anti_survivorship
@@ -237,7 +239,7 @@ def export_eligible_download_pairs(
     if "BTC/USDT:USDT" not in pairs:
         pairs.insert(0, "BTC/USDT:USDT")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(pairs, indent=2))
+    output_path.write_text(json.dumps(pairs, indent=2), encoding="utf-8")
     return pairs
 
 
@@ -354,7 +356,7 @@ def build_point_in_time_schedule(
 ) -> dict[str, Any]:
     if mcap_mode not in ("strict", "hybrid", "none"):
         raise ValueError(f"Unsupported mcap_mode: {mcap_mode}")
-    cfg = json.loads(config_path.read_text())
+    cfg = json.loads(config_path.read_text(encoding="utf-8"))
     # In anti-survivorship mode, never apply today's discretionary altcoin blacklist.
     patterns = (
         STRUCTURAL_BLACKLIST_PATTERNS
@@ -643,7 +645,7 @@ def main() -> None:
                 offline_instruments_fallback=args.offline_instruments_fallback,
             )
             out_path = presets_dir / f"pairlist_schedule_{preset_name}_2y.json"
-            out_path.write_text(json.dumps(payload, indent=2))
+            out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             diag = payload["coverage_diagnostics"]
             print(
                 f"Preset [{preset_name}]: {len(payload['ever_whitelisted_2y'])} unique pairs | "
@@ -670,7 +672,7 @@ def main() -> None:
     )
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(payload, indent=2))
+    out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     diag = payload["coverage_diagnostics"]
     print(
         f"Saved point-in-time schedule ({len(payload['schedule'])} daily buckets, "
