@@ -78,6 +78,26 @@ logger = logging.getLogger("prop_backtest_1to1")
 _ORIG_LOAD_PAIR_HISTORY = history.load_pair_history
 
 
+def _configure_windows_asyncio() -> None:
+    """Match Freqtrade CLI Windows SelectorEventLoop and force native OS DNS (avoids aiodns DNSError 11)."""
+    if sys.platform != "win32":
+        return
+    try:
+        from freqtrade.system import asyncio_setup
+
+        asyncio_setup()
+    except Exception:
+        pass
+    try:
+        import aiohttp.connector
+        import aiohttp.resolver
+
+        aiohttp.resolver.DefaultResolver = aiohttp.resolver.ThreadedResolver
+        aiohttp.connector.DefaultResolver = aiohttp.resolver.ThreadedResolver
+    except Exception:
+        pass
+
+
 def _detect_total_ram_gb() -> float:
     try:
         if sys.platform == "win32":
@@ -884,6 +904,7 @@ class PropParityBacktesting(Backtesting):
         self.prop_synthetic_mark_pairs: list[str] = []
         self.prop_synthetic_funding_pairs: list[str] = []
 
+        _configure_windows_asyncio()
         super().__init__(config)
         self._ensure_delisted_markets(self._universe_pairs)
         self._ensure_leverage_tiers(self._universe_pairs)
@@ -4672,6 +4693,7 @@ def main():
         help="Memory profile for analyzed and 1m detail LRU caches (auto uses conservative physical-RAM tiers).",
     )
     args = parser.parse_args()
+    _configure_windows_asyncio()
     if not args.keep_deepcopy:
         import freqtrade.strategy.strategy_wrapper as _sw
 

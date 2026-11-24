@@ -114,3 +114,23 @@ def test_fast_analyzed_table_demote_and_reload_parity(tmp_path):
     tbl.release()
     assert tbl.cols == {}
     assert tbl._row_a is None and tbl._row_b is None
+
+
+def test_configure_windows_asyncio_forces_threaded_resolver(monkeypatch):
+    import aiohttp.connector
+    import aiohttp.resolver
+    import freqtrade.system as ft_system
+
+    called = []
+    monkeypatch.setattr(engine.sys, "platform", "win32")
+    monkeypatch.setattr(ft_system, "asyncio_setup", lambda: called.append("asyncio_setup"))
+
+    class DummyAsyncResolver:
+        pass
+
+    monkeypatch.setattr(aiohttp.resolver, "DefaultResolver", DummyAsyncResolver)
+    monkeypatch.setattr(aiohttp.connector, "DefaultResolver", DummyAsyncResolver)
+    engine._configure_windows_asyncio()
+    assert called == ["asyncio_setup"]
+    assert aiohttp.resolver.DefaultResolver is aiohttp.resolver.ThreadedResolver
+    assert aiohttp.connector.DefaultResolver is aiohttp.resolver.ThreadedResolver
