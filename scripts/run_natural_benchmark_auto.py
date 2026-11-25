@@ -36,6 +36,7 @@ OUT = Path("user_data/forensic/strict_validation")
 ENGINE = Path("scripts/prop_backtest_1to1.py")
 STRATEGY = Path("user_data/strategies/NostalgiaForInfinityX8_Prop.py")
 TIMEFRAMES = ("1m", "5m", "15m", "1h", "4h", "1d")
+DATA_START = "2024-07-01"  # More than 120 closed daily candles before the first cohort.
 PRESETS_ORDER = ("bluechip", "strict", "base")
 SCENARIOS = {
     "base_0bps",
@@ -47,7 +48,6 @@ SCENARIOS = {
 DETAIL_CACHE_DIR = Path("user_data/forensic/detail_mmap_cache")
 DETAIL_CACHE_MIN_FREE_BYTES = 25 * 1024**3
 COMMON = [
-    "--allow-research-schedule",
     "--start",
     "2024-11-15",
     "--end",
@@ -202,7 +202,7 @@ def _archive_issues_and_pairs():
     manifest = read_json(OUT / "archive_download_manifest.json")
     if not isinstance(manifest, dict) or manifest.get("sample_only", True):
         issues.append("archive_download_manifest.json mancante o sample_only")
-    elif manifest.get("start", "9999") > "2024-11-01" or manifest.get("end", "") < "2026-11-18":
+    elif manifest.get("start", "9999") > DATA_START or manifest.get("end", "") < "2026-11-18":
         issues.append(
             f"archive_download_manifest.json intervallo incompleto ({manifest.get('start')}..{manifest.get('end')})"
         )
@@ -232,10 +232,9 @@ def _futures_files_issues(pairs, archived_pairs):
         for tf in TIMEFRAMES:
             if not present(futures / f"{prefix}-{tf}-futures.feather"):
                 missing_ohlcv.append(f"{prefix}-{tf}")
-        if pair not in archived_pairs:
-            for kind in ("mark", "funding_rate"):
-                if not any(present(p) for p in futures.glob(f"{prefix}-*-{kind}.feather")):
-                    missing_mark_funding.append(f"{prefix}-{kind}")
+        for kind in ("mark", "funding_rate"):
+            if not any(present(p) for p in futures.glob(f"{prefix}-*-{kind}.feather")):
+                missing_mark_funding.append(f"{prefix}-{kind}")
     if missing_ohlcv:
         issues.append(f"candele futures mancanti ({len(missing_ohlcv)}, es. {', '.join(missing_ohlcv[:5])})")
     if missing_mark_funding:
@@ -257,6 +256,12 @@ def hourly_schedule_issues():
             continue
         if doc.get("resolution") != "1h":
             issues.append(f"schedule {preset}: resolution != '1h'")
+            continue
+        if doc.get("zero_lookahead") is not True or doc.get("mcap_mode") != "strict":
+            issues.append(f"schedule {preset}: historical evidence unverified or market-cap proxies enabled")
+            continue
+        if doc.get("coverage_diagnostics", {}).get("empty_hours") != 0:
+            issues.append(f"schedule {preset}: empty_hours != 0")
             continue
         if doc.get("coverage_diagnostics", {}).get("empty_days") != 0:
             issues.append(f"schedule {preset}: empty_days != 0")
@@ -299,6 +304,16 @@ def raw_market_data_present():
     futures = Path("user_data/data/bybit/futures")
     if not futures.is_dir():
         return False
+    # Existing files may start too late even when all required timeframes exist.
+    try:
+        import pandas as pd
+
+        anchor = pd.read_feather(futures / "BTC_USDT_USDT-1d-futures.feather", columns=["date"])
+        dates = pd.to_datetime(anchor["date"], utc=True).drop_duplicates()
+        if (dates < pd.Timestamp("2024-11-15", tz="UTC")).sum() < 120:
+            return False
+    except (OSError, ValueError, KeyError):
+        return False
     # Check BTC + archived pairs at minimum; hourly schedule check validates the full universe next.
     probe_pairs = set(archived_pairs) | {"BTC/USDT:USDT"}
     legacy_base = read_json(OUT / "pairlist_schedule_base_2y.json")
@@ -327,7 +342,7 @@ def prepare_data_and_hourly_schedules():
     if not raw_market_data_present():
         print("Dati raw incompleti: avvio download completo Bybit + archivi storici...", flush=True)
         pairs = str(OUT / "eligible_bybit_pairs.json")
-        run_script("prop_prepare_benchmark_data.py", "--anti-survivorship", "--export-download-pairs", pairs)
+        run_script("prop_prepare_benchmark_data.py", "--anti-survivorship", "--export-volume-universe", "--export-download-pairs", pairs)
         override_path = OUT / "_download_override.json"
         atomic_json(
             override_path,
@@ -351,13 +366,13 @@ def prepare_data_and_hourly_schedules():
                     "--timeframes",
                     *TIMEFRAMES,
                     "--timerange",
-                    "20241101-20261118",
+                    DATA_START.replace("-", "") + "-20261118",
                     "--prepend",
                 ]
             )
         finally:
             override_path.unlink(missing_ok=True)
-        run_script("prop_archive_data.py", "--start", "2024-11-01", "--end", "2026-11-18", "--delete-raw")
+        run_script("prop_archive_data.py", "--start", DATA_START, "--end", "2026-11-18", "--delete-raw")
         run_script("prop_marketcap_archive.py")
     else:
         print("Dati Bybit e archivi gia presenti su disco: nessun nuovo download necessario.", flush=True)
@@ -373,12 +388,10 @@ def prepare_data_and_hourly_schedules():
         "--anti-survivorship",
         "--include-archived-delisted",
         "--mcap-mode",
-        "hybrid",
+        "strict",
         "--build-presets-dir",
         str(OUT),
     ]
-    if not present(OUT / "coingecko_mcap_snapshot.json"):
-        sched_args.append("--fetch-coingecko")
     run_script("prop_prepare_benchmark_data.py", *sched_args)
 
     issues = hourly_schedule_issues()
@@ -492,6 +505,16 @@ def engine_signature(schedule, *, kind, step, slippage=10, strict_wick=True, can
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode())
     for path in (ENGINE, schedule):
         digest.update(Path(path).read_bytes())
+    # Strategy, configuration and imported risk/execution code also affect results.
+    sources = {ROOT / STRATEGY, ROOT / "user_data/config_prop_nfix8.json", Path(__file__)}
+    sources.update((ROOT / "user_data/strategies").glob("*.py"))
+    sources.update((ROOT / "freqtrade").rglob("*.py"))
+    for path in sorted(sources):
+        digest.update(str(path).encode())
+        digest.update(path.read_bytes() if path.is_file() else b"missing")
+    for path in sorted((ROOT / "user_data/data/bybit/futures").glob("*.feather")):
+        stat = path.stat()
+        digest.update(f"{path.name}:{stat.st_size}:{stat.st_mtime_ns}".encode())
     return digest.hexdigest()
 
 
@@ -633,7 +656,7 @@ def run_natural_grid(preset, ids, step, workers=1):
     eng_sig = engine_signature(schedule, kind="natural_grid", step=step, slippage=10, strict_wick=True)
     doc = read_json(output)
     old = read_json(marker)
-    matches = compatible(doc) and (not old or old.get("engine_signature") == eng_sig)
+    matches = compatible(doc) and old.get("engine_signature") == eng_sig
     if present(output) and not matches:
         _backup_incompatible(output)
         doc = {}
@@ -656,7 +679,8 @@ def run_natural_grid(preset, ids, step, workers=1):
             if not present(wpath):
                 continue
             wdoc = read_json(wpath)
-            if compatible(wdoc):
+            wmarker = wpath.with_suffix(wpath.suffix + ".run.json")
+            if compatible(wdoc) and read_json(wmarker).get("engine_signature") == eng_sig:
                 for row in wdoc.get("candidates", []):
                     if (row.get("candidate") or {}).get("id") == cid and complete_row(row):
                         completed_by_id[cid] = row
@@ -664,6 +688,7 @@ def run_natural_grid(preset, ids, step, workers=1):
                             meta_template = {k: v for k, v in wdoc.items() if k != "candidates"}
                         break
             wpath.unlink(missing_ok=True)
+            wmarker.unlink(missing_ok=True)
 
     atomic_json(marker, {"engine_signature": eng_sig, "workers": workers, "preset": preset, "step": step})
 
@@ -707,6 +732,7 @@ def run_natural_grid(preset, ids, step, workers=1):
             raise RuntimeError(f"Annullato prima dell'avvio di {cid}")
         wjson = workers_dir / f"{output.stem}.{cid}.json"
         wlog = workers_dir / f"{output.stem}.{cid}.log"
+        atomic_json(wjson.with_suffix(wjson.suffix + ".run.json"), {"engine_signature": eng_sig})
         command = [
             sys.executable,
             "-u",
@@ -882,7 +908,7 @@ def run_stress_suite(preset, candidate, name, ram_profile="auto"):
 
     doc = read_json(output)
     old = read_json(marker)
-    matches = compatible(doc) and (not old or old.get("engine_signature") == eng_sig)
+    matches = compatible(doc) and old.get("engine_signature") == eng_sig
     if present(output) and not matches:
         _backup_incompatible(output)
         doc = {}

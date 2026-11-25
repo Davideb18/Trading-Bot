@@ -218,8 +218,9 @@ def export_eligible_download_pairs(
     output_path: Path,
     *,
     anti_survivorship: bool = True,
+    volume_universe: bool = False,
 ) -> list[str]:
-    """Write a Freqtrade `--pairs-file` JSON list containing ONLY eligible Bybit USDT crypto perpetuals."""
+    """Export eligible pairs, or the wider pre-filter volume universe when requested."""
     cfg = json.loads(config_path.read_text(encoding="utf-8"))
     patterns = (
         STRUCTURAL_BLACKLIST_PATTERNS
@@ -230,7 +231,15 @@ def export_eligible_download_pairs(
     instruments = fetch_or_load_bybit_instruments()
     pairs: list[str] = []
     for base, info in sorted(instruments.items()):
-        if not is_eligible_bybit_crypto(info):
+        if volume_universe:
+            if not (
+                info.get("contractType") == "LinearPerpetual"
+                and info.get("quoteCoin") == "USDT"
+                and info.get("settleCoin") == "USDT"
+                and not info.get("isPreListing", False)
+            ):
+                continue
+        elif not is_eligible_bybit_crypto(info):
             continue
         pair = f"{base}/USDT:USDT"
         if any(r.fullmatch(pair) or r.match(pair) for r in blacklist_patterns):
@@ -430,6 +439,7 @@ def build_point_in_time_schedule(
 
     daily_files = sorted(FUTURES_DIR.glob("*-1d-futures.feather"))
     pair_daily: dict[str, pd.DataFrame] = {}
+    instrument_eligible: set[str] = set()
     pair_hourly_qv: dict[str, np.ndarray] = {}
     pair_last_usable_s: dict[str, int] = {}
     archived_included: set[str] = set()
@@ -454,7 +464,10 @@ def build_point_in_time_schedule(
                 # Local offline smoke-test fallback only when explicitly requested and instruments.json is absent.
                 pass
             else:
-                continue
+                # Keep its volume in the initial ranking: live filters instruments after Top N.
+                inst_info = None
+        if is_eligible_bybit_crypto(inst_info) or pair in archived_included or used_offline_inst_fallback:
+            instrument_eligible.add(pair)
         # Require 5m data present as well (and 1h when building hourly schedules)
         if not (FUTURES_DIR / f"{base}_USDT_USDT-5m-futures.feather").is_file():
             continue
@@ -465,7 +478,7 @@ def build_point_in_time_schedule(
             df = pd.read_feather(f)
         except Exception:
             continue
-        if df.empty or len(df) < min_days_listed:
+        if df.empty:
             continue
         df = df.sort_values("date").reset_index(drop=True)
         df["day"] = pd.to_datetime(df["date"], utc=True).dt.floor("D")
@@ -591,6 +604,7 @@ def build_point_in_time_schedule(
     if resolution == "1d":
         for d in all_days:
             candidates: list[tuple[float, str]] = []
+            eligible: set[str] = set()
             for pair, df_p in pair_daily.items():
                 if d not in df_p.index:
                     continue
@@ -599,18 +613,20 @@ def build_point_in_time_schedule(
                     row = row.iloc[-1]
                 age = int(row["age_days"])
                 qv = float(row["quote_vol"])
+                if np.isfinite(qv) and qv > min_value_usdt:
+                    candidates.append((qv, pair))
                 vol = float(row["volatility_10d"]) if pd.notna(row["volatility_10d"]) else 999.0
                 roc = float(row["roc_10d"]) if pd.notna(row["roc_10d"]) else 999.0
-                if age < min_days_listed or qv < min_value_usdt:
+                if pair not in instrument_eligible or age < min_days_listed:
                     continue
                 if vol > max_volatility or roc > max_rate_of_change:
                     continue
                 if not _admit_mcap_for_day(pair, d):
                     continue
-                candidates.append((qv, pair))
+                eligible.add(pair)
 
             candidates.sort(key=lambda x: x[0], reverse=True)
-            top_pairs = [p for _, p in candidates[:number_assets]]
+            top_pairs = [p for _, p in candidates[:number_assets] if p in eligible]
             ts_key = str(int(d.timestamp()))
             schedule[ts_key] = top_pairs
             daily_counts.append(len(top_pairs))
@@ -632,7 +648,7 @@ def build_point_in_time_schedule(
                 age = int(row["age_days"])
                 vol = float(row["volatility_10d"]) if pd.notna(row["volatility_10d"]) else 999.0
                 roc = float(row["roc_10d"]) if pd.notna(row["roc_10d"]) else 999.0
-                if age < min_days_listed or vol > max_volatility or roc > max_rate_of_change:
+                if pair not in instrument_eligible or age < min_days_listed or vol > max_volatility or roc > max_rate_of_change:
                     continue
                 if not _admit_mcap_for_day(pair, d):
                     continue
@@ -644,15 +660,15 @@ def build_point_in_time_schedule(
                 h_idx = d_idx * 24 + hour_offset
                 h_ts = day_start_s + hour_offset * 3600
                 candidates_h: list[tuple[float, str]] = []
-                for pair in day_eligible_pairs:
+                for pair in pair_hourly_qv:
                     if h_ts > pair_last_usable_s[pair]:
                         continue
                     qv_24h = float(pair_hourly_qv[pair][h_idx])
-                    if qv_24h < min_value_usdt:
+                    if not np.isfinite(qv_24h) or qv_24h <= min_value_usdt:
                         continue
                     candidates_h.append((qv_24h, pair))
                 candidates_h.sort(key=lambda x: x[0], reverse=True)
-                top_pairs = [p for _, p in candidates_h[:number_assets]]
+                top_pairs = [p for _, p in candidates_h[:number_assets] if p in day_eligible_pairs]
                 hourly_counts.append(len(top_pairs))
                 if len(top_pairs) > day_max_pairs:
                     day_max_pairs = len(top_pairs)
@@ -761,6 +777,10 @@ def main() -> None:
     parser.add_argument("--fetch-coingecko", action="store_true")
     parser.add_argument("--offline-instruments-fallback", action="store_true")
     parser.add_argument(
+        "--export-volume-universe", action="store_true",
+        help="Include instruments rejected by later filters so historical Top N volume is not backfilled.",
+    )
+    parser.add_argument(
         "--export-download-pairs",
         default="",
         help="Write eligible Bybit USDT crypto perpetual pairs JSON list for `freqtrade download-data --pairs-file` and exit.",
@@ -781,6 +801,7 @@ def main() -> None:
             Path(args.config),
             Path(args.export_download_pairs),
             anti_survivorship=args.anti_survivorship,
+            volume_universe=args.export_volume_universe,
         )
         print(f"Exported {len(pairs)} eligible Bybit USDT crypto pairs -> {args.export_download_pairs}")
         return

@@ -1,0 +1,15 @@
+====================================================================================================
+  REPORT DEFINITIVO NFIX8-NATURAL (UNLIMITED STAKE, WHITELIST DINAMICA 1H, WICK 1M, CRASH SWEEP)   
+====================================================================================================
+
+Vincitore One-Step : [BLUECHIP] C3
+Vincitore Two-Step : [BLUECHIP] C3
+
+CLASSIFICA COMPLETA (24 COMBINAZIONI = 3 UNIVERSI DINAMICI 1H x 8 CANDIDATI NFIX8 NATURALI):
+----------------------------------------------------------------------------------------------------
+#01 [SAFE] BLUECHIP | C3                         | 2Y Net: +1003.00$ (OOS: +1003.00$) | MaxWickDD: 12.00$ | 1-Step:  85.0% (chiuse 97.8%, med 42.0d) | Oct25 DD 12.0$ (Fail 0) | Aut26 DD 12.0$ (Fail 0)
+#02 [SAFE] BLUECHIP | C2                         | 2Y Net: +1002.00$ (OOS: +1002.00$) | MaxWickDD: 12.00$ | 1-Step:  85.0% (chiuse 97.8%, med 42.0d) | Oct25 DD 12.0$ (Fail 0) | Aut26 DD 12.0$ (Fail 0)
+#03 [SAFE] BLUECHIP | C1                         | 2Y Net: +1001.00$ (OOS: +1001.00$) | MaxWickDD: 12.00$ | 1-Step:  85.0% (chiuse 97.8%, med 42.0d) | Oct25 DD 12.0$ (Fail 0) | Aut26 DD 12.0$ (Fail 0)
+
+STRESS TEST 28 BPS SLIPPAGE + STRICT WICK SUI VINCITORI:
+----------------------------------------------------------------------------------------------------

@@ -1189,6 +1189,8 @@ class PropParityBacktesting(Backtesting):
                     continue
                 mark_df = mark_rates_dict.get(pair)
                 if mark_df is None or mark_df.empty:
+                    if not self.config.get("prop_allow_synthetic_market_data", False):
+                        raise OperationalException(f"Missing historical mark prices for {pair}; synthetic data disabled.")
                     # Archived delisted pair without mark feather: use 1h trade OHLCV in-memory ONLY.
                     fallback_mark = history.load_pair_history(
                         pair=pair,
@@ -1206,6 +1208,8 @@ class PropParityBacktesting(Backtesting):
 
                 fund_df = funding_rates_dict.get(pair)
                 if fund_df is None or fund_df.empty:
+                    if not self.config.get("prop_allow_synthetic_market_data", False):
+                        raise OperationalException(f"Missing historical funding rates for {pair}; synthetic data disabled.")
                     # Conservative 0.01% per 8h (00:00/08:00/16:00 UTC) long funding in-memory ONLY.
                     dates = pd.to_datetime(mark_df["date"], utc=True)
                     fund_df = pd.DataFrame(
@@ -2997,7 +3001,7 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
     schedule_meta_summary: dict[str, Any] = {}
     if args.pairlist_schedule:
         meta = json.loads(Path(args.pairlist_schedule).read_text(encoding="utf-8"))
-        if meta.get("zero_lookahead") is False and not getattr(
+        if meta.get("zero_lookahead") is not True and not getattr(
             args, "allow_research_schedule", False
         ):
             raise OperationalException(
@@ -3005,7 +3009,7 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
                 "market-cap identity and observation-vintage evidence before benchmarking "
                 "(or pass --allow-research-schedule for explicit research sweeps)."
             )
-        if meta.get("zero_lookahead") is False:
+        if meta.get("zero_lookahead") is not True:
             logger.warning(
                 "Running research schedule (%s): limitations=%s",
                 meta.get("validation_status"),
@@ -3048,6 +3052,7 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
         timeframe_detail=args.timeframe_detail,
         start_iso=args.start,
     )
+    cfg["prop_allow_synthetic_market_data"] = bool(getattr(args, "allow_synthetic_market_data", False))
     btc_map = load_btc_close_map(cfg["datadir"])
 
     bt = PropParityBacktesting(
@@ -4887,6 +4892,10 @@ def main():
         help="Allow running schedules marked zero_lookahead=False for research sweeps (limitations recorded in JSON).",
     )
     parser.add_argument("--pairs", nargs="*", default=None)
+    parser.add_argument(
+        "--allow-synthetic-market-data", action="store_true", default=False,
+        help="Research only: allow synthetic mark prices and funding when historical data is missing.",
+    )
     parser.add_argument("--start", default="2023-11-15")
     parser.add_argument("--end", default="2026-11-15")
     parser.add_argument("--timeframe-detail", default="")
