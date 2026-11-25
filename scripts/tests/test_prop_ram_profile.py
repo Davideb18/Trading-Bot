@@ -142,6 +142,7 @@ def test_all_benchmark_scripts_use_explicit_utf8_text_io():
 
     scripts = [
         "scripts/run_full_benchmark_auto.py",
+        "scripts/run_natural_benchmark_auto.py",
         "scripts/prop_backtest_1to1.py",
         "scripts/prop_detail_array_cache.py",
         "scripts/prop_phase_checkpoint.py",

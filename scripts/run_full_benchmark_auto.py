@@ -172,7 +172,10 @@ def data_readiness_issues():
         if not doc.get("anti_survivorship") or not doc.get("include_archived_delisted"):
             issues.append(f"schedule {preset}: mancano flag anti_survivorship/include_archived_delisted")
             continue
-        buckets = {_schedule_day_key(key): value for key, value in doc.get("schedule", {}).items()}
+        buckets = {}
+        for key, value in doc.get("schedule", {}).items():
+            if value:
+                buckets.setdefault(_schedule_day_key(key), []).extend(value)
         missing_days = 0
         day = date(2024, 11, 15)
         while day < date(2026, 11, 15):

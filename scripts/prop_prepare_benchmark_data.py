@@ -262,6 +262,29 @@ def is_eligible_bybit_crypto(info: dict[str, Any] | None) -> bool:
     )
 
 
+def _replace_atomic(src: Path, dst: Path) -> None:
+    for attempt in range(5):
+        try:
+            src.replace(dst)
+            return
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.1 * (attempt + 1))
+
+
+def _feather_readable(path: Path) -> bool:
+    if not path.is_file() or path.stat().st_size == 0:
+        return False
+    try:
+        import pyarrow.ipc as _pa_ipc
+
+        with _pa_ipc.open_file(path) as reader:
+            return reader.num_record_batches >= 0
+    except Exception:
+        return False
+
+
 def convert_archived_1m_to_freqtrade_feathers() -> list[str]:
     """Convert downloaded 1m archive bars (`user_data/forensic/strict_validation/archive/*`) to Freqtrade format."""
     arch_root = FORENSIC_DIR / "archive"
@@ -278,18 +301,33 @@ def convert_archived_1m_to_freqtrade_feathers() -> list[str]:
         base = sym_dir.name[:-4]
         pair_prefix = f"{base}_USDT_USDT"
         target_1m = FUTURES_DIR / f"{pair_prefix}-1m-futures.feather"
+        all_targets = [
+            FUTURES_DIR / f"{pair_prefix}-{tf}-futures.feather"
+            for tf in ("1m", "5m", "15m", "1h", "4h", "1d")
+        ]
+        latest_src_mtime = max(f.stat().st_mtime for f in feathers)
+        if all(_feather_readable(t) and t.stat().st_mtime >= latest_src_mtime for t in all_targets):
+            converted.append(f"{base}/USDT:USDT")
+            continue
+
         parts = [pd.read_feather(f) for f in feathers]
-        if target_1m.is_file():
+        if _feather_readable(target_1m):
             parts.insert(0, pd.read_feather(target_1m))
         df_1m = pd.concat(parts, ignore_index=True)
         df_1m["date"] = pd.to_datetime(df_1m["date"], utc=True)
+        # Stable sort: on duplicate minutes the archived trade bar (appended last) wins deterministically.
         df_1m = (
-            df_1m.sort_values("date")
+            df_1m.sort_values("date", kind="mergesort")
             .drop_duplicates(subset=["date"], keep="last")
             .reset_index(drop=True)
         )
         cols = ["date", "open", "high", "low", "close", "volume"]
-        df_1m[cols].to_feather(target_1m)
+        tmp_1m = target_1m.with_suffix(".feather.tmp")
+        try:
+            df_1m[cols].to_feather(tmp_1m, compression="lz4")
+            _replace_atomic(tmp_1m, target_1m)
+        finally:
+            tmp_1m.unlink(missing_ok=True)
 
         indexed = df_1m.set_index("date")
         for tf, rule in (("5m", "5min"), ("15m", "15min"), ("1h", "1h"), ("4h", "4h"), ("1d", "1D")):
@@ -299,7 +337,13 @@ def convert_archived_1m_to_freqtrade_feathers() -> list[str]:
                 .dropna()
                 .reset_index()
             )
-            res[cols].to_feather(FUTURES_DIR / f"{pair_prefix}-{tf}-futures.feather")
+            dst_tf = FUTURES_DIR / f"{pair_prefix}-{tf}-futures.feather"
+            tmp_tf = dst_tf.with_suffix(".feather.tmp")
+            try:
+                res[cols].to_feather(tmp_tf, compression="lz4")
+                _replace_atomic(tmp_tf, dst_tf)
+            finally:
+                tmp_tf.unlink(missing_ok=True)
             # Trade prices cannot prove mark prices or historical funding rates.
             # Those series must be downloaded independently from an official source.
         converted.append(f"{base}/USDT:USDT")
@@ -353,9 +397,12 @@ def build_point_in_time_schedule(
     coingecko_mcap_map: dict[str, float] | None = None,
     fetch_coingecko: bool = False,
     offline_instruments_fallback: bool = False,
+    resolution: str = "1d",
 ) -> dict[str, Any]:
     if mcap_mode not in ("strict", "hybrid", "none"):
         raise ValueError(f"Unsupported mcap_mode: {mcap_mode}")
+    if resolution not in ("1d", "1h"):
+        raise ValueError(f"Unsupported resolution: {resolution}")
     cfg = json.loads(config_path.read_text(encoding="utf-8"))
     # In anti-survivorship mode, never apply today's discretionary altcoin blacklist.
     patterns = (
@@ -377,10 +424,22 @@ def build_point_in_time_schedule(
     else:
         cg_map = {}
 
+    start_dt = pd.Timestamp(start_iso, tz="UTC").floor("D")
+    end_dt = pd.Timestamp(end_iso, tz="UTC").floor("D")
+    all_days = pd.date_range(start_dt, end_dt, freq="1D", tz="UTC")
+
     daily_files = sorted(FUTURES_DIR.glob("*-1d-futures.feather"))
     pair_daily: dict[str, pd.DataFrame] = {}
+    pair_hourly_qv: dict[str, np.ndarray] = {}
+    pair_last_usable_s: dict[str, int] = {}
     archived_included: set[str] = set()
     used_offline_inst_fallback = bool(offline_instruments_fallback and not instruments)
+
+    window_start_h = start_dt - pd.Timedelta(hours=23)
+    window_end_h = end_dt + pd.Timedelta(hours=23)
+    window_start_s = int(window_start_h.timestamp())
+    window_end_s = int(window_end_h.timestamp())
+    n_ext_hours = ((window_end_s - window_start_s) // 3600) + 1
 
     for f in daily_files:
         base = f.name.split("_USDT_USDT-")[0].upper()
@@ -396,8 +455,11 @@ def build_point_in_time_schedule(
                 pass
             else:
                 continue
-        # Require 5m data present as well
+        # Require 5m data present as well (and 1h when building hourly schedules)
         if not (FUTURES_DIR / f"{base}_USDT_USDT-5m-futures.feather").is_file():
+            continue
+        f_1h = FUTURES_DIR / f"{base}_USDT_USDT-1h-futures.feather"
+        if resolution == "1h" and not f_1h.is_file():
             continue
         try:
             df = pd.read_feather(f)
@@ -420,13 +482,45 @@ def build_point_in_time_schedule(
         roll_min = df["low"].astype(float).rolling(lookback_days).min()
         df["roc_10d"] = np.where(roll_min > 0, (roll_max - roll_min) / roll_min, 999.0)
         df["age_days"] = np.arange(1, len(df) + 1)
+
+        if resolution == "1h":
+            try:
+                df_1h = pd.read_feather(f_1h, columns=["date", "close", "volume"])
+            except Exception:
+                continue
+            if df_1h.empty:
+                continue
+            ts_open_s = (
+                pd.to_datetime(df_1h["date"], utc=True)
+                .dt.floor("h")
+                .dt.as_unit("s")
+                .to_numpy(dtype=np.int64)
+            )
+            # An hourly candle opening at T closes at T + 3600s: strictly usable only from T + 3600s!
+            usable_s = ts_open_s + 3600
+            order = np.argsort(usable_s, kind="mergesort")
+            usable_s = usable_s[order]
+            qv_1h = (
+                df_1h["close"].to_numpy(dtype=np.float64)[order]
+                * df_1h["volume"].to_numpy(dtype=np.float64)[order]
+            )
+            last_usable = int(usable_s[-1])
+            mask = (usable_s >= window_start_s) & (usable_s <= window_end_s)
+            if not np.any(mask):
+                continue
+            idx_h = ((usable_s[mask] - window_start_s) // 3600).astype(np.int64)
+            dense_qv = np.zeros(n_ext_hours, dtype=np.float64)
+            # Later duplicate timestamps overwrite earlier ones (matches keep='last').
+            dense_qv[idx_h] = np.where(np.isfinite(qv_1h[mask]), qv_1h[mask], 0.0)
+            csum = np.empty(n_ext_hours + 1, dtype=np.float64)
+            csum[0] = 0.0
+            np.cumsum(dense_qv, out=csum[1:])
+            pair_hourly_qv[pair] = csum[24:] - csum[:-24]
+            pair_last_usable_s[pair] = last_usable
+
         pair_daily[pair] = df.set_index("usable_day")[
             ["quote_vol", "volatility_10d", "roc_10d", "age_days"]
         ]
-
-    start_dt = pd.Timestamp(start_iso, tz="UTC").floor("D")
-    end_dt = pd.Timestamp(end_iso, tz="UTC").floor("D")
-    all_days = pd.date_range(start_dt, end_dt, freq="1D", tz="UTC")
 
     schedule: dict[str, list[str]] = {}
     ever_2y: set[str] = set()
@@ -434,91 +528,146 @@ def build_point_in_time_schedule(
     mcap_provenance: dict[str, int] = defaultdict(int)
     delisted_without_mcap: set[str] = set()
     daily_counts: list[int] = []
+    hourly_counts: list[int] = []
     empty_days_post_2026_05 = 0
 
-    for d in all_days:
-        candidates: list[tuple[float, str]] = []
-        for pair, df_p in pair_daily.items():
-            if d not in df_p.index:
-                continue
-            row = df_p.loc[d]
-            if isinstance(row, pd.DataFrame):
-                row = row.iloc[-1]
-            age = int(row["age_days"])
-            qv = float(row["quote_vol"])
-            vol = float(row["volatility_10d"]) if pd.notna(row["volatility_10d"]) else 999.0
-            roc = float(row["roc_10d"]) if pd.notna(row["roc_10d"]) else 999.0
-            if age < min_days_listed or qv < min_value_usdt:
-                continue
-            if vol > max_volatility or roc > max_rate_of_change:
-                continue
-            base = pair.split("/")[0]
-            if mcap_mode == "none":
-                mcap_provenance["mcap_gate_disabled"] += 1
-            elif mcap_mode == "strict":
-                if base not in mcap_map:
-                    continue
-                mc_series = mcap_map[base]
-                prior = mc_series.loc[(mc_series.index <= d) & (mc_series.index >= d - pd.Timedelta(days=1))]
-                if prior.empty or not np.isfinite(prior.iloc[-1]) or float(prior.iloc[-1]) < min_market_cap_usdt:
-                    continue
-                mcap_provenance["coinmetrics_fresh"] += 1
-            else:
-                # hybrid mode: Coin Metrics point-in-time first; post-cutoff carry / CoinGecko fallback;
-                # archived delisted stress admission when neither Coin Metrics nor CoinGecko covers it.
-                admitted = False
-                if base in mcap_map and not mcap_map[base].empty:
-                    mc_series = mcap_map[base]
-                    prior = mc_series.loc[
-                        (mc_series.index <= d) & (mc_series.index >= d - pd.Timedelta(days=1))
-                    ]
-                    if not prior.empty:
-                        val = float(prior.iloc[-1])
-                        if np.isfinite(val) and val >= min_market_cap_usdt:
-                            mcap_provenance["coinmetrics_fresh"] += 1
-                            admitted = True
-                        else:
-                            # Authoritative Coin Metrics says < min_market_cap (or NaN) on day d -> reject!
-                            continue
-                    elif d > mc_series.index.max():
-                        # Coin Metrics free community CSV stopped updating before day d (e.g. post-May 2026).
-                        cg_val = cg_map.get(base)
-                        if cg_val is not None and np.isfinite(cg_val):
-                            if cg_val >= min_market_cap_usdt:
-                                mcap_provenance["coingecko_post_cutoff"] += 1
-                                admitted = True
-                            else:
-                                continue
-                        else:
-                            finite_vals = mc_series.dropna()
-                            if not finite_vals.empty and float(finite_vals.iloc[-1]) >= min_market_cap_usdt:
-                                mcap_provenance["coinmetrics_carried_post_cutoff"] += 1
-                                admitted = True
-                            else:
-                                continue
-                if not admitted and base in cg_map:
-                    cg_val = cg_map[base]
-                    if np.isfinite(cg_val) and cg_val >= min_market_cap_usdt:
-                        mcap_provenance["coingecko_proxy"] += 1
-                        admitted = True
-                if not admitted and include_archived_delisted and base in archived_delisted_bases:
-                    mcap_provenance["archived_delisted_no_mcap_evidence"] += 1
-                    delisted_without_mcap.add(pair)
+    def _admit_mcap_for_day(pair: str, d: pd.Timestamp) -> bool:
+        base = pair.split("/")[0]
+        if mcap_mode == "none":
+            mcap_provenance["mcap_gate_disabled"] += 1
+            return True
+        if mcap_mode == "strict":
+            if base not in mcap_map:
+                return False
+            mc_series = mcap_map[base]
+            prior = mc_series.loc[
+                (mc_series.index <= d) & (mc_series.index >= d - pd.Timedelta(days=1))
+            ]
+            if prior.empty or not np.isfinite(prior.iloc[-1]) or float(prior.iloc[-1]) < min_market_cap_usdt:
+                return False
+            mcap_provenance["coinmetrics_fresh"] += 1
+            return True
+        # hybrid mode: Coin Metrics point-in-time first; post-cutoff carry / CoinGecko fallback;
+        # archived delisted stress admission when neither Coin Metrics nor CoinGecko covers it.
+        admitted = False
+        if base in mcap_map and not mcap_map[base].empty:
+            mc_series = mcap_map[base]
+            prior = mc_series.loc[
+                (mc_series.index <= d) & (mc_series.index >= d - pd.Timedelta(days=1))
+            ]
+            if not prior.empty:
+                val = float(prior.iloc[-1])
+                if np.isfinite(val) and val >= min_market_cap_usdt:
+                    mcap_provenance["coinmetrics_fresh"] += 1
                     admitted = True
-                if not admitted:
-                    continue
-            candidates.append((qv, pair))
+                else:
+                    return False
+            elif d > mc_series.index.max():
+                cg_val = cg_map.get(base)
+                if cg_val is not None and np.isfinite(cg_val):
+                    if cg_val >= min_market_cap_usdt:
+                        mcap_provenance["coingecko_post_cutoff"] += 1
+                        admitted = True
+                    else:
+                        return False
+                else:
+                    finite_vals = mc_series.dropna()
+                    if not finite_vals.empty and float(finite_vals.iloc[-1]) >= min_market_cap_usdt:
+                        mcap_provenance["coinmetrics_carried_post_cutoff"] += 1
+                        admitted = True
+                    else:
+                        return False
+        if not admitted and base in cg_map:
+            cg_val = cg_map[base]
+            if np.isfinite(cg_val) and cg_val >= min_market_cap_usdt:
+                mcap_provenance["coingecko_proxy"] += 1
+                admitted = True
+        if not admitted and include_archived_delisted and base in archived_delisted_bases:
+            mcap_provenance["archived_delisted_no_mcap_evidence"] += 1
+            delisted_without_mcap.add(pair)
+            admitted = True
+        return admitted
 
-        candidates.sort(key=lambda x: x[0], reverse=True)
-        top_pairs = [p for _, p in candidates[:number_assets]]
-        ts_key = str(int(d.timestamp()))
-        schedule[ts_key] = top_pairs
-        daily_counts.append(len(top_pairs))
-        if len(top_pairs) == 0 and d >= pd.Timestamp("2026-06-01", tz="UTC"):
-            empty_days_post_2026_05 += 1
-        ever_all.update(top_pairs)
-        if d >= pd.Timestamp("2024-11-15", tz="UTC"):
-            ever_2y.update(top_pairs)
+    if resolution == "1d":
+        for d in all_days:
+            candidates: list[tuple[float, str]] = []
+            for pair, df_p in pair_daily.items():
+                if d not in df_p.index:
+                    continue
+                row = df_p.loc[d]
+                if isinstance(row, pd.DataFrame):
+                    row = row.iloc[-1]
+                age = int(row["age_days"])
+                qv = float(row["quote_vol"])
+                vol = float(row["volatility_10d"]) if pd.notna(row["volatility_10d"]) else 999.0
+                roc = float(row["roc_10d"]) if pd.notna(row["roc_10d"]) else 999.0
+                if age < min_days_listed or qv < min_value_usdt:
+                    continue
+                if vol > max_volatility or roc > max_rate_of_change:
+                    continue
+                if not _admit_mcap_for_day(pair, d):
+                    continue
+                candidates.append((qv, pair))
+
+            candidates.sort(key=lambda x: x[0], reverse=True)
+            top_pairs = [p for _, p in candidates[:number_assets]]
+            ts_key = str(int(d.timestamp()))
+            schedule[ts_key] = top_pairs
+            daily_counts.append(len(top_pairs))
+            if len(top_pairs) == 0 and d >= pd.Timestamp("2026-06-01", tz="UTC"):
+                empty_days_post_2026_05 += 1
+            ever_all.update(top_pairs)
+            if d >= pd.Timestamp("2024-11-15", tz="UTC"):
+                ever_2y.update(top_pairs)
+    else:
+        prev_top_pairs: list[str] | None = None
+        for d_idx, d in enumerate(all_days):
+            day_eligible_pairs: list[str] = []
+            for pair, df_p in pair_daily.items():
+                if d not in df_p.index:
+                    continue
+                row = df_p.loc[d]
+                if isinstance(row, pd.DataFrame):
+                    row = row.iloc[-1]
+                age = int(row["age_days"])
+                vol = float(row["volatility_10d"]) if pd.notna(row["volatility_10d"]) else 999.0
+                roc = float(row["roc_10d"]) if pd.notna(row["roc_10d"]) else 999.0
+                if age < min_days_listed or vol > max_volatility or roc > max_rate_of_change:
+                    continue
+                if not _admit_mcap_for_day(pair, d):
+                    continue
+                day_eligible_pairs.append(pair)
+
+            day_start_s = int(d.timestamp())
+            day_max_pairs = 0
+            for hour_offset in range(24):
+                h_idx = d_idx * 24 + hour_offset
+                h_ts = day_start_s + hour_offset * 3600
+                candidates_h: list[tuple[float, str]] = []
+                for pair in day_eligible_pairs:
+                    if h_ts > pair_last_usable_s[pair]:
+                        continue
+                    qv_24h = float(pair_hourly_qv[pair][h_idx])
+                    if qv_24h < min_value_usdt:
+                        continue
+                    candidates_h.append((qv_24h, pair))
+                candidates_h.sort(key=lambda x: x[0], reverse=True)
+                top_pairs = [p for _, p in candidates_h[:number_assets]]
+                hourly_counts.append(len(top_pairs))
+                if len(top_pairs) > day_max_pairs:
+                    day_max_pairs = len(top_pairs)
+                # Always emit 00:00 UTC daily anchor; emit intraday hours whenever whitelist changes.
+                # HistoricalPairListAdapter uses bisect_right, so unchanged hours resolve identically.
+                if hour_offset == 0 or top_pairs != prev_top_pairs:
+                    schedule[str(h_ts)] = top_pairs
+                    prev_top_pairs = top_pairs
+                ever_all.update(top_pairs)
+                if d >= pd.Timestamp("2024-11-15", tz="UTC"):
+                    ever_2y.update(top_pairs)
+
+            daily_counts.append(day_max_pairs)
+            if day_max_pairs == 0 and d >= pd.Timestamp("2026-06-01", tz="UTC"):
+                empty_days_post_2026_05 += 1
 
     ever_2y.add("BTC/USDT:USDT")
     ever_all.add("BTC/USDT:USDT")
@@ -539,8 +688,30 @@ def build_point_in_time_schedule(
     if used_offline_inst_fallback:
         limitations.append("Offline mode: Bybit instruments.json unavailable; instrument-tag gate bypassed.")
 
+    cov_diag: dict[str, Any] = {
+        "resolution": resolution,
+        "total_days": len(daily_counts),
+        "empty_days": sum(1 for c in daily_counts if c == 0),
+        "empty_days_post_2026_05": empty_days_post_2026_05,
+        "min_daily_pairs": min(daily_counts, default=0),
+        "median_daily_pairs": round(statistics.median(daily_counts), 1) if daily_counts else 0.0,
+        "max_daily_pairs": max(daily_counts, default=0),
+    }
+    if resolution == "1h":
+        cov_diag.update(
+            {
+                "total_hours": len(hourly_counts),
+                "empty_hours": sum(1 for c in hourly_counts if c == 0),
+                "emitted_schedule_keys": len(schedule),
+                "median_hourly_pairs": (
+                    round(statistics.median(hourly_counts), 1) if hourly_counts else 0.0
+                ),
+            }
+        )
+
     return {
         "generated_at": datetime.now(UTC).isoformat(),
+        "resolution": resolution,
         "zero_lookahead": False,
         "validation_status": (
             f"research_schedule_mcap_{mcap_mode}"
@@ -554,14 +725,7 @@ def build_point_in_time_schedule(
         "mcap_provenance_counts": dict(sorted(mcap_provenance.items())),
         "archived_delisted_included": sorted(archived_included),
         "archived_delisted_without_mcap": sorted(delisted_without_mcap),
-        "coverage_diagnostics": {
-            "total_days": len(daily_counts),
-            "empty_days": sum(1 for c in daily_counts if c == 0),
-            "empty_days_post_2026_05": empty_days_post_2026_05,
-            "min_daily_pairs": min(daily_counts, default=0),
-            "median_daily_pairs": round(statistics.median(daily_counts), 1) if daily_counts else 0.0,
-            "max_daily_pairs": max(daily_counts, default=0),
-        },
+        "coverage_diagnostics": cov_diag,
         "filters": {
             "number_assets": number_assets,
             "min_value_usdt": min_value_usdt,
@@ -570,6 +734,7 @@ def build_point_in_time_schedule(
             "max_volatility": max_volatility,
             "max_rate_of_change": max_rate_of_change,
             "lookback_days": lookback_days,
+            "resolution": resolution,
         },
         "ever_whitelisted_2y": sorted(ever_2y),
         "ever_whitelisted_3y": sorted(ever_all),
@@ -592,6 +757,7 @@ def main() -> None:
     parser.add_argument("--anti-survivorship", action="store_true")
     parser.add_argument("--include-archived-delisted", action="store_true")
     parser.add_argument("--mcap-mode", choices=("strict", "hybrid", "none"), default="strict")
+    parser.add_argument("--resolution", choices=("1d", "1h"), default="1d")
     parser.add_argument("--fetch-coingecko", action="store_true")
     parser.add_argument("--offline-instruments-fallback", action="store_true")
     parser.add_argument(
@@ -627,6 +793,7 @@ def main() -> None:
         presets_dir = Path(args.build_presets_dir)
         presets_dir.mkdir(parents=True, exist_ok=True)
         cg_map = load_or_fetch_coingecko_mcap_map(fetch_online=args.fetch_coingecko) if args.mcap_mode == "hybrid" else {}
+        suffix = "_1h_2y.json" if args.resolution == "1h" else "_2y.json"
         for preset_name, pcfg in PAIRLIST_PRESETS.items():
             payload = build_point_in_time_schedule(
                 config_path=Path(args.config),
@@ -643,13 +810,19 @@ def main() -> None:
                 mcap_mode=args.mcap_mode,
                 coingecko_mcap_map=cg_map,
                 offline_instruments_fallback=args.offline_instruments_fallback,
+                resolution=args.resolution,
             )
-            out_path = presets_dir / f"pairlist_schedule_{preset_name}_2y.json"
+            out_path = presets_dir / f"pairlist_schedule_{preset_name}{suffix}"
             out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             diag = payload["coverage_diagnostics"]
+            extra = (
+                f" | keys={diag['emitted_schedule_keys']}/{diag['total_hours']}h"
+                if args.resolution == "1h"
+                else ""
+            )
             print(
-                f"Preset [{preset_name}]: {len(payload['ever_whitelisted_2y'])} unique pairs | "
-                f"median {diag['median_daily_pairs']}/day | empty={diag['empty_days']} "
+                f"Preset [{preset_name}] ({args.resolution}): {len(payload['ever_whitelisted_2y'])} unique pairs | "
+                f"median {diag['median_daily_pairs']}/day{extra} | empty={diag['empty_days']} "
                 f"(post-May26 empty={diag['empty_days_post_2026_05']}) -> {out_path}"
             )
         return
@@ -669,13 +842,14 @@ def main() -> None:
         mcap_mode=args.mcap_mode,
         fetch_coingecko=args.fetch_coingecko,
         offline_instruments_fallback=args.offline_instruments_fallback,
+        resolution=args.resolution,
     )
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     diag = payload["coverage_diagnostics"]
     print(
-        f"Saved point-in-time schedule ({len(payload['schedule'])} daily buckets, "
+        f"Saved point-in-time schedule ({len(payload['schedule'])} {args.resolution} buckets, "
         f"{len(payload['ever_whitelisted_2y'])} unique 2Y eligible pairs, "
         f"median={diag['median_daily_pairs']}/day, empty={diag['empty_days']}, "
         f"post-May26 empty={diag['empty_days_post_2026_05']}) -> {out_path}"

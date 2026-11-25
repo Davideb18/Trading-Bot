@@ -166,3 +166,105 @@ def test_export_eligible_download_pairs_filters_tradfi_and_innovation(tmp_path, 
     pairs = prep.export_eligible_download_pairs(cfg, out, anti_survivorship=True)
     assert pairs == ["BTC/USDT:USDT", "ETH/USDT:USDT"]
     assert json.loads(out.read_text()) == ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+
+
+def test_hourly_schedule_enforces_zero_lookahead_rolling_volume_and_delist_cutoff(tmp_path, monkeypatch):
+    from datetime import UTC, datetime
+    from scripts.prop_backtest_1to1 import HistoricalPairListAdapter
+
+    fut = tmp_path / "futures"
+    fut.mkdir()
+    monkeypatch.setattr(prep, "FORENSIC_DIR", tmp_path)
+    monkeypatch.setattr(prep, "FUTURES_DIR", fut)
+    valid_inst = {
+        "contractType": "LinearPerpetual",
+        "quoteCoin": "USDT",
+        "settleCoin": "USDT",
+        "symbolType": "",
+        "tags": [],
+    }
+    monkeypatch.setattr(
+        prep,
+        "fetch_or_load_bybit_instruments",
+        lambda: {"AAA": valid_inst, "BBB": valid_inst},
+    )
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"exchange": {"pair_blacklist": []}}), encoding="utf-8")
+
+    # 12 daily candles 2025-01-01..2025-01-12 -> usable on 2025-01-13
+    days = pd.date_range("2025-01-01", periods=12, freq="1D", tz="UTC")
+    prices = np.linspace(100.0, 105.0, 12)
+    df_1d = pd.DataFrame(
+        {
+            "date": days,
+            "open": prices,
+            "high": prices + 1.0,
+            "low": prices - 1.0,
+            "close": prices,
+            "volume": 500_000.0,
+        }
+    )
+    for sym in ("AAA", "BBB"):
+        df_1d.to_feather(fut / f"{sym}_USDT_USDT-1d-futures.feather")
+        df_1d.to_feather(fut / f"{sym}_USDT_USDT-5m-futures.feather")
+
+    # Hourly bars from 2025-01-12 00:00 through 2025-01-13 23:00:
+    # AAA has steady $1.5M/h ($36M/24h >= $20M) all day.
+    # BBB starts low ($0.5M/h = $12M/24h < $20M), spikes +$30M on candle opening 2025-01-13 10:00
+    # (which closes at 11:00 UTC -> MUST NOT be visible at 10:00 UTC, MUST become #1 at 11:00 UTC!),
+    # and stops trading after candle opening 2025-01-13 15:00 (last usable at 16:00 UTC, dropped at 17:00 UTC!).
+    hours_aaa = pd.date_range("2025-01-12 00:00", "2025-01-13 23:00", freq="1h", tz="UTC")
+    pd.DataFrame(
+        {
+            "date": hours_aaa,
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.0,
+            "volume": 15_000.0,  # $1.5M/h -> $36M/24h
+        }
+    ).to_feather(fut / "AAA_USDT_USDT-1h-futures.feather")
+
+    hours_bbb = pd.date_range("2025-01-12 00:00", "2025-01-13 15:00", freq="1h", tz="UTC")
+    vols_bbb = np.full(len(hours_bbb), 5_000.0)  # $0.5M/h -> $12M/24h
+    spike_idx = int((pd.Timestamp("2025-01-13 10:00", tz="UTC") - hours_bbb[0]) / pd.Timedelta(hours=1))
+    vols_bbb[spike_idx] = 300_000.0  # +$30M during [10:00, 11:00) -> usable at 11:00 UTC!
+    pd.DataFrame(
+        {
+            "date": hours_bbb,
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.0,
+            "volume": vols_bbb,
+        }
+    ).to_feather(fut / "BBB_USDT_USDT-1h-futures.feather")
+
+    res = prep.build_point_in_time_schedule(
+        config_path=cfg,
+        start_iso="2025-01-13",
+        end_iso="2025-01-13",
+        min_days_listed=10,
+        min_value_usdt=20_000_000.0,
+        anti_survivorship=True,
+        mcap_mode="none",
+        resolution="1h",
+    )
+    assert res["resolution"] == "1h"
+    adapter = HistoricalPairListAdapter(res["ever_whitelisted_2y"], res["schedule"])
+    adapter.active_dynamic = True
+
+    def wl_at(hour: int) -> list[str]:
+        adapter.current_time = datetime(2025, 1, 13, hour, 0, tzinfo=UTC)
+        adapter.refresh_pairlist()
+        return adapter.whitelist
+
+    # At 10:00 UTC the [10:00, 11:00) spike candle is NOT closed yet -> zero lookahead!
+    assert wl_at(0) == ["AAA/USDT:USDT"]
+    assert wl_at(10) == ["AAA/USDT:USDT"]
+    # At 11:00 UTC the [10:00, 11:00) candle closed -> BBB jumps to #1 ahead of AAA!
+    assert wl_at(11) == ["BBB/USDT:USDT", "AAA/USDT:USDT"]
+    assert wl_at(16) == ["BBB/USDT:USDT", "AAA/USDT:USDT"]
+    # At 17:00 UTC BBB has no closed 1h data (halted/delisted after 16:00 close) -> immediately removed!
+    assert wl_at(17) == ["AAA/USDT:USDT"]
+

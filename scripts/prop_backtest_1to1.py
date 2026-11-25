@@ -23,12 +23,14 @@ import bisect
 import copy
 import gc
 import hashlib
+import inspect
 import json
 import logging
 import math
 import os
 import pickle
 import re
+import shutil
 import statistics
 import sys
 import time
@@ -2716,10 +2718,90 @@ def _prepare_universe_cached(
         max_date: datetime | None = None
         file_index: dict[str, dict[str, str]] = {}
         bt.price_pair_prec = {}
-        bt.available_pairs = []
+        avail_set: set[str] = set()
 
-        for idx in range(0, len(universe), max(1, chunk_size)):
-            batch = universe[idx : idx + max(1, chunk_size)]
+        def _link_or_copy(src: Path, dst: Path) -> None:
+            if dst.exists():
+                dst.unlink()
+            try:
+                os.link(src, dst)
+            except OSError:
+                shutil.copy2(src, dst)
+
+        # Harvest any already-preprocessed pairs from completed sibling caches with identical
+        # (start, end, strat_mtime) via hardlinks so intraday schedule updates only compute delta pairs.
+        auto_parts = cache_dir.name.split("_")
+        if (
+            len(auto_parts) == 5
+            and len(auto_parts[0]) == 10
+            and len(auto_parts[1]) == 10
+            and auto_parts[2].isdigit()
+            and auto_parts[4].isdigit()
+            and cache_dir.parent.is_dir()
+        ):
+            prefix = f"{auto_parts[0]}_{auto_parts[1]}_"
+            suffix = f"_{auto_parts[4]}"
+            for sib in sorted(cache_dir.parent.iterdir()):
+                if (
+                    sib == cache_dir
+                    or not sib.is_dir()
+                    or not sib.name.startswith(prefix)
+                    or not sib.name.endswith(suffix)
+                ):
+                    continue
+                sib_manifest_path = sib / "_manifest.json"
+                sib_prec_path = sib / "_price_prec.pkl"
+                if not (sib_manifest_path.exists() and sib_prec_path.exists()):
+                    continue
+                try:
+                    sib_manifest = json.loads(sib_manifest_path.read_text(encoding="utf-8"))
+                    if not sib_manifest.get("complete"):
+                        continue
+                    sib_files = sib_manifest.get("files", {})
+                    sib_avail = set(sib_manifest.get("available_pairs", []))
+                    sib_prec = pickle.loads(sib_prec_path.read_bytes())
+                    harvested_here = 0
+                    for p in universe:
+                        if p in file_index or p not in sib_files:
+                            continue
+                        ohl_name = sib_files[p]["ohlcv"]
+                        an_name = sib_files[p]["analyzed"]
+                        src_ohl = sib / ohl_name
+                        src_an = sib / an_name
+                        if not (src_ohl.is_file() and src_an.is_file()):
+                            continue
+                        dst_ohl = cache_dir / ohl_name
+                        dst_an = cache_dir / an_name
+                        _link_or_copy(src_ohl, dst_ohl)
+                        _link_or_copy(src_an, dst_an)
+                        arr = CompactOhlcvArray.load_npz(dst_ohl)
+                        ohclv_lists[p] = arr
+                        analyzed_paths[p] = dst_an
+                        file_index[p] = {"ohlcv": ohl_name, "analyzed": an_name}
+                        if p in sib_prec:
+                            bt.price_pair_prec[p] = sib_prec[p]
+                        if p in sib_avail:
+                            avail_set.add(p)
+                        if len(arr._ts_s):
+                            d0 = datetime.fromtimestamp(int(arr._ts_s[0]), tz=UTC)
+                            d1 = datetime.fromtimestamp(int(arr._ts_s[-1]), tz=UTC)
+                            if min_date is None or d0 < min_date:
+                                min_date = d0
+                            if max_date is None or d1 > max_date:
+                                max_date = d1
+                        harvested_here += 1
+                    if harvested_here:
+                        logger.info(
+                            "Harvested %d already-preprocessed pairs via hardlink from %s",
+                            harvested_here,
+                            sib,
+                        )
+                except Exception as exc:
+                    logger.warning("Skipping partial harvest from sibling cache %s: %s", sib, exc)
+
+        missing_universe = [p for p in universe if p not in file_index]
+        for idx in range(0, len(missing_universe), max(1, chunk_size)):
+            batch = missing_universe[idx : idx + max(1, chunk_size)]
             data_batch = history.load_data(
                 datadir=cfg["datadir"],
                 pairs=batch,
@@ -2735,7 +2817,7 @@ def _prepare_universe_cached(
             for p in batch:
                 if p in data_batch:
                     bt.price_pair_prec[p] = get_tick_size_over_time(data_batch[p])
-                    bt.available_pairs.append(p)
+                    avail_set.add(p)
             prep_batch = strat.advise_all_indicators(data_batch)
             for p, df_prep in prep_batch.items():
                 if not df_prep.empty:
@@ -2775,19 +2857,23 @@ def _prepare_universe_cached(
             del data_batch, prep_batch, ohl_batch
             _release_unused_memory()
             logger.info(
-                "Preprocessed batch %d/%d pairs (elapsed %.1fs)",
-                min(idx + max(1, chunk_size), len(universe)),
-                len(universe),
+                "Preprocessed batch %d/%d delta pairs (elapsed %.1fs)",
+                min(idx + max(1, chunk_size), len(missing_universe)),
+                len(missing_universe),
                 time.time() - t_prep,
             )
 
+        bt.available_pairs = [p for p in universe if p in avail_set]
         cached_bt_map.clear()
         cached_map.clear()
         _release_unused_memory()
         if min_date is None or max_date is None:
             raise OperationalException("No preprocessed data in selected timerange.")
-        prec_path.write_bytes(pickle.dumps(bt.price_pair_prec))
-        manifest_path.write_text(
+        prec_tmp = prec_path.with_suffix(".pkl.tmp")
+        prec_tmp.write_bytes(pickle.dumps(bt.price_pair_prec))
+        _replace_atomic(prec_tmp, prec_path)
+        manifest_tmp = manifest_path.with_suffix(".json.tmp")
+        manifest_tmp.write_text(
             json.dumps(
                 {
                     "complete": True,
@@ -2800,6 +2886,7 @@ def _prepare_universe_cached(
             ),
             encoding="utf-8",
         )
+        _replace_atomic(manifest_tmp, manifest_path)
 
     # Install fast column-pruned two-tier LRU wrapper on dataprovider.get_analyzed_dataframe.
     # Full Tier-2 tables (~100 MB each, only needed for open trades) are strictly bounded by
@@ -2926,6 +3013,7 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
             )
         schedule_meta_summary = {
             "path": str(args.pairlist_schedule),
+            "resolution": meta.get("resolution", "1d"),
             "zero_lookahead": meta.get("zero_lookahead"),
             "validation_status": meta.get("validation_status"),
             "mcap_mode": meta.get("mcap_mode"),
@@ -2989,10 +3077,12 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     if getattr(args, "detail_array_cache", ""):
-        revision_files = [Path(__file__), REPO / "scripts" / "prop_detail_array_cache.py"]
+        detail_loader_src = inspect.getsource(PropParityBacktesting._get_detail_entry).encode("utf-8")
+        revision_files = [REPO / "scripts" / "prop_detail_array_cache.py"]
         revision_files += sorted((REPO / "freqtrade" / "data").rglob("*.py"))
         revision = hashlib.sha256(
-            b"".join(p.read_bytes() for p in revision_files)
+            detail_loader_src
+            + b"".join(p.read_bytes() for p in revision_files)
             + f"{pd.__version__}:{np.__version__}".encode()
         ).hexdigest()
         bt._detail_array_cache = DetailArrayCache(args.detail_array_cache, revision)
@@ -3040,10 +3130,10 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
     selected_cands = getattr(args, "candidates", None) or []
     applied_candidate = None
     if selected_cands:
-        cand_map = {c["id"]: c for c in DEFAULT_MONEY_GRID}
+        cand_map = {c["id"]: c for c in (*DEFAULT_MONEY_GRID, *NATURAL_NFIX8_GRID)}
         if len(selected_cands) != 1 or selected_cands[0] not in cand_map:
             raise ValueError(
-                f"For --suite-json / single run, --candidates must specify exactly 1 valid candidate ID from DEFAULT_MONEY_GRID (got {selected_cands})."
+                f"For --suite-json / single run, --candidates must specify exactly 1 valid candidate ID (got {selected_cands})."
             )
         applied_candidate = cand_map[selected_cands[0]]
         _apply_candidate_money_params(bt, cfg, profile, applied_candidate)
@@ -3777,10 +3867,16 @@ def run_sequential_program_cohorts(
         p_days = [
             float(r["days_to_first_payout"]) for r in rows if r["days_to_first_payout"] is not None
         ]
+        open_end_cnt = sum(1 for r in rows if r["eval_outcome"] == "OPEN_END")
+        resolved_cnt = max(0, n - open_end_cnt)
         return {
             "total_cohorts": n,
+            "resolved_cohorts": resolved_cnt,
             "qualified_count": len(q_days),
             "qualify_rate_pct": round(100.0 * len(q_days) / n, 1) if n else 0.0,
+            "resolved_pass_rate_pct": (
+                round(100.0 * len(q_days) / resolved_cnt, 1) if resolved_cnt else None
+            ),
             "first_payout_count": len(p_days),
             "first_payout_rate_pct": round(100.0 * len(p_days) / n, 1) if n else 0.0,
             "fail_official": sum(1 for r in rows if r["eval_outcome"] == "FAIL_OFFICIAL"),
@@ -3790,7 +3886,7 @@ def run_sequential_program_cohorts(
             "halt_internal_guard": sum(
                 1 for r in rows if r["eval_outcome"] == "HALT_INTERNAL_GUARD"
             ),
-            "open_end": sum(1 for r in rows if r["eval_outcome"] == "OPEN_END"),
+            "open_end": open_end_cnt,
             "median_days_to_qualify": round(statistics.median(q_days), 1) if q_days else None,
             "p95_days_to_qualify": _percentile(q_days, 95.0),
             "median_days_to_first_payout": round(statistics.median(p_days), 1) if p_days else None,
@@ -3988,6 +4084,7 @@ def _execute_scenario(
             cur_start += timedelta(days=cohort_step_days)
 
     program_comparison = None
+    oct_2025_crash_sweep = None
     autumn_crash_sweep = None
     if cohort_starts:
         shared_phase_memo: dict[tuple[Any, ...], Any] = {}
@@ -4012,10 +4109,35 @@ def _execute_scenario(
         ts_s = program_comparison["two_step_summary"]
         print(
             f"  [{name}] 1-Step vs 2-Step: "
-            f"1-Step Qual={os_s['qualify_rate_pct']}% (Med {os_s['median_days_to_qualify']}d, 1stPay Med {os_s['median_days_to_first_payout']}d) | "
-            f"2-Step Qual={ts_s['qualify_rate_pct']}% (Med {ts_s['median_days_to_qualify']}d, 1stPay Med {ts_s['median_days_to_first_payout']}d)",
+            f"1-Step Qual={os_s['qualify_rate_pct']}% (Resolved={os_s['resolved_pass_rate_pct']}%, Med {os_s['median_days_to_qualify']}d, 1stPay Med {os_s['median_days_to_first_payout']}d) | "
+            f"2-Step Qual={ts_s['qualify_rate_pct']}% (Resolved={ts_s['resolved_pass_rate_pct']}%, Med {ts_s['median_days_to_qualify']}d, 1stPay Med {ts_s['median_days_to_first_payout']}d)",
             flush=True,
         )
+        oct25_w_start = datetime(2025, 9, 25, tzinfo=UTC)
+        oct25_w_end = datetime(2025, 10, 25, tzinfo=UTC)
+        if (
+            (not skip_crash_sweep)
+            and _to_utc(min_date) <= oct25_w_start
+            and _to_utc(max_date) >= oct25_w_end
+        ):
+            oct25_starts: list[datetime] = []
+            d_cur = oct25_w_start
+            while d_cur <= oct25_w_end:
+                oct25_starts.append(d_cur)
+                d_cur += timedelta(days=1)
+            oct_2025_crash_sweep = run_sequential_program_cohorts(
+                bt,
+                ohclv_lists,
+                analyzed_dfs,
+                oct25_starts,
+                max_date,
+                initial_balance=float(profile["initial_balance"]),
+                one_step_daily_guard=os_d_guard,
+                one_step_max_guard=os_m_guard,
+                two_step_daily_guard=ts_d_guard,
+                two_step_max_guard=ts_m_guard,
+                phase_memo=shared_phase_memo,
+            )
         crash_w_start = datetime(2026, 9, 15, tzinfo=UTC)
         crash_w_end = datetime(2026, 11, 10, tzinfo=UTC)
         if (
@@ -4077,6 +4199,7 @@ def _execute_scenario(
         "cohorts": cohorts,
         "cohorts_summary": cohorts_summary,
         "program_comparison": program_comparison,
+        "oct_2025_daily_crash_sweep": oct_2025_crash_sweep,
         "autumn_2026_daily_crash_sweep": autumn_crash_sweep,
         "runtime_sec": round(time.time() - t_sc, 1),
     }
@@ -4356,6 +4479,101 @@ DEFAULT_MONEY_GRID: list[dict[str, Any]] = [
 ]
 
 
+# 100% Native NFIX8 ('unlimited' stake sizing) candidates within certified live safety bounds:
+# - NFIX8 natively sizes regular/rapid/rebuy/grind slices from (tradable_balance / max_open_trades)
+# - Every row satisfies live NostalgiaForInfinityX8_Prop.bot_start() & freqtrade/prop_risk_budget.py
+NATURAL_NFIX8_GRID: list[dict[str, Any]] = [
+    {
+        "id": "NAT_S2_AGG1150_SLOT700_OFF",
+        "max_open_trades": 2,
+        "stake_amount": "unlimited",
+        "max_slot_notional_usdt": 700.0,
+        "max_aggregate_notional_usdt": 1150.0,
+        "guard": "standard",
+        "macro": "off",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
+    {
+        "id": "NAT_S3_AGG950_SLOT500_OFF",
+        "max_open_trades": 3,
+        "stake_amount": "unlimited",
+        "max_slot_notional_usdt": 500.0,
+        "max_aggregate_notional_usdt": 950.0,
+        "guard": "standard",
+        "macro": "off",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
+    {
+        "id": "NAT_S3_AGG1150_SLOT550_OFF",
+        "max_open_trades": 3,
+        "stake_amount": "unlimited",
+        "max_slot_notional_usdt": 550.0,
+        "max_aggregate_notional_usdt": 1150.0,
+        "guard": "standard",
+        "macro": "off",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
+    {
+        "id": "NAT_S3_AGG1200_SLOT650_OFF",
+        "max_open_trades": 3,
+        "stake_amount": "unlimited",
+        "max_slot_notional_usdt": 650.0,
+        "max_aggregate_notional_usdt": 1200.0,
+        "guard": "standard",
+        "macro": "off",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
+    {
+        "id": "NAT_S3_AGG1200_SLOT650_WIDE",
+        "max_open_trades": 3,
+        "stake_amount": "unlimited",
+        "max_slot_notional_usdt": 650.0,
+        "max_aggregate_notional_usdt": 1200.0,
+        "guard": "standard",
+        "macro": "wide",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
+    {
+        "id": "NAT_S4_AGG1200_SLOT550_OFF",
+        "max_open_trades": 4,
+        "stake_amount": "unlimited",
+        "max_slot_notional_usdt": 550.0,
+        "max_aggregate_notional_usdt": 1200.0,
+        "guard": "standard",
+        "macro": "off",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
+    {
+        "id": "NAT_S4_AGG1200_SLOT550_WIDE",
+        "max_open_trades": 4,
+        "stake_amount": "unlimited",
+        "max_slot_notional_usdt": 550.0,
+        "max_aggregate_notional_usdt": 1200.0,
+        "guard": "standard",
+        "macro": "wide",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
+    {
+        "id": "NAT_S5_AGG1200_SLOT480_OFF",
+        "max_open_trades": 5,
+        "stake_amount": "unlimited",
+        "max_slot_notional_usdt": 480.0,
+        "max_aggregate_notional_usdt": 1200.0,
+        "guard": "standard",
+        "macro": "off",
+        "dynamic_shield": False,
+        "headroom_mode": "standard",
+    },
+]
+
+
 def _apply_candidate_money_params(
     bt: PropParityBacktesting,
     cfg: dict[str, Any],
@@ -4452,14 +4670,19 @@ def run_grid_sweep(
     mid_date = mid_date.replace(hour=0, minute=0, second=0, microsecond=0)
 
     selected_ids = getattr(args, "candidates", None) or []
+    preset_grid = (
+        NATURAL_NFIX8_GRID
+        if getattr(args, "grid_preset", "default24") == "natural8"
+        else DEFAULT_MONEY_GRID
+    )
     if selected_ids:
-        cand_map = {c["id"]: c for c in DEFAULT_MONEY_GRID}
+        cand_map = {c["id"]: c for c in (*DEFAULT_MONEY_GRID, *NATURAL_NFIX8_GRID)}
         unknown = [cid for cid in selected_ids if cid not in cand_map]
         if unknown:
             raise ValueError(f"Unknown candidate ID(s): {unknown}. Valid IDs: {sorted(cand_map)}")
         grid_to_run = [cand_map[cid] for cid in selected_ids]
     else:
-        grid_to_run = list(DEFAULT_MONEY_GRID)
+        grid_to_run = list(preset_grid)
 
     out_path = Path(args.grid_json) if getattr(args, "grid_json", "") else None
     completed_by_id: dict[str, dict[str, Any]] = {}
@@ -4628,6 +4851,7 @@ def run_grid_sweep(
                     if k not in ("daily_curve", "trades_head", "trades_tail")
                 },
                 "program_comparison": full_res["program_comparison"],
+                "oct_2025_daily_crash_sweep": full_res["oct_2025_daily_crash_sweep"],
                 "autumn_2026_daily_crash_sweep": full_res["autumn_2026_daily_crash_sweep"],
             }
         )
@@ -4682,10 +4906,16 @@ def main():
     parser.add_argument("--suite-json", default="")
     parser.add_argument("--grid-json", default="")
     parser.add_argument(
+        "--grid-preset",
+        choices=["default24", "natural8"],
+        default="default24",
+        help="Candidate grid preset when --candidates is not specified.",
+    )
+    parser.add_argument(
         "--candidates",
         nargs="*",
         default=None,
-        help="Optional subset of candidate IDs from DEFAULT_MONEY_GRID to run.",
+        help="Optional subset of candidate IDs from DEFAULT_MONEY_GRID / NATURAL_NFIX8_GRID to run.",
     )
     parser.add_argument("--overwrite-suite", action="store_true", default=False)
     parser.add_argument("--cache-dir", default="")
