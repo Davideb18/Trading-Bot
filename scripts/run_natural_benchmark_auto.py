@@ -62,6 +62,7 @@ COMMON = [
 HEARTBEAT_SEC = 300.0
 WORKER_STAGGER_SEC = 4.0
 RESEARCH_MODE = False
+LOCAL_DATA_ONLY = False
 ALLOW_SYNTHETIC = False
 MCAP_MODE = "strict"
 
@@ -69,13 +70,14 @@ MCAP_MODE = "strict"
 def research_metadata():
     return {
         "mode": "research" if RESEARCH_MODE else "strict",
+        "local_data_only": LOCAL_DATA_ONLY,
         "mcap_mode": MCAP_MODE,
         "allow_synthetic_market_data": ALLOW_SYNTHETIC,
         "live_parity_certified": False,
         "limitations": [
             "Hourly whitelist and minute candles do not reproduce tick execution or historical spreads.",
             "Historical instrument classification and market-cap observation vintages are unverified.",
-        ] + (["Hybrid market caps use current snapshots or stale observations: lookahead is possible."]
+        ] + (["Local data universe only: missing instruments can bias historical volume rankings."] if LOCAL_DATA_ONLY else []) + (["Hybrid market caps use current snapshots or stale observations: lookahead is possible."]
              if MCAP_MODE == "hybrid" else [])
           + (["Missing mark/funding may be synthesized; costs and drawdown are approximations."]
              if ALLOW_SYNTHETIC else []),
@@ -227,7 +229,7 @@ def _archive_issues_and_pairs():
     manifest = read_json(OUT / "archive_download_manifest.json")
     if not isinstance(manifest, dict) or manifest.get("sample_only", True):
         issues.append("archive_download_manifest.json mancante o sample_only")
-    elif manifest.get("start", "9999") > DATA_START or manifest.get("end", "") < "2026-11-18":
+    elif manifest.get("start", "9999") > ("2024-11-01" if LOCAL_DATA_ONLY else DATA_START) or manifest.get("end", "") < "2026-11-18":
         issues.append(
             f"archive_download_manifest.json intervallo incompleto ({manifest.get('start')}..{manifest.get('end')})"
         )
@@ -361,11 +363,13 @@ def inspect_candle_file(path, timeframe, start, end, *, funding=False):
     dates = pd.to_datetime(frame["date"], utc=True, errors="raise")
     if dates.isna().any() or not dates.is_monotonic_increasing or dates.duplicated().any():
         raise ValueError("timestamp mancanti, duplicati o fuori ordine")
-    values = frame[["open"] if funding else ["open", "high", "low", "close", "volume"]].to_numpy(dtype=float)
+    mark = Path(path).name.endswith("-mark.feather")
+    columns = ["open"] if funding else ["open", "high", "low", "close"] + ([] if mark else ["volume"])
+    values = frame[columns].to_numpy(dtype=float)
     if not np.isfinite(values).all():
         raise ValueError("valori OHLCV/funding non finiti")
     if not funding and (
-        (values[:, :4] <= 0).any() or (values[:, 4] < 0).any()
+        (values[:, :4] <= 0).any() or (not mark and (values[:, 4] < 0).any())
         or (values[:, 1] < values[:, [0, 2, 3]].max(axis=1)).any()
         or (values[:, 2] > values[:, [0, 1, 3]].min(axis=1)).any()
     ):
@@ -480,7 +484,7 @@ def prepare_data_and_hourly_schedules():
         print("Dati Bybit, archivi delisted e 3 schedule dinamiche orarie (1h) pronti.", flush=True)
         return
 
-    if not raw_market_data_present():
+    if not LOCAL_DATA_ONLY and not raw_market_data_present():
         print("Dati raw incompleti: avvio download completo Bybit + archivi storici...", flush=True)
         pairs = str(OUT / "eligible_bybit_pairs.json")
         run_script("prop_prepare_benchmark_data.py", "--anti-survivorship", "--export-volume-universe", "--export-download-pairs", pairs)
@@ -493,9 +497,8 @@ def prepare_data_and_hourly_schedules():
             run(
                 [
                     sys.executable,
-                    "-m",
-                    "freqtrade",
-                    "download-data",
+                    "-u",
+                    "scripts/prop_download_data.py",
                     "--config",
                     "user_data/config_prop_nfix8.json",
                     "--config",
@@ -533,7 +536,9 @@ def prepare_data_and_hourly_schedules():
         "--build-presets-dir",
         str(OUT),
     ]
-    if MCAP_MODE == "hybrid" and not present(OUT / "coingecko_mcap_snapshot.json"):
+    if LOCAL_DATA_ONLY and not present(OUT / "instruments.json"):
+        raise RuntimeError("Modalita locale: manca instruments.json; nessun download avviato.")
+    if not LOCAL_DATA_ONLY and MCAP_MODE == "hybrid" and not present(OUT / "coingecko_mcap_snapshot.json"):
         sched_args.append("--fetch-coingecko")
     run_script("prop_prepare_benchmark_data.py", *sched_args)
 
@@ -1173,7 +1178,7 @@ def build_summary_and_report(all_entries, winners, stress_docs):
 
 
 def main(argv=None):
-    global RESEARCH_MODE, ALLOW_SYNTHETIC, MCAP_MODE
+    global RESEARCH_MODE, ALLOW_SYNTHETIC, MCAP_MODE, LOCAL_DATA_ONLY
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--workers",
@@ -1182,17 +1187,19 @@ def main(argv=None):
         help="Parallel worker count (0 = auto from physical RAM & CPU cores).",
     )
     parser.add_argument("--research", action="store_true", help="Allow unverified schedules; label results as research.")
+    parser.add_argument("--local-data-only", action="store_true", help="Research only: reuse local universe without downloading history.")
     parser.add_argument("--mcap-mode", choices=("strict", "hybrid"), default="strict")
     parser.add_argument("--allow-synthetic-market-data", action="store_true", help="Research only: permit missing mark/funding approximations.")
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--check-only", action="store_true", help="Offline data checks only; no download and no backtest.")
     action.add_argument("--prepare-only", action="store_true", help="Download/prepare data and check it; no backtest.")
     parsed = parser.parse_args(argv)
-    if not parsed.research and (parsed.allow_synthetic_market_data or parsed.mcap_mode != "strict"):
+    if not parsed.research and (parsed.local_data_only or parsed.allow_synthetic_market_data or parsed.mcap_mode != "strict"):
         parser.error("--mcap-mode hybrid and --allow-synthetic-market-data require --research")
     if parsed.workers < 0:
         parser.error("--workers must be >= 0")
     RESEARCH_MODE, ALLOW_SYNTHETIC, MCAP_MODE = parsed.research, parsed.allow_synthetic_market_data, parsed.mcap_mode
+    LOCAL_DATA_ONLY = parsed.local_data_only
     workers = parsed.workers if parsed.workers > 0 else choose_workers()
     os.chdir(ROOT)
     OUT.mkdir(parents=True, exist_ok=True)

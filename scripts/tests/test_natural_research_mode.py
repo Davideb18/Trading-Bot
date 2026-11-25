@@ -97,6 +97,19 @@ def test_valid_candles_and_sparse_funding(tmp_path):
     assert nat.inspect_candle_file(path, "1h", int(funding_dates[0].timestamp()), int(funding_dates[-1].timestamp()), funding=True)["rows"] == 4
 
 
+def test_mark_prices_do_not_require_volume_but_require_finite_prices(tmp_path):
+    dates = pd.date_range("2025-01-01", periods=4, freq="h", tz="UTC")
+    path = tmp_path / "BTC_USDT_USDT-1h-mark.feather"
+    frame = pd.DataFrame({"date": dates, "open": 10., "high": 11., "low": 9., "close": 10., "volume": float("nan")})
+    frame.to_feather(path)
+    start, end = int(dates[0].timestamp()), int(dates[-1].timestamp()) + 3600
+    assert nat.inspect_candle_file(path, "1h", start, end)["rows"] == 4
+    frame.loc[0, "close"] = float("nan")
+    frame.to_feather(path)
+    with pytest.raises(ValueError, match="non finiti"):
+        nat.inspect_candle_file(path, "1h", start, end)
+
+
 def schedule_doc():
     start = int(datetime(2024, 11, 15, tzinfo=timezone.utc).timestamp())
     end = int(datetime(2026, 11, 15, tzinfo=timezone.utc).timestamp())

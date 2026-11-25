@@ -120,6 +120,7 @@ def test_preparation_requests_warmup_and_strict_caps(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="nessun backtest avviato"):
         nat.prepare_data_and_hourly_schedules()
     timerange = commands[0][commands[0].index("--timerange") + 1]
+    assert commands[0][1:3] == ["-u", "scripts/prop_download_data.py"]
     start = date.fromisoformat(timerange.split("-")[0])
     assert (date(2024, 11, 15) - start).days >= 120
     build = scripts[-1]
