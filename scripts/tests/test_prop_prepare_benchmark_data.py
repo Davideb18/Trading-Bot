@@ -212,7 +212,7 @@ def test_hourly_schedule_enforces_zero_lookahead_rolling_volume_and_delist_cutof
     # AAA has steady $1.5M/h ($36M/24h >= $20M) all day.
     # BBB starts low ($0.5M/h = $12M/24h < $20M), spikes +$30M on candle opening 2025-01-13 10:00
     # (which closes at 11:00 UTC -> MUST NOT be visible at 10:00 UTC, MUST become #1 at 11:00 UTC!),
-    # and stops trading after candle opening 2025-01-13 15:00 (last usable at 16:00 UTC, dropped at 17:00 UTC!).
+    # and stops trading after candle opening 2025-01-13 15:00 (no trading candles from 16:00 UTC).
     hours_aaa = pd.date_range("2025-01-12 00:00", "2025-01-13 23:00", freq="1h", tz="UTC")
     pd.DataFrame(
         {
@@ -264,7 +264,7 @@ def test_hourly_schedule_enforces_zero_lookahead_rolling_volume_and_delist_cutof
     assert wl_at(10) == ["AAA/USDT:USDT"]
     # At 11:00 UTC the [10:00, 11:00) candle closed -> BBB jumps to #1 ahead of AAA!
     assert wl_at(11) == ["BBB/USDT:USDT", "AAA/USDT:USDT"]
-    assert wl_at(16) == ["BBB/USDT:USDT", "AAA/USDT:USDT"]
-    # At 17:00 UTC BBB has no closed 1h data (halted/delisted after 16:00 close) -> immediately removed!
+    assert wl_at(16) == ["AAA/USDT:USDT"]
+    # At 16:00 and 17:00 UTC BBB has no execution data: do not admit a new trade after delisting.
     assert wl_at(17) == ["AAA/USDT:USDT"]
 

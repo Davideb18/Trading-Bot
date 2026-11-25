@@ -661,7 +661,7 @@ def build_point_in_time_schedule(
                 h_ts = day_start_s + hour_offset * 3600
                 candidates_h: list[tuple[float, str]] = []
                 for pair in pair_hourly_qv:
-                    if h_ts > pair_last_usable_s[pair]:
+                    if h_ts >= pair_last_usable_s[pair]:
                         continue
                     qv_24h = float(pair_hourly_qv[pair][h_idx])
                     if not np.isfinite(qv_24h) or qv_24h <= min_value_usdt:
@@ -729,6 +729,7 @@ def build_point_in_time_schedule(
         "generated_at": datetime.now(UTC).isoformat(),
         "resolution": resolution,
         "zero_lookahead": False,
+        "pairlist_order": "volume_top_n_then_filters",
         "validation_status": (
             f"research_schedule_mcap_{mcap_mode}"
             if mcap_mode != "strict"

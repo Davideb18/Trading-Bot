@@ -1,8 +1,8 @@
-"""Definitive NFIX8-Natural ('unlimited' stake) parallel benchmark orchestrator.
+"""NFIX8-Natural ('unlimited' stake) parallel research benchmark orchestrator.
 
 Evaluates 100% native NostalgiaForInfinityX8_Prop sizing (`stake_amount = "unlimited"`)
 across all 3 objective dynamic hourly (`1h`) universes (`bluechip`, `strict`, `base`):
-  - Zero-lookahead rolling 24h volume + closed-bar age/volatility/ROC/market-cap
+  - Closed-bar rolling 24h volume + age/volatility/ROC/market-cap filters
     updated every hour (including archived delisted crash coins, zero hindsight blacklist)
   - 1-minute (`1m`) intrabar wick fidelity + strict HyroTrader rules (00:00 UTC rollover,
     40% consistency pause at $175, qualifying days >= $250 & >= 1%, 25% Funded margin cap)
@@ -12,6 +12,8 @@ across all 3 objective dynamic hourly (`1h`) universes (`bluechip`, `strict`, `b
   - 5-scenario execution slippage stress suite (up to 28 bps + strict wick) on winners
 
 Resumable at individual candidate granularity; safe to stop (`Ctrl+C`) and restart anytime.
+Research mode permits unverified historical evidence, not a certification of live parity.
+Hybrid market caps and synthetic mark/funding require explicit command-line options.
 """
 
 from __future__ import annotations
@@ -59,6 +61,25 @@ COMMON = [
 ]
 HEARTBEAT_SEC = 300.0
 WORKER_STAGGER_SEC = 4.0
+RESEARCH_MODE = False
+ALLOW_SYNTHETIC = False
+MCAP_MODE = "strict"
+
+
+def research_metadata():
+    return {
+        "mode": "research" if RESEARCH_MODE else "strict",
+        "mcap_mode": MCAP_MODE,
+        "allow_synthetic_market_data": ALLOW_SYNTHETIC,
+        "live_parity_certified": False,
+        "limitations": [
+            "Hourly whitelist and minute candles do not reproduce tick execution or historical spreads.",
+            "Historical instrument classification and market-cap observation vintages are unverified.",
+        ] + (["Hybrid market caps use current snapshots or stale observations: lookahead is possible."]
+             if MCAP_MODE == "hybrid" else [])
+          + (["Missing mark/funding may be synthesized; costs and drawdown are approximations."]
+             if ALLOW_SYNTHETIC else []),
+    }
 
 
 def read_json(path):
@@ -177,6 +198,10 @@ def detail_cache_enabled():
 
 def common_args(ram_profile="auto"):
     args = list(COMMON)
+    if RESEARCH_MODE:
+        args.append("--allow-research-schedule")
+    if RESEARCH_MODE and ALLOW_SYNTHETIC:
+        args.append("--allow-synthetic-market-data")
     if ram_profile != "auto" and "--ram-profile" in args:
         idx = args.index("--ram-profile")
         args[idx + 1] = str(ram_profile)
@@ -233,11 +258,11 @@ def _futures_files_issues(pairs, archived_pairs):
             if not present(futures / f"{prefix}-{tf}-futures.feather"):
                 missing_ohlcv.append(f"{prefix}-{tf}")
         for kind in ("mark", "funding_rate"):
-            if not any(present(p) for p in futures.glob(f"{prefix}-*-{kind}.feather")):
+            if not present(futures / f"{prefix}-1h-{kind}.feather"):
                 missing_mark_funding.append(f"{prefix}-{kind}")
     if missing_ohlcv:
         issues.append(f"candele futures mancanti ({len(missing_ohlcv)}, es. {', '.join(missing_ohlcv[:5])})")
-    if missing_mark_funding:
+    if missing_mark_funding and not (RESEARCH_MODE and ALLOW_SYNTHETIC):
         issues.append(
             f"mark/funding_rate mancanti ({len(missing_mark_funding)}, es. {', '.join(missing_mark_funding[:5])})"
         )
@@ -257,8 +282,11 @@ def hourly_schedule_issues():
         if doc.get("resolution") != "1h":
             issues.append(f"schedule {preset}: resolution != '1h'")
             continue
-        if doc.get("zero_lookahead") is not True or doc.get("mcap_mode") != "strict":
+        if doc.get("mcap_mode") != MCAP_MODE or (not RESEARCH_MODE and doc.get("zero_lookahead") is not True):
             issues.append(f"schedule {preset}: historical evidence unverified or market-cap proxies enabled")
+            continue
+        if doc.get("pairlist_order") != "volume_top_n_then_filters":
+            issues.append(f"schedule {preset}: rigenerare con ordine filtri corretto")
             continue
         if doc.get("coverage_diagnostics", {}).get("empty_hours") != 0:
             issues.append(f"schedule {preset}: empty_hours != 0")
@@ -322,6 +350,119 @@ def raw_market_data_present():
     return not _futures_files_issues(probe_pairs, archived_pairs)
 
 
+def inspect_candle_file(path, timeframe, start, end, *, funding=False):
+    """Check real file contents, not merely presence. Funding is an event series."""
+    import numpy as np
+    import pandas as pd
+
+    frame = pd.read_feather(path)
+    if frame.empty:
+        raise ValueError("file vuoto")
+    dates = pd.to_datetime(frame["date"], utc=True, errors="raise")
+    if dates.isna().any() or not dates.is_monotonic_increasing or dates.duplicated().any():
+        raise ValueError("timestamp mancanti, duplicati o fuori ordine")
+    values = frame[["open"] if funding else ["open", "high", "low", "close", "volume"]].to_numpy(dtype=float)
+    if not np.isfinite(values).all():
+        raise ValueError("valori OHLCV/funding non finiti")
+    if not funding and (
+        (values[:, :4] <= 0).any() or (values[:, 4] < 0).any()
+        or (values[:, 1] < values[:, [0, 2, 3]].max(axis=1)).any()
+        or (values[:, 2] > values[:, [0, 1, 3]].min(axis=1)).any()
+    ):
+        raise ValueError("prezzi/volumi OHLCV invalidi")
+    seconds = dates.dt.as_unit("s").to_numpy(dtype=np.int64)
+    stride = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}[timeframe]
+    if funding:
+        # Funding intervals can change per instrument; do not fabricate hourly events.
+        if seconds[0] > start + 86400 or seconds[-1] < end - 86400:
+            raise ValueError("funding non copre il periodo richiesto (tolleranza 24h)")
+        funding_events = seconds[(seconds >= start - 86400) & (seconds <= end + 86400)]
+        if len(funding_events) > 1 and (np.diff(funding_events) > 86400).any():
+            raise ValueError("intervallo funding superiore a 24h; verificare archivio")
+    else:
+        if (seconds % stride != 0).any():
+            raise ValueError("timestamp non allineati al timeframe")
+        first, last = start // stride * stride, (end - 1) // stride * stride
+        lo, hi = np.searchsorted(seconds, [first, last], side="left")
+        if hi >= len(seconds) or seconds[lo] != first or seconds[hi] != last:
+            raise ValueError("copertura temporale insufficiente per la whitelist")
+        if (np.diff(seconds[lo:hi + 1]) != stride).any():
+            raise ValueError("buchi nelle candele durante il periodo richiesto")
+    return {"path": str(path), "rows": len(frame), "first": dates.iloc[0].isoformat(), "last": dates.iloc[-1].isoformat()}
+
+
+def run_preflight():
+    """Offline gate: validate schedules, warmup, prices and explicit approximations."""
+    start = int(datetime(2024, 11, 15, tzinfo=timezone.utc).timestamp())
+    end = int(datetime(2026, 11, 15, tzinfo=timezone.utc).timestamp())
+    report = {"generated_at": datetime.now(timezone.utc).isoformat(), "research": research_metadata(),
+              "issues": [], "warnings": [], "files": [], "schedule_evidence": {}}
+    issues = report["issues"]
+    try:
+        issues.extend(hourly_schedule_issues())
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        issues.append(f"Schedule/manifest non valido: {exc}")
+    required = {"BTC/USDT:USDT": [start, end]}
+    for preset in PRESETS_ORDER:
+        doc = read_json(hourly_schedule_path(preset))
+        report["schedule_evidence"][preset] = {k: doc.get(k) for k in (
+            "zero_lookahead", "validation_status", "mcap_mode", "limitations", "coverage_diagnostics",
+            "mcap_provenance_counts", "archived_delisted_without_mcap")}
+        try:
+            schedule = {int(k): v for k, v in doc["schedule"].items()}
+            if any(ts % 3600 or not isinstance(pairs, list) or any(not isinstance(p, str) or "/USDT:USDT" not in p for p in pairs)
+                   for ts, pairs in schedule.items()):
+                raise ValueError("bucket non orario o coppie non valide")
+            if any(day not in schedule for day in range(start, end, 86400)):
+                raise ValueError("ancore giornaliere mancanti")
+            active = []
+            schedule_pairs = set()
+            for ts in range(start, end, 3600):
+                active = schedule.get(ts, active)
+                if not active:
+                    raise ValueError(f"whitelist vuota a {ts}")
+                for pair in active:
+                    schedule_pairs.add(pair)
+                    bounds = required.setdefault(pair, [ts, ts + 3600])
+                    bounds[0], bounds[1] = min(bounds[0], ts), max(bounds[1], ts + 3600)
+            if not (schedule_pairs | {"BTC/USDT:USDT"}).issubset(set(doc.get("ever_whitelisted_2y", []))):
+                raise ValueError("universo incompleto")
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            issues.append(f"{preset}: {exc}")
+    if not issues:
+        import pandas as pd
+
+        futures = ROOT / "user_data/data/bybit/futures"
+        for index, (pair, (first, last)) in enumerate(sorted(required.items()), 1):
+            print(f"Preflight {index}/{len(required)}: {pair}", flush=True)
+            prefix = pair.replace("/", "_").replace(":", "_")
+            for tf in TIMEFRAMES:
+                path = futures / f"{prefix}-{tf}-futures.feather"
+                try:
+                    report["files"].append(inspect_candle_file(path, tf, first, last))
+                    if pair == "BTC/USDT:USDT" and tf == "1d":
+                        dates = pd.to_datetime(pd.read_feather(path, columns=["date"])["date"], utc=True)
+                        warmup = dates[(dates >= pd.Timestamp("2024-07-18", tz="UTC")) & (dates < pd.Timestamp("2024-11-15", tz="UTC"))]
+                        if len(warmup) < 120:
+                            issues.append("BTC: meno di 120 candele giornaliere di warmup")
+                except Exception as exc:
+                    issues.append(f"{path.name}: {exc}")
+            for kind in ("mark", "funding_rate"):
+                path = futures / f"{prefix}-1h-{kind}.feather"
+                if not present(path) and RESEARCH_MODE and ALLOW_SYNTHETIC:
+                    report["warnings"].append(f"{pair}: {kind} mancante, fallback sintetico autorizzato")
+                    continue
+                try:
+                    report["files"].append(inspect_candle_file(path, "1h", first, last, funding=kind == "funding_rate"))
+                except Exception as exc:
+                    issues.append(f"{path.name}: {exc}")
+    report["passed"] = not issues
+    atomic_json(OUT / "natural_preflight.json", report)
+    for issue in issues[:20]:
+        print("BLOCCO: " + issue, flush=True)
+    return report
+
+
 def run(command):
     print("\n>>> " + subprocess.list2cmdline(command), flush=True)
     env = os.environ.copy()
@@ -335,7 +476,7 @@ def run_script(name, *args):
 
 
 def prepare_data_and_hourly_schedules():
-    if not hourly_schedule_issues():
+    if not hourly_schedule_issues() and raw_market_data_present():
         print("Dati Bybit, archivi delisted e 3 schedule dinamiche orarie (1h) pronti.", flush=True)
         return
 
@@ -377,7 +518,7 @@ def prepare_data_and_hourly_schedules():
     else:
         print("Dati Bybit e archivi gia presenti su disco: nessun nuovo download necessario.", flush=True)
 
-    print("Costruzione delle 3 whitelist dinamiche orarie (1h, zero-lookahead)...", flush=True)
+    print(f"Costruzione whitelist orarie (1h, market-cap={MCAP_MODE}, evidenza storica non certificata)...", flush=True)
     sched_args = [
         "--start",
         "2024-11-15",
@@ -388,10 +529,12 @@ def prepare_data_and_hourly_schedules():
         "--anti-survivorship",
         "--include-archived-delisted",
         "--mcap-mode",
-        "strict",
+        MCAP_MODE,
         "--build-presets-dir",
         str(OUT),
     ]
+    if MCAP_MODE == "hybrid" and not present(OUT / "coingecko_mcap_snapshot.json"):
+        sched_args.append("--fetch-coingecko")
     run_script("prop_prepare_benchmark_data.py", *sched_args)
 
     issues = hourly_schedule_issues()
@@ -493,6 +636,7 @@ def score(row, program=None):
 
 def engine_signature(schedule, *, kind, step, slippage=10, strict_wick=True, candidate=None):
     payload = {
+        "research": research_metadata(),
         "kind": kind,
         "start": "2024-11-15",
         "end": "2026-11-15",
@@ -527,7 +671,7 @@ def _backup_incompatible(output):
     _replace_atomic(output, backup)
 
 
-def _has_indicator_cache_for_schedule(schedule_path):
+def _has_indicator_cache_for_schedule(schedule_path, cache_dir=None):
     """Return True only when .backtest_cache already covers 100% of this schedule's 2Y universe."""
     cache_root = ROOT / ".backtest_cache"
     strat_file = ROOT / STRATEGY
@@ -540,8 +684,8 @@ def _has_indicator_cache_for_schedule(schedule_path):
     strat_mtime = int(strat_file.stat().st_mtime)
     prefix = "2024-11-15_2026-11-15_"
     suffix = f"_{strat_mtime}"
-    for sub in cache_root.iterdir():
-        if not sub.is_dir() or not sub.name.startswith(prefix) or not sub.name.endswith(suffix):
+    for sub in ([cache_dir] if cache_dir is not None else cache_root.iterdir()):
+        if not sub.is_dir() or (cache_dir is None and (not sub.name.startswith(prefix) or not sub.name.endswith(suffix))):
             continue
         mpath = sub / "_manifest.json"
         ppath = sub / "_price_prec.pkl"
@@ -654,6 +798,7 @@ def run_natural_grid(preset, ids, step, workers=1):
 
     marker = output.with_suffix(output.suffix + ".run.json")
     eng_sig = engine_signature(schedule, kind="natural_grid", step=step, slippage=10, strict_wick=True)
+    indicator_cache = ROOT / ".backtest_cache" / f"natural-{eng_sig}"
     doc = read_json(output)
     old = read_json(marker)
     matches = compatible(doc) and old.get("engine_signature") == eng_sig
@@ -738,6 +883,8 @@ def run_natural_grid(preset, ids, step, workers=1):
             "-u",
             str(ENGINE),
             *common_args(ram_prof),
+            "--cache-dir",
+            str(indicator_cache),
             "--pairlist-schedule",
             str(schedule),
             "--cohort-step-days",
@@ -814,7 +961,7 @@ def run_natural_grid(preset, ids, step, workers=1):
                 )
 
     # Ensure 100% of this schedule's universe is in .backtest_cache before parallel fan-out.
-    if len(remaining) > 1 and eff_workers > 1 and not _has_indicator_cache_for_schedule(schedule):
+    if len(remaining) > 1 and eff_workers > 1 and not _has_indicator_cache_for_schedule(schedule, indicator_cache):
         first_cid = remaining.pop(0)
         print(
             f"[{preset}] Allineamento cache indicatori sul primo candidato ({first_cid}) prima del lancio parallelo...",
@@ -862,6 +1009,8 @@ def run_stress_suite(preset, candidate, name, ram_profile="auto"):
         "-u",
         str(ENGINE),
         *common_args(ram_profile),
+        "--cache-dir",
+        str(ROOT / ".backtest_cache" / f"natural-{eng_sig}"),
         "--pairlist-schedule",
         str(schedule),
         "--cohort-step-days",
@@ -941,6 +1090,9 @@ def build_summary_and_report(all_entries, winners, stress_docs):
         "CLASSIFICA COMPLETA (24 COMBINAZIONI = 3 UNIVERSI DINAMICI 1H x 8 CANDIDATI NFIX8 NATURALI):",
         "----------------------------------------------------------------------------------------------------",
     ]
+    metadata = research_metadata()
+    lines[1] = "  REPORT NFIX8-NATURAL - " + metadata["mode"].upper() + " - NON CERTIFICATO LIVE"
+    lines[4:4] = ["Limiti: " + item for item in metadata["limitations"]] + [""]
     for rank, item in enumerate(ranked_one_step, 1):
         preset = item["preset"]
         r = item["row"]
@@ -1009,6 +1161,8 @@ def build_summary_and_report(all_entries, winners, stress_docs):
 
     report_text = "\n".join(lines) + "\n"
     summary_doc = {
+        "research": metadata,
+        "preflight": read_json(OUT / "natural_preflight.json"),
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "winners": winners,
         "leaderboard": leaderboard,
@@ -1019,6 +1173,7 @@ def build_summary_and_report(all_entries, winners, stress_docs):
 
 
 def main(argv=None):
+    global RESEARCH_MODE, ALLOW_SYNTHETIC, MCAP_MODE
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--workers",
@@ -1026,7 +1181,18 @@ def main(argv=None):
         default=0,
         help="Parallel worker count (0 = auto from physical RAM & CPU cores).",
     )
-    parsed = parser.parse_args(argv if argv is not None else [])
+    parser.add_argument("--research", action="store_true", help="Allow unverified schedules; label results as research.")
+    parser.add_argument("--mcap-mode", choices=("strict", "hybrid"), default="strict")
+    parser.add_argument("--allow-synthetic-market-data", action="store_true", help="Research only: permit missing mark/funding approximations.")
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument("--check-only", action="store_true", help="Offline data checks only; no download and no backtest.")
+    action.add_argument("--prepare-only", action="store_true", help="Download/prepare data and check it; no backtest.")
+    parsed = parser.parse_args(argv)
+    if not parsed.research and (parsed.allow_synthetic_market_data or parsed.mcap_mode != "strict"):
+        parser.error("--mcap-mode hybrid and --allow-synthetic-market-data require --research")
+    if parsed.workers < 0:
+        parser.error("--workers must be >= 0")
+    RESEARCH_MODE, ALLOW_SYNTHETIC, MCAP_MODE = parsed.research, parsed.allow_synthetic_market_data, parsed.mcap_mode
     workers = parsed.workers if parsed.workers > 0 else choose_workers()
     os.chdir(ROOT)
     OUT.mkdir(parents=True, exist_ok=True)
@@ -1037,9 +1203,24 @@ def main(argv=None):
         f"({'paralleli, ram-profile=normal' if workers > 1 else 'singolo, ram-profile=auto'}).",
         flush=True,
     )
+    print(json.dumps(research_metadata(), indent=2), flush=True)
+    if not parsed.check_only:
+        try:
+            prepare_data_and_hourly_schedules()
+        except Exception as exc:
+            atomic_json(OUT / "natural_preflight.json", {
+                "passed": False, "research": research_metadata(),
+                "issues": [f"Preparazione fallita: {exc}"], "warnings": [],
+            })
+            raise
+    preflight = run_preflight()
+    if preflight["issues"]:
+        raise SystemExit("Controlli falliti; nessun backtest avviato. Vedi " + str(OUT / "natural_preflight.json"))
+    if parsed.check_only or parsed.prepare_only:
+        print("Controlli completati. Nessun backtest avviato.", flush=True)
+        return
     cands = natural_candidates()
     all_ids = [c["id"] for c in cands]
-    prepare_data_and_hourly_schedules()
 
     all_entries = []
     safe_options = []

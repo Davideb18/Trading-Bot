@@ -244,6 +244,7 @@ def test_indicator_cache_superset_detection_and_parallel_warmup(tmp_path, monkey
     }
     summary, report = nat.build_summary_and_report(entries, winners, {})
     assert len(summary["leaderboard"]) == 3
-    assert "REPORT DEFINITIVO NFIX8-NATURAL" in report
+    assert "REPORT NFIX8-NATURAL" in report
+    assert "NON CERTIFICATO LIVE" in report
     assert (nat.OUT / "natural_benchmark_summary.json").is_file()
     assert (nat.OUT / "natural_benchmark_report.txt").is_file()
