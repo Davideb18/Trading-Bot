@@ -2623,12 +2623,14 @@ def _prepare_universe_cached(
 
     if manifest_path.exists() and prec_path.exists():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if manifest.get("universe") == universe and manifest.get("complete"):
+        m_universe = manifest.get("universe") or []
+        m_files = manifest.get("files") or {}
+        if manifest.get("complete") and m_universe == universe:
             bt.price_pair_prec = pickle.loads(prec_path.read_bytes())
             bt.available_pairs = list(manifest["available_pairs"])
             min_date = pd.Timestamp(manifest["min_date"]).to_pydatetime()
             max_date = pd.Timestamp(manifest["max_date"]).to_pydatetime()
-            for p, fnames in manifest["files"].items():
+            for p, fnames in m_files.items():
                 ohclv_lists[p] = CompactOhlcvArray.load_npz(cache_dir / fnames["ohlcv"])
                 analyzed_paths[p] = cache_dir / fnames["analyzed"]
             logger.info(
@@ -2638,6 +2640,45 @@ def _prepare_universe_cached(
                 max_date,
                 cache_dir,
             )
+        elif manifest.get("complete") and set(universe) <= set(m_universe):
+            needed_pairs = [p for p in universe if p in m_files]
+            if needed_pairs and all(
+                (cache_dir / m_files[p]["ohlcv"]).is_file()
+                and (cache_dir / m_files[p]["analyzed"]).is_file()
+                for p in needed_pairs
+            ):
+                m_prec = pickle.loads(prec_path.read_bytes())
+                m_avail = set(manifest.get("available_pairs", []))
+                tmp_ohlcv: dict[str, CompactOhlcvArray] = {}
+                tmp_an: dict[str, Path] = {}
+                min_ts: int | None = None
+                max_ts: int | None = None
+                for p in needed_pairs:
+                    arr = CompactOhlcvArray.load_npz(cache_dir / m_files[p]["ohlcv"])
+                    tmp_ohlcv[p] = arr
+                    tmp_an[p] = cache_dir / m_files[p]["analyzed"]
+                    if len(arr._ts_s):
+                        t0_s = int(arr._ts_s[0])
+                        t1_s = int(arr._ts_s[-1])
+                        if min_ts is None or t0_s < min_ts:
+                            min_ts = t0_s
+                        if max_ts is None or t1_s > max_ts:
+                            max_ts = t1_s
+                if min_ts is not None and max_ts is not None:
+                    ohclv_lists = tmp_ohlcv
+                    analyzed_paths = tmp_an
+                    bt.price_pair_prec = {p: m_prec[p] for p in universe if p in m_prec}
+                    bt.available_pairs = [p for p in universe if p in m_avail]
+                    min_date = datetime.fromtimestamp(min_ts, tz=UTC)
+                    max_date = datetime.fromtimestamp(max_ts, tz=UTC)
+                    logger.info(
+                        "Loaded subset cached indicators (%d/%d pairs, %s -> %s) from %s",
+                        len(ohclv_lists),
+                        len(m_files),
+                        min_date,
+                        max_date,
+                        cache_dir,
+                    )
     if not ohclv_lists:
         # Reuse a sibling superset cache with identical (start, end, strat_mtime) so subset
         # presets (strict, bluechip) do not duplicate ~14 GB of identical per-pair feathers.
@@ -2723,6 +2764,62 @@ def _prepare_universe_cached(
         file_index: dict[str, dict[str, str]] = {}
         bt.price_pair_prec = {}
         avail_set: set[str] = set()
+        prior_files: dict[str, dict[str, str]] = {}
+        prior_prec: dict[str, Any] = {}
+        prior_avail: set[str] = set()
+        prior_universe: list[str] = []
+
+        # Reuse any already-preprocessed pairs present in this cache_dir (monotonic union cache)
+        # so adding a second preset only computes missing delta pairs without shrinking the cache.
+        if manifest_path.exists() and prec_path.exists():
+            try:
+                prev_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if prev_manifest.get("complete"):
+                    prev_files = prev_manifest.get("files") or {}
+                    prev_avail = set(prev_manifest.get("available_pairs", []))
+                    prev_prec = pickle.loads(prec_path.read_bytes())
+                    for p, fnames in prev_files.items():
+                        ohl_name = fnames.get("ohlcv", "")
+                        an_name = fnames.get("analyzed", "")
+                        if (cache_dir / ohl_name).is_file() and (cache_dir / an_name).is_file():
+                            prior_files[p] = {"ohlcv": ohl_name, "analyzed": an_name}
+                            if p in prev_prec:
+                                prior_prec[p] = prev_prec[p]
+                            if p in prev_avail:
+                                prior_avail.add(p)
+                    prior_universe = [
+                        p for p in (prev_manifest.get("universe") or []) if p in prior_files
+                    ]
+                    reused_in_place = 0
+                    for p in universe:
+                        if p not in prior_files:
+                            continue
+                        ohl_name = prior_files[p]["ohlcv"]
+                        an_name = prior_files[p]["analyzed"]
+                        arr = CompactOhlcvArray.load_npz(cache_dir / ohl_name)
+                        ohclv_lists[p] = arr
+                        analyzed_paths[p] = cache_dir / an_name
+                        file_index[p] = {"ohlcv": ohl_name, "analyzed": an_name}
+                        if p in prior_prec:
+                            bt.price_pair_prec[p] = prior_prec[p]
+                        if p in prior_avail:
+                            avail_set.add(p)
+                        if len(arr._ts_s):
+                            d0 = datetime.fromtimestamp(int(arr._ts_s[0]), tz=UTC)
+                            d1 = datetime.fromtimestamp(int(arr._ts_s[-1]), tz=UTC)
+                            if min_date is None or d0 < min_date:
+                                min_date = d0
+                            if max_date is None or d1 > max_date:
+                                max_date = d1
+                        reused_in_place += 1
+                    if reused_in_place:
+                        logger.info(
+                            "Reused %d already-preprocessed pairs in-place from %s",
+                            reused_in_place,
+                            cache_dir,
+                        )
+            except Exception as exc:
+                logger.warning("Skipping in-place cache reuse for %s: %s", cache_dir, exc)
 
         def _link_or_copy(src: Path, dst: Path) -> None:
             if dst.exists():
@@ -2873,19 +2970,24 @@ def _prepare_universe_cached(
         _release_unused_memory()
         if min_date is None or max_date is None:
             raise OperationalException("No preprocessed data in selected timerange.")
+        merged_prec = {**prior_prec, **bt.price_pair_prec}
+        merged_files = {**prior_files, **file_index}
+        merged_universe = list(dict.fromkeys([*prior_universe, *universe]))
+        merged_avail_set = prior_avail | avail_set
+        merged_avail = [p for p in merged_universe if p in merged_avail_set]
         prec_tmp = prec_path.with_suffix(".pkl.tmp")
-        prec_tmp.write_bytes(pickle.dumps(bt.price_pair_prec))
+        prec_tmp.write_bytes(pickle.dumps(merged_prec))
         _replace_atomic(prec_tmp, prec_path)
         manifest_tmp = manifest_path.with_suffix(".json.tmp")
         manifest_tmp.write_text(
             json.dumps(
                 {
                     "complete": True,
-                    "universe": universe,
-                    "available_pairs": bt.available_pairs,
+                    "universe": merged_universe,
+                    "available_pairs": merged_avail,
                     "min_date": pd.Timestamp(min_date).isoformat(),
                     "max_date": pd.Timestamp(max_date).isoformat(),
-                    "files": file_index,
+                    "files": merged_files,
                 }
             ),
             encoding="utf-8",

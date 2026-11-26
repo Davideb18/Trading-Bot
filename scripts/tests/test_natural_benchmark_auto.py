@@ -248,3 +248,125 @@ def test_indicator_cache_superset_detection_and_parallel_warmup(tmp_path, monkey
     assert "NON CERTIFICATO LIVE" in report
     assert (nat.OUT / "natural_benchmark_summary.json").is_file()
     assert (nat.OUT / "natural_benchmark_report.txt").is_file()
+
+
+def test_presets_start_with_base_and_share_revision_safe_indicator_cache(tmp_path, monkeypatch):
+    assert nat.PRESETS_ORDER == ("base", "strict", "bluechip")
+    monkeypatch.setattr(nat, "ROOT", tmp_path)
+    engine = tmp_path / "engine.py"
+    engine.write_text("# engine\n", encoding="utf-8")
+    monkeypatch.setattr(nat, "ENGINE", engine)
+    strat = tmp_path / nat.STRATEGY
+    strat.parent.mkdir(parents=True)
+    strat.write_text("# strat\n", encoding="utf-8")
+    cfg = tmp_path / "user_data/config_prop_nfix8.json"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text("{}", encoding="utf-8")
+    data = tmp_path / "user_data/data/bybit/futures/BTC_USDT_USDT-5m-futures.feather"
+    data.parent.mkdir(parents=True, exist_ok=True)
+    data.write_bytes(b"v1")
+
+    d1 = nat.indicator_cache_dir()
+    # Changing research/mcap flags does not change raw indicator preprocessing cache
+    monkeypatch.setattr(nat, "RESEARCH_MODE", True)
+    monkeypatch.setattr(nat, "MCAP_MODE", "hybrid")
+    assert nat.indicator_cache_dir() == d1
+
+    # Changing data or strategy strictly rotates indicator cache directory
+    data.write_bytes(b"v2-changed")
+    d2 = nat.indicator_cache_dir()
+    assert d2 != d1
+    strat.write_text("# strat v2\n", encoding="utf-8")
+    assert nat.indicator_cache_dir() != d2
+
+
+def test_summary_line_includes_cohort_dd_inactivity_and_open_end():
+    row = _mock_natural_row("NAT_S3_AGG1200_SLOT650_OFF", profit=1250.0, dd=15.0)
+    row["program_comparison"]["one_step_summary"].update(
+        worst_overall_dd_wick=142.5,
+        fail_inactivity_30d=4,
+        open_end=9,
+    )
+    line = nat._summarize_completed_row(row)
+    assert "DD(2y/Coorti) 15.00$/142.50$" in line
+    assert "inatt: 4, open: 9" in line
+
+
+def test_worker_interrupt_exit_code_aborts_without_retry(tmp_path, monkeypatch):
+    class FakeProc:
+        def wait(self):
+            return 3221225786  # Windows STATUS_CONTROL_C_EXIT
+
+    monkeypatch.setattr(nat.subprocess, "Popen", lambda *a, **kw: FakeProc())
+    with pytest.raises(KeyboardInterrupt):
+        nat._run_logged_worker(["python", "-V"], tmp_path / "w.log", set(), nat.threading.Lock())
+
+
+def test_inplace_subset_indicator_cache_hit_and_no_recompute(tmp_path, monkeypatch):
+    import pickle
+    import numpy as np
+    import pandas as pd
+    from scripts import prop_backtest_1to1 as engine
+
+    cache_dir = tmp_path / "natural-ind-shared"
+    cache_dir.mkdir(parents=True)
+    ts_base = np.array([1731628800, 1731629100], dtype=np.int64)
+    ohlc = np.array([[100.0, 101.0, 99.0, 100.5], [100.5, 102.0, 100.0, 101.5]], dtype=np.float64)
+    sigs = np.zeros((2, 4), dtype=np.int8)
+    etags = np.zeros(2, dtype=np.int32)
+    xtags = np.zeros(2, dtype=np.int32)
+    tags = [""]
+    files = {}
+    for pair in ("BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"):
+        ps = pair.replace("/", "_").replace(":", "_")
+        arr = engine.CompactOhlcvArray(ts_base, ohlc, sigs, etags, xtags, tags)
+        ohl_name = f"ohlcv_{ps}.npz"
+        an_name = f"an_{ps}.feather"
+        arr.save_npz(cache_dir / ohl_name)
+        pd.DataFrame({"close": [100.5, 101.5]}).to_feather(cache_dir / an_name)
+        files[pair] = {"ohlcv": ohl_name, "analyzed": an_name}
+    (cache_dir / "_price_prec.pkl").write_bytes(
+        pickle.dumps({"BTC/USDT:USDT": 0.1, "ETH/USDT:USDT": 0.01, "SOL/USDT:USDT": 0.01})
+    )
+    nat.atomic_json(
+        cache_dir / "_manifest.json",
+        {
+            "complete": True,
+            "universe": ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"],
+            "available_pairs": ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"],
+            "min_date": "2024-11-15T00:00:00+00:00",
+            "max_date": "2024-11-15T00:05:00+00:00",
+            "files": files,
+        },
+    )
+
+    monkeypatch.setattr(engine, "_install_fast_custom_data_index", lambda: None)
+    monkeypatch.setattr(
+        engine.history,
+        "load_pair_history",
+        lambda **kw: pd.DataFrame(),
+    )
+    strat = SimpleNamespace(
+        advise_all_indicators=lambda *a, **kw: pytest.fail("Should not recompute indicators on subset hit")
+    )
+    dp = SimpleNamespace(get_analyzed_dataframe=lambda pair, tf: (pd.DataFrame(), None))
+    bt = SimpleNamespace(
+        config={"candle_type_def": "futures"},
+        strategylist=[strat],
+        timeframe="5m",
+        timerange=SimpleNamespace(adjust_start_if_necessary=lambda *a: None),
+        required_startup=0,
+        dataprovider=dp,
+        _set_strategy=lambda s: None,
+        _load_bt_data_detail=lambda: None,
+    )
+    cfg = {"datadir": tmp_path, "dataformat_ohlcv": "feather"}
+    subset = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+    ohlcv_out, _, min_dt, max_dt = engine._prepare_universe_cached(bt, cfg, subset, cache_dir)
+    assert set(ohlcv_out.keys()) == set(subset)
+    assert bt.available_pairs == subset
+    assert set(bt.price_pair_prec.keys()) == set(subset)
+    assert int(min_dt.timestamp()) == int(ts_base[0])
+    assert int(max_dt.timestamp()) == int(ts_base[-1])
+    # Manifest stays intact with all 3 superset pairs (zero writes on subset hit!)
+    assert len(nat.read_json(cache_dir / "_manifest.json")["universe"]) == 3

@@ -1,9 +1,0 @@
-{
-  "resolution": "1h",
-  "ever_whitelisted_2y": [
-    "BTC/USDT:USDT",
-    "ETH/USDT:USDT",
-    "SOL/USDT:USDT"
-  ],
-  "schedule": {}
-}

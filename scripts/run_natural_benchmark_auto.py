@@ -32,6 +32,13 @@ import subprocess
 import sys
 import threading
 import time
+import warnings
+
+warnings.filterwarnings(
+    "ignore",
+    category=FutureWarning,
+    message=r".*pyarrow\.feather\.read_table.*",
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = Path("user_data/forensic/strict_validation")
@@ -39,7 +46,8 @@ ENGINE = Path("scripts/prop_backtest_1to1.py")
 STRATEGY = Path("user_data/strategies/NostalgiaForInfinityX8_Prop.py")
 TIMEFRAMES = ("1m", "5m", "15m", "1h", "4h", "1d")
 DATA_START = "2024-07-01"  # More than 120 closed daily candles before the first cohort.
-PRESETS_ORDER = ("bluechip", "strict", "base")
+PRESETS_ORDER = ("base", "strict", "bluechip")
+_INTERRUPT_EXIT_CODES = frozenset({-2, 130, 3221225786, -1073741510})
 SCENARIOS = {
     "base_0bps",
     "friction_10bps_rt",
@@ -640,6 +648,32 @@ def score(row, program=None):
     )
 
 
+def indicator_cache_signature():
+    """Revision hash for shared indicator cache (independent of schedule, candidate, or stress mode)."""
+    payload = {
+        "kind": "natural_indicators",
+        "start": "2024-11-15",
+        "end": "2026-11-15",
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode())
+    engine_path = ENGINE if ENGINE.is_absolute() else ROOT / ENGINE
+    digest.update(engine_path.read_bytes() if engine_path.is_file() else b"missing")
+    sources = {ROOT / STRATEGY, ROOT / "user_data/config_prop_nfix8.json"}
+    sources.update((ROOT / "user_data/strategies").glob("*.py"))
+    sources.update((ROOT / "freqtrade").rglob("*.py"))
+    for path in sorted(sources):
+        digest.update(str(path).encode())
+        digest.update(path.read_bytes() if path.is_file() else b"missing")
+    for path in sorted((ROOT / "user_data/data/bybit/futures").glob("*.feather")):
+        stat = path.stat()
+        digest.update(f"{path.name}:{stat.st_size}:{stat.st_mtime_ns}".encode())
+    return digest.hexdigest()
+
+
+def indicator_cache_dir():
+    return ROOT / ".backtest_cache" / f"natural-ind-{indicator_cache_signature()[:16]}"
+
+
 def engine_signature(schedule, *, kind, step, slippage=10, strict_wick=True, candidate=None):
     payload = {
         "research": research_metadata(),
@@ -730,6 +764,8 @@ def _run_logged_worker(command, log_path, active_procs, procs_lock):
             with procs_lock:
                 active_procs.discard(proc)
     if rc != 0:
+        if rc in _INTERRUPT_EXIT_CODES:
+            raise KeyboardInterrupt(f"Worker interrotto dall'utente (exit={rc}, log={log_path})")
         tail = ""
         try:
             lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -767,6 +803,9 @@ def _summarize_completed_row(row):
         os_s = row["program_comparison"]["one_step_summary"]
         oct_s = row["oct_2025_daily_crash_sweep"]["one_step_summary"]
         aut_s = row["autumn_2026_daily_crash_sweep"]["one_step_summary"]
+        worst_dd = float(os_s.get("worst_overall_dd_wick", dd))
+        inact = int(os_s.get("fail_inactivity_30d", 0))
+        open_end = int(os_s.get("open_end", 0))
         fail = (
             int(os_s.get("fail_official", 0))
             + int(oct_s.get("fail_official", 0))
@@ -775,8 +814,8 @@ def _summarize_completed_row(row):
         res_pct = os_s.get("resolved_pass_rate_pct")
         res_txt = f"{res_pct}%" if res_pct is not None else "n/a"
         return (
-            f"2y Net {pnl:+.2f}$ (OOS {oos:+.2f}$) | DD {dd:.2f}$ | "
-            f"1-Step Pass {os_s['qualify_rate_pct']}% (chiuse: {res_txt}) | "
+            f"2y Net {pnl:+.2f}$ (OOS {oos:+.2f}$) | DD(2y/Coorti) {dd:.2f}$/{worst_dd:.2f}$ | "
+            f"1-Step Pass {os_s['qualify_rate_pct']}% (chiuse: {res_txt}, inatt: {inact}, open: {open_end}) | "
             f"CrashFail(Oct25/Aut26)={oct_s['fail_official']}/{aut_s['fail_official']} (Tot={fail})"
         )
     except (KeyError, TypeError, ValueError):
@@ -804,7 +843,7 @@ def run_natural_grid(preset, ids, step, workers=1):
 
     marker = output.with_suffix(output.suffix + ".run.json")
     eng_sig = engine_signature(schedule, kind="natural_grid", step=step, slippage=10, strict_wick=True)
-    indicator_cache = ROOT / ".backtest_cache" / f"natural-{eng_sig}"
+    indicator_cache = indicator_cache_dir()
     doc = read_json(output)
     old = read_json(marker)
     matches = compatible(doc) and old.get("engine_signature") == eng_sig
@@ -939,11 +978,19 @@ def run_natural_grid(preset, ids, step, workers=1):
                     )
                 wjson.unlink(missing_ok=True)
                 return row
+            except KeyboardInterrupt:
+                cancel_event.set()
+                raise
             except Exception as exc:
                 last_exc = exc
                 if attempt == 0 and not cancel_event.is_set():
                     ts = datetime.now().strftime("%H:%M:%S")
-                    print(f"[{ts}] [{preset}] Retry worker {cid} dopo errore transitorio...", flush=True)
+                    non_empty = [ln.strip() for ln in str(exc).splitlines() if ln.strip()]
+                    reason = non_empty[-1][:180] if non_empty else type(exc).__name__
+                    print(
+                        f"[{ts}] [{preset}] Retry worker {cid} dopo errore ({reason})...",
+                        flush=True,
+                    )
                     if cancel_event.wait(10.0):
                         break
         with merge_lock:
@@ -1016,7 +1063,7 @@ def run_stress_suite(preset, candidate, name, ram_profile="auto"):
         str(ENGINE),
         *common_args(ram_profile),
         "--cache-dir",
-        str(ROOT / ".backtest_cache" / f"natural-{eng_sig}"),
+        str(indicator_cache_dir()),
         "--pairlist-schedule",
         str(schedule),
         "--cohort-step-days",
@@ -1126,6 +1173,9 @@ def build_summary_and_report(all_entries, winners, stress_docs):
             "max_overall_dd_wick_usdt": f2["max_overall_dd_wick"],
             "one_step_qualify_rate_pct": os_s["qualify_rate_pct"],
             "one_step_resolved_pass_rate_pct": os_s.get("resolved_pass_rate_pct"),
+            "one_step_fail_inactivity_30d": os_s.get("fail_inactivity_30d", 0),
+            "one_step_open_end": os_s.get("open_end", 0),
+            "one_step_worst_cohort_dd_wick_usdt": os_s.get("worst_overall_dd_wick"),
             "one_step_median_days_to_qualify": os_s["median_days_to_qualify"],
             "one_step_median_days_to_first_payout": os_s["median_days_to_first_payout"],
             "two_step_qualify_rate_pct": ts_s["qualify_rate_pct"],
@@ -1140,11 +1190,14 @@ def build_summary_and_report(all_entries, winners, stress_docs):
         leaderboard.append(entry)
         res_pct = os_s.get("resolved_pass_rate_pct")
         res_str = f"{res_pct:.1f}%" if isinstance(res_pct, (int, float)) else "n/a"
+        cohort_dd = os_s.get("worst_overall_dd_wick", f2["max_overall_dd_wick"])
+        inact_cnt = os_s.get("fail_inactivity_30d", 0)
+        open_cnt = os_s.get("open_end", 0)
         lines.append(
             f"#{rank:02d} [{'SAFE' if is_safe else 'FAIL'}] {preset.upper():8s} | {c['id']:26s} | "
             f"2Y Net: {f2['net_pnl']:+8.2f}$ (OOS: {oos['net_pnl']:+7.2f}$) | "
-            f"MaxWickDD: {f2['max_overall_dd_wick']:5.2f}$ | "
-            f"1-Step: {os_s['qualify_rate_pct']:5.1f}% (chiuse {res_str}, med {os_s['median_days_to_qualify']}d) | "
+            f"DD(2Y/C): {f2['max_overall_dd_wick']:5.2f}$/{cohort_dd:5.2f}$ | "
+            f"1-Step: {os_s['qualify_rate_pct']:5.1f}% (chiuse {res_str}, inatt {inact_cnt}, open {open_cnt}, med {os_s['median_days_to_qualify']}d) | "
             f"Oct25 DD {oct_s['worst_daily_dd_wick']:.1f}$ (Fail {oct_s['fail_official']}) | "
             f"Aut26 DD {aut_s['worst_daily_dd_wick']:.1f}$ (Fail {aut_s['fail_official']})"
         )
@@ -1206,9 +1259,15 @@ def main(argv=None):
     OUT.mkdir(parents=True, exist_ok=True)
     ram_gb = detect_total_ram_gb()
     cpus = os.cpu_count() or 1
+    try:
+        free_gb = shutil.disk_usage(ROOT).free / (1024.0**3)
+    except OSError:
+        free_gb = 0.0
+    mmap_state = "ON" if detail_cache_enabled() else "OFF (<25 GB liberi)"
     print(
-        f"Hardware: {ram_gb:.1f} GB RAM, {cpus} core CPU -> {workers} worker "
-        f"({'paralleli, ram-profile=normal' if workers > 1 else 'singolo, ram-profile=auto'}).",
+        f"Hardware: {ram_gb:.1f} GB RAM, {cpus} core CPU, {free_gb:.1f} GB disco liberi -> {workers} worker "
+        f"({'paralleli, ram-profile=normal' if workers > 1 else 'singolo, ram-profile=auto'}, "
+        f"detail_mmap_cache={mmap_state}).",
         flush=True,
     )
     print(json.dumps(research_metadata(), indent=2), flush=True)
