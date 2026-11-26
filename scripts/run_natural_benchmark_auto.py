@@ -460,6 +460,7 @@ def run_preflight():
                     report["files"].append(inspect_candle_file(path, "1h", first, last, funding=kind == "funding_rate"))
                 except Exception as exc:
                     issues.append(f"{path.name}: {exc}")
+    report["archive_minutes_repair"] = read_json(OUT / "archive_minutes_repair.json")
     report["passed"] = not issues
     atomic_json(OUT / "natural_preflight.json", report)
     for issue in issues[:20]:
